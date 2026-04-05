@@ -1,0 +1,7 @@
+faster-whisper
+numpy
+scipy
+
+# System dependency (install separately):
+# Ubuntu/Debian: sudo apt install ffmpeg
+# macOS:         brew install ffmpeg
