@@ -15,51 +15,35 @@ The project is strictly modular. Each component is isolated and communicates via
 
 | Module | Technology | Status | Role |
 | :--- | :--- | :--- | :--- |
-| **`stt/`** | `faster-whisper` | ✅ Implemented | Transcribes raw audio bytes to text. Optimized for CPU (`int8`). |
-| **`tts/`** | `Kokoro-82M` | ✅ Implemented | Synthesizes text to audio bytes (24kHz Mono). Optimized for naturalness. |
-| **`llm/`** | TBD | 🛠️ In Progress | Processes transcribed text and generates conversational responses. |
-| **`telephony/`** | LiveKit / VoIP | 🛠️ In Progress | Handles the real-time audio transport layer (WebSockets/SIP). |
-| **`flows/`** | Orchestration | 🛠️ In Progress | Manages the conversation state and logic flow. |
+| **`stt/`** | `faster-whisper` | ✅ Implemented | Transcribes raw audio bytes. Optimized for CPU (`int8`). |
+| **`tts/`** | `Kokoro-82M` | ✅ Implemented | Synthesizes text to audio bytes (24kHz Mono). |
+| **`llm/`** | Groq (`llama-3.1-8b`) | ✅ Implemented | Conversational logic (Neha Persona) in `llm/llm.py`. |
+| **`telephony/`** | FastAPI WebSockets | ✅ Implemented | Scalable VoBiz bridge in `telephony/vobiz.py`. |
+| **`flows/`** | `pipecat-ai` | ✅ Implemented | Orchestration in `flows/conversation.py`. |
 
 ## 🛠️ Tech Stack
 
-- **Language**: Python 3.11+
+- **Language**: Python 3.12+ (managed via `.venv`)
 - **STT Engine**: `faster-whisper` (CTranslate2 backend)
 - **TTS Engine**: `Kokoro-82M` (HuggingFace CPU-optimized)
 - **Audio Format**: 16kHz STT input, 24kHz TTS output, Mono, PCM/WAV
+- **Orchestration**: Pipecat + FastAPI
 
 ## 📌 Coding Standards & Principles
 
 ### 1. Configuration-Driven Development
-**NEVER** hardcode constants (model names, timeouts, sample rates, etc.) in the logic files.
-- All STT-related constants must live in `stt/config.py`.
-- All TTS-related constants must live in `tts/config.py`.
+All constants must live in their respective module's `config.py`. 
+- Global AI Key: `.env` (GROQ_API_KEY)
 
-### 2. Byte-Stream Interfaces
-Modules should accept and return raw audio bytes where possible. This ensures compatibility with streaming transports like LiveKit without requiring temporary file I/O.
-- `stt.transcribe_audio(audio_bytes: bytes) -> str`
-- `tts.synthesize_speech(text: str) -> bytes`
+### 2. Pipecat Orchestration
+The system uses the `FrameProcessor` pattern. To add new logic, subclass `FrameProcessor` in `flows/conversation.py`.
 
-### 3. Performance First (CPU Optimization)
-The agent is designed to run efficiently on CPUs without requiring high-end GPUs.
-- Use `int8` quantization for Whisper.
-- Keep inference time under **1 second** per chunk to maintain conversational flow.
+### 3. Scalability (20+ Calls)
+The FastAPI server spawns isolated Pipecat `PipelineTask` runners in separate `asyncio` loops. Ensure all I/O stays non-blocking. Use `asyncio.to_thread` for STT/TTS inference.
 
-### 4. Multilingual Support
-The agent primarily targets **Hindi (hi)**, **Marathi (mr)**, and **English (en)**.
-- Ensure all modules handle these language codes correctly.
-- TTS voice IDs follow the `{lang}_{gender}` pattern (e.g., `hi_female`).
+## 🤖 Instructions for next Agent/Teammate
 
-## 🧪 Testing & Verification
-
-Always use the provided test scripts to verify changes before integration:
-- `test_tts.py`: Verify speech generation, multilingual handling, and naturalness.
-- `test_stt.py`: Verify transcription accuracy and speed.
-- `check_voice.py`: General audio utility check.
-
-## 🤖 Instructions for AI Agents
-
-- **Modifying STT/TTS**: If you add a feature, update the corresponding `config.py` with any new parameters.
-- **Adding Modules**: Follow the established pattern: a directory containing `config.py` (constants) and one or more logic files (stateless functions).
-- **Latency**: If a change increases latency significantly, flag it immediately. Real-time nature is non-negotiable.
-- **Dependencies**: Add new requirements to `requirements.txt` immediately.
+1. **Local Test**: Run `python chat_test.py` to verify LLM charisma.
+2. **Tunneling**: Run `ngrok http 8000`. If `ngrok` fails with a version error, use the absolute path or `localtunnel`.
+3. **Server Start**: `python -m uvicorn telephony.vobiz:app --host 0.0.0.0 --port 8000`.
+4. **Handoff**: Read `handoff_report.md` for full project status.
