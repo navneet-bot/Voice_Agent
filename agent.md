@@ -33,10 +33,12 @@ The project is strictly modular. Each component is isolated and communicates via
 ### 1. Configuration-Driven Development
 **NEVER** hardcode constants (model names, timeouts, sample rates, etc.) in the logic files.
 - All STT-related constants must live in `stt/config.py`.
+- All TTS-related constants must live in `tts/config.py`.
 
 ### 2. Byte-Stream Interfaces
 Modules should accept and return raw audio bytes where possible. This ensures compatibility with streaming transports like LiveKit without requiring temporary file I/O.
 - `stt.transcribe_audio(audio_bytes: bytes) -> str`
+- `tts.synthesize_speech(text: str) -> bytes`
 
 ### 3. Performance First (CPU Optimization)
 The agent is designed to run efficiently on CPUs without requiring high-end GPUs.
@@ -46,6 +48,7 @@ The agent is designed to run efficiently on CPUs without requiring high-end GPUs
 ### 4. Multilingual Support
 The agent primarily targets **Hindi (hi)**, **Marathi (mr)**, and **English (en)**.
 - Ensure all modules handle these language codes correctly.
+- TTS voice IDs follow the `{lang}_{gender}` pattern (e.g., `hi_female`).
 
 ## 🧪 Testing & Verification
 
@@ -56,7 +59,7 @@ Always use the provided test scripts to verify changes before integration:
 
 ## 🤖 Instructions for AI Agents
 
-- **Modifying STT**: If you add a feature, update the corresponding `config.py` with any new parameters.
+- **Modifying STT/TTS**: If you add a feature, update the corresponding `config.py` with any new parameters.
 - **Adding Modules**: Follow the established pattern: a directory containing `config.py` (constants) and one or more logic files (stateless functions).
 - **Latency**: If a change increases latency significantly, flag it immediately. Real-time nature is non-negotiable.
 - **Dependencies**: Add new requirements to `requirements.txt` immediately.

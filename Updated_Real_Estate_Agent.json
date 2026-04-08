@@ -1,0 +1,634 @@
+{
+    "agent_id": "",
+    "channel": "voice",
+    "last_modification_timestamp": 1773246283035,
+    "agent_name": "Updated Real Estate Agent",
+    "response_engine": {
+        "type": "conversation-flow",
+        "version": 0,
+        "conversation_flow_id": "conversation_flow_902431eb7b92"
+    },
+    "language": "multi",
+    "data_storage_setting": "everything",
+    "opt_in_signed_url": false,
+    "version": 0,
+    "is_published": false,
+    "post_call_analysis_model": "gpt-4o-mini",
+    "pii_config": {
+        "mode": "post_call",
+        "categories": []
+    },
+    "is_public": true,
+    "voice_id": "11labs-06nek6zjTCD1vCbtc8bc",
+    "voice_temperature": 0.5,
+    "voice_speed": 1.0,
+    "volume": 0.94,
+    "max_call_duration_ms": 3600000,
+    "interruption_sensitivity": 0.45,
+    "enable_dynamic_responsiveness": true,
+    "normalize_for_speech": true,
+    "allow_user_dtmf": true,
+    "user_dtmf_options": {},
+    "conversationFlow": {
+        "conversation_flow_id": "conversation_flow_902431eb7b92",
+        "version": 0,
+        "global_prompt": "You are a voice AI agent named Neha from the Real Estate AI team, acting as an outbound property sales executive. You speak with a warm, steady, and highly charismatic tone.\n\n### CHARACTER & CHARISMA\n- Use a friendly, inviting tone. Be naturally persuasive but never pushy.\n- Maintain a steady tempo. Do not rush your sentences.\n- Use conversational fillers like \"I see,\" \"That's great,\" or \"Perfect\" to sound more human.\n- **IMPORTANT**: Use standard casing for Hindi words (e.g., \"Aap\", \"Aapka\", \"Project\"). Do NOT use all-caps (like \"AAP\") unless it is a genuine abbreviation (like \"BHK\"), otherwise the voice will spell it out letter by letter.\n\n### DOMAIN RESTRICTION\nYou are a real estate assistant ONLY. If the user asks questions unrelated to real estate, politely redirect: \"That's an interesting question! However, I'm here to help you find your dream home. Shall we get back to that?\"\n\n### LANGUAGE RULES\n1. Start in English.\n2. Detect language (English, Hinglish, Marathi) and switch naturally.\n3. **Hinglish**: Professional yet trendy (mix terms like 'location', 'possession', 'premium').\n4. **Marathi**: Conversational and respectful.\n\n### CONSTRAINTS\n- Keep responses 1-2 sentences maximum.\n- Ask only one question at a time.\n- **Maintain a consistent, charming speaking pace.**",
+        "nodes": [
+            {
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Introduce yourself as Neha from the Real Estate team and confirm if you are speaking with {{Prashant}}."
+                },
+                "name": "Smart Greeting",
+                "edges": [
+                    {
+                        "condition": "user confirms identity",
+                        "id": "edge-1735264581341",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user is the correct person"
+                        },
+                        "destination_node_id": "node-1735264873079"
+                    },
+                    {
+                        "condition": "wrong person or busy",
+                        "id": "edge-1735264682661",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "wrong person or user is busy"
+                        },
+                        "destination_node_id": "node-1736492391269"
+                    },
+                    {
+                        "condition": "user asks who is this or what is this about",
+                        "id": "edge-loop-fix-123456",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user asks for identification or purpose of call"
+                        },
+                        "destination_node_id": "node-1735264873079"
+                    }
+                ],
+                "start_speaker": "agent",
+                "id": "node-1767592854176",
+                "type": "conversation",
+                "display_position": {
+                    "x": -86.59994527922208,
+                    "y": 106.01951486442819
+                },
+                "interruption_sensitivity": 0
+            },
+            {
+                "name": "Availability Check",
+                "id": "node-1735264873079",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Ask if this is a good time to speak for two minutes about a suitable property option."
+                },
+                "edges": [
+                    {
+                        "condition": "user is free",
+                        "id": "edge-1735264873079",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user is free"
+                        },
+                        "destination_node_id": "node-1735264921453"
+                    },
+                    {
+                        "condition": "user is busy",
+                        "id": "edge-1735264905257",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user is busy or rejects now"
+                        },
+                        "destination_node_id": "node-1735970090937"
+                    }
+                ],
+                "display_position": {
+                    "x": 1100,
+                    "y": 60
+                }
+            },
+            {
+                "name": "Ask Intent",
+                "id": "node-1735264921453",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Ask if they are looking to buy, rent, or invest in a property."
+                },
+                "edges": [
+                    {
+                        "condition": "buy/rent/invest",
+                        "id": "edge-1735264921453",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "buy or rent or invest"
+                        },
+                        "destination_node_id": "node-1735267546732"
+                    },
+                    {
+                        "condition": "budget too high",
+                        "id": "edge-objection-budget-high",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "mentions budget is too high or expensive"
+                        },
+                        "destination_node_id": "node-objection-budget-high"
+                    },
+                    {
+                        "condition": "not interested/looking",
+                        "id": "edge-objection-not-looking",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "not looking right now or not interested"
+                        },
+                        "destination_node_id": "node-objection-not-looking"
+                    },
+                    {
+                        "condition": "wants to sell",
+                        "id": "edge-1736510642496",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user wants to sell"
+                        },
+                        "destination_node_id": "node-1736510533232"
+                    }
+                ],
+                "display_position": {
+                    "x": 1650,
+                    "y": 80
+                }
+            },
+            {
+                "name": "Handle Objection Budget High",
+                "id": "node-objection-budget-high",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Acknowledge the budget concern. Suggest alternative locations like Mamurdi or Hinjewadi which are more affordable, and mention flexible payment plans. Ask if they'd like to hear more."
+                },
+                "edges": [
+                    {
+                        "condition": "interested in alternatives",
+                        "id": "edge-obj-budget-yes",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user agrees to hear more"
+                        },
+                        "destination_node_id": "node-1735267546732"
+                    },
+                    {
+                        "condition": "still rejects",
+                        "id": "edge-obj-budget-no",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user still rejects"
+                        },
+                        "destination_node_id": "node-1736492520068"
+                    }
+                ],
+                "display_position": {
+                    "x": 1650,
+                    "y": 400
+                }
+            },
+            {
+                "name": "Handle Objection Not Looking",
+                "id": "node-objection-not-looking",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Acknowledge they aren't looking now. Mention that you have exclusive 'Pre-launch' opportunities which are great for long-term investment. Ask if you can share details on WhatsApp for future reference."
+                },
+                "edges": [
+                    {
+                        "condition": "agrees to whatsapp",
+                        "id": "edge-obj-look-yes",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user agrees to whatsapp"
+                        },
+                        "destination_node_id": "node-1736492520068"
+                    },
+                    {
+                        "condition": "still rejects",
+                        "id": "edge-obj-look-no",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user still rejects"
+                        },
+                        "destination_node_id": "node-1736492520068"
+                    }
+                ],
+                "display_position": {
+                    "x": 1650,
+                    "y": -150
+                }
+            },
+            {
+                "name": "Ask Location and Budget",
+                "id": "node-1735267546732",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Ask about their preferred location and approximate budget range."
+                },
+                "edges": [
+                    {
+                        "condition": "details provided",
+                        "id": "edge-1735267546732",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "provided location and budget"
+                        },
+                        "destination_node_id": "node-1736323961832"
+                    }
+                ],
+                "display_position": {
+                    "x": 2719.269057396452,
+                    "y": 156.16344682717423
+                }
+            },
+            {
+                "name": "Share Property Details",
+                "id": "node-1736323961832",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Briefly share project details (BHK, carpet area, possession, amenities) based on their interest. Ask if they would like to visit the site this weekend."
+                },
+                "edges": [
+                    {
+                        "condition": "interested in visit",
+                        "id": "edge-1736323961832",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user wants to visit or know more"
+                        },
+                        "destination_node_id": "node-1735265015507"
+                    }
+                ],
+                "display_position": {
+                    "x": 3300,
+                    "y": 50
+                }
+            },
+            {
+                "name": "Site Visit Availability",
+                "id": "node-1735265015507",
+                "type": "function",
+                "tool_id": "tool-1735265013306",
+                "tool_type": "local",
+                "speak_during_execution": true,
+                "wait_for_result": true,
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Ask for a preferred date and time for the site visit."
+                },
+                "edges": [
+                    {
+                        "condition": "mentions date/time",
+                        "id": "edge-1735265058249",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user mentions specific date or time"
+                        },
+                        "destination_node_id": "node-1735265209472"
+                    },
+                    {
+                        "condition": "uncertain/tell later",
+                        "id": "edge-objection-availability-later",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user says they will tell later, will check schedule, or doesn't inform"
+                        },
+                        "destination_node_id": "node-1736492391269"
+                    }
+                ],
+                "display_position": {
+                    "x": 3850,
+                    "y": 80
+                }
+            },
+            {
+                "name": "Save Lead & Confirm",
+                "id": "node-1735265209472",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Confirm the site visit details and any remaining contact info. Thank them and mention you will share location details on WhatsApp."
+                },
+                "edges": [
+                    {
+                        "condition": "done",
+                        "id": "edge-1735265209472",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "finished confirmation"
+                        },
+                        "destination_node_id": "node-1736492925252"
+                    }
+                ],
+                "display_position": {
+                    "x": 4400,
+                    "y": 0
+                }
+            },
+            {
+                "name": "Confirm and End",
+                "id": "node-1736492925252",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Confirm appointment and end call politely."
+                },
+                "edges": [
+                    {
+                        "condition": "skip",
+                        "id": "edge-1736492941800",
+                        "destination_node_id": "node-1735969972303",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "Skip response"
+                        }
+                    }
+                ],
+                "display_position": {
+                    "x": 4965.433114690977,
+                    "y": 143.98942611742885
+                }
+            },
+            {
+                "name": "Callback Scheduling",
+                "id": "node-1736492391269",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Acknowledge they need more time. Ask for a convenient time to call them back instead."
+                },
+                "edges": [
+                    {
+                        "condition": "mentions callback time",
+                        "id": "edge-1736492391269",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "mentions a date or time for callback"
+                        },
+                        "destination_node_id": "node-1736567518748"
+                    },
+                    {
+                        "condition": "still uncertain",
+                        "id": "edge-objection-callback-later",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user still says they will tell later"
+                        },
+                        "destination_node_id": "node-1736492520068"
+                    }
+                ],
+                "display_position": {
+                    "x": 2750,
+                    "y": 1305
+                }
+            },
+            {
+                "name": "Confirm Callback",
+                "id": "node-1736567518748",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Confirm the callback time and thank them. Wish them a great day."
+                },
+                "edges": [
+                    {
+                        "condition": "skip",
+                        "id": "edge-1736567541477",
+                        "destination_node_id": "node-1736492485610",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "Skip response"
+                        }
+                    }
+                ],
+                "display_position": {
+                    "x": 3300,
+                    "y": 1305
+                }
+            },
+            {
+                "name": "Polite Goodbye",
+                "id": "node-1736492485610",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Politely say goodbye."
+                },
+                "edges": [
+                    {
+                        "condition": "skip",
+                        "id": "edge-1736492518201",
+                        "destination_node_id": "node-1736492520068",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "Skip response"
+                        }
+                    }
+                ],
+                "display_position": {
+                    "x": 3811.406030364601,
+                    "y": 1043.8420229287215
+                }
+            },
+            {
+                "name": "Seller Flow Start",
+                "id": "node-1736510533232",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Ask about the location of the property they want to sell and their expected price range."
+                },
+                "edges": [
+                    {
+                        "condition": "details provided",
+                        "id": "edge-1736510533232",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user provides seller details"
+                        },
+                        "destination_node_id": "node-1767420514711"
+                    }
+                ],
+                "display_position": {
+                    "x": 2200,
+                    "y": 765
+                }
+            },
+            {
+                "name": "Seller Property Details",
+                "id": "node-1767420514711",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Ask for additional details: property type, configuration, age, and any amenities. Mention you will have an expert contact them."
+                },
+                "edges": [
+                    {
+                        "condition": "details provided",
+                        "id": "edge-1767420514711-0-rxuyo5wio",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user finished details"
+                        },
+                        "destination_node_id": "node-1735969972303"
+                    }
+                ],
+                "display_position": {
+                    "x": 2610.338582667696,
+                    "y": 663.6094379479788
+                }
+            },
+            {
+                "name": "Re-engage User",
+                "id": "node-1735970090937",
+                "type": "conversation",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Apologize for the timing. Briefly explain this is about an inquiry they made previously and suggest a quick 2-minute chat. Ask if it's okay."
+                },
+                "edges": [
+                    {
+                        "condition": "agrees",
+                        "id": "edge-1735970178280",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user agrees to speak"
+                        },
+                        "destination_node_id": "node-1735264921453"
+                    },
+                    {
+                        "condition": "refuses",
+                        "id": "edge-1767090635108-e1hqp5q5w",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user refuses or says later"
+                        },
+                        "destination_node_id": "node-1736492391269"
+                    }
+                ],
+                "display_position": {
+                    "x": 1820.0307848364757,
+                    "y": 986.8457189564976
+                }
+            },
+            {
+                "name": "End Conversation",
+                "id": "node-1735969972303",
+                "type": "end",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Thank you for your time! have a great day"
+                },
+                "display_position": {
+                    "x": 5620.0976113152055,
+                    "y": 160.16876762669963
+                }
+            },
+            {
+                "name": "Immediate End Call",
+                "id": "node-1736492520068",
+                "type": "end",
+                "instruction": {
+                    "type": "prompt",
+                    "text": "Politely end the call"
+                },
+                "display_position": {
+                    "x": 4400,
+                    "y": 1080
+                }
+            }
+        ],
+        "components": [
+            {
+                "start_node_id": "conversation-1767079167727",
+                "linked_conversation_flow_ids": [],
+                "nodes": [
+                    {
+                        "name": "Conversation",
+                        "edges": [],
+                        "id": "conversation-1767079167727",
+                        "type": "conversation",
+                        "display_position": {
+                            "x": 200,
+                            "y": 100
+                        },
+                        "instruction": {
+                            "type": "prompt",
+                            "text": "Describe what the AI should say or do"
+                        }
+                    },
+                    {
+                        "name": "Exit Component",
+                        "id": "component-end-1767079167727",
+                        "type": "end",
+                        "display_position": {
+                            "x": 600,
+                            "y": 100
+                        },
+                        "instruction": {
+                            "type": "static_text",
+                            "text": "Component completed"
+                        }
+                    }
+                ],
+                "user_modified_timestamp": 1767079231856,
+                "name": "Component S1",
+                "conversation_flow_component_id": "component_4202f1e83809",
+                "tools": [],
+                "org_id": "org_sDwtAROEisdorAFg"
+            }
+        ],
+        "start_node_id": "node-1767592854176",
+        "start_speaker": "agent",
+        "tools": [
+            {
+                "tool_id": "tool-1735265013306",
+                "event_type_id": 668000,
+                "cal_api_key": "cal_live_123456",
+                "timezone": "America/Los_Angeles",
+                "name": "check_calendar_availability",
+                "description": "When users ask for availability, check the calendar and provide available slots.",
+                "type": "check_availability_cal"
+            },
+            {
+                "tool_id": "tool-1735265348523",
+                "event_type_id": 668000,
+                "cal_api_key": "cal_live_12345",
+                "timezone": "America/Los_Angeles",
+                "name": "book_appointment",
+                "description": "When users ask to book an appointment, book it on the calendar.",
+                "type": "book_appointment_cal"
+            }
+        ],
+        "model_choice": {
+            "type": "cascading",
+            "model": "gpt-5.2",
+            "high_priority": false
+        },
+        "model_temperature": 0,
+        "tool_call_strict_mode": true,
+        "knowledge_base_ids": [],
+        "kb_config": {
+            "top_k": 3,
+            "filter_score": 0.6
+        },
+        "begin_tag_display_position": {
+            "x": -467.8745714143247,
+            "y": 137.56676887659364
+        },
+        "is_published": false,
+        "flex_mode": true
+    }
+}

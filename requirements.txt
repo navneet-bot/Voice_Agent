@@ -1,7 +1,11 @@
-# STT dependencies
 faster-whisper
 numpy
 scipy
+groq
+python-dotenv
+fastapi
+uvicorn
+websockets
 
 # System dependency (install separately):
 # Ubuntu/Debian: sudo apt install ffmpeg

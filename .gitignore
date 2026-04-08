@@ -174,3 +174,10 @@ voices/*.pt
 
 # Ignore test scripts
 test_*.py
+
+# Project-specific
+work_log.md
+architecture.md.resolved
+brain/
+temp/
+cost_analysis.md
