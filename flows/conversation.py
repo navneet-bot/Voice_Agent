@@ -119,6 +119,7 @@ except ImportError:
 class RealEstateTTSProcessor(FrameProcessor):
     """
     Synthesizes TTS audio from LLM TextFrames using our Kokoro integration.
+    Expects Kokoro to return WAV bytes, conversions to PCM16 for playback.
     """
     def __init__(self):
         super().__init__()
@@ -126,11 +127,30 @@ class RealEstateTTSProcessor(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection = None): # type: ignore
         if isinstance(frame, TextFrame):
             logging.info(f"TTS Synthesizing for: {frame.text}")
-            audio_bytes = await asyncio.to_thread(generate_speech, frame.text)
-            if audio_bytes:
-                # Assuming 24000 sample rate for Kokoro, 1 channel
-                await self.push_frame(AudioRawFrame(audio=audio_bytes, sample_rate=24000, num_channels=1), direction)
+            wav_bytes = await asyncio.to_thread(generate_speech, frame.text)
+            
+            if wav_bytes:
+                import io
+                import soundfile as sf
+                import numpy as np
+                
+                # 1. Read the WAV bytes into a numpy array (Kokoro returns float32)
+                try:
+                    data, samplerate = sf.read(io.BytesIO(wav_bytes))
+                    
+                    # 2. Convert to PCM16 (Int16) which is expected by transports
+                    pcm16_data = (data * 32767).astype(np.int16).tobytes()
+                    
+                    logging.info(f"TTS complete. Pushing {len(pcm16_data)} bytes of PCM16 @ {samplerate}Hz")
+                    
+                    await self.push_frame(
+                        AudioRawFrame(audio=pcm16_data, sample_rate=samplerate, num_channels=1), 
+                        direction
+                    )
+                except Exception as e:
+                    logging.error(f"Error converting TTS audio: {e}")
         else:
             await super().process_frame(frame, direction)
+
 
 
