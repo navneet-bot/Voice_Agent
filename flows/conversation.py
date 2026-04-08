@@ -12,7 +12,7 @@ import logging
 
 try:
     from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-    from pipecat.frames.frames import Frame, TextFrame, AudioRawFrame
+    from pipecat.frames.frames import Frame, TextFrame, AudioRawFrame, StartFrame
 except ImportError:
     logging.error("pipecat-ai is not installed. Pipeline will fail.")
     FrameProcessor = object
@@ -60,13 +60,21 @@ class RealEstateLLMProcessor(FrameProcessor):
             # Store the interaction to maintain context
             if reply:
                 self.history.append({"role": "user", "content": user_text})
+            # Store the interaction to maintain context
+            if reply:
+                self.history.append({"role": "user", "content": user_text})
                 self.history.append({"role": "assistant", "content": reply})
                 
                 # Push the LLM's text response further down the pipeline (to TTS)
                 await self.push_frame(TextFrame(reply), direction)
+        elif isinstance(frame, StartFrame):
+            # Greeting: Neha speaks first when the pipeline starts
+            greeting = "Hi! This is Neha from the real estate team. Can you hear me?"
+            self.history.append({"role": "assistant", "content": greeting})
+            await self.push_frame(TextFrame(greeting), direction)
+            await super().process_frame(frame, direction)
         else:
-            # Pass through other frames (like system frames)
-            await self.push_frame(frame, direction)
+            await super().process_frame(frame, direction)
 
 
 class RealEstateSTTProcessor(FrameProcessor):
@@ -98,7 +106,7 @@ class RealEstateSTTProcessor(FrameProcessor):
                     # Push the transcribed word to the LLM
                     await self.push_frame(TextFrame(text), direction)
         else:
-            await self.push_frame(frame, direction)
+            await super().process_frame(frame, direction)
 
 
 try:
@@ -123,5 +131,6 @@ class RealEstateTTSProcessor(FrameProcessor):
                 # Assuming 24000 sample rate for Kokoro, 1 channel
                 await self.push_frame(AudioRawFrame(audio=audio_bytes, sample_rate=24000, num_channels=1), direction)
         else:
-            await self.push_frame(frame, direction)
+            await super().process_frame(frame, direction)
+
 
