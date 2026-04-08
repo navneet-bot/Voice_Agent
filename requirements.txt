@@ -6,7 +6,7 @@ python-dotenv
 fastapi
 uvicorn
 websockets
-pipecat-ai
+pipecat-ai[local]
 spacy
 
 # System dependency (install separately):
