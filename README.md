@@ -1,6 +1,6 @@
 # AI Voice Agent
 
-Modular, CPU-optimised voice agent pipeline: telephony to STT to LLM to TTS.
+Modular, CPU-optimised voice agent pipeline: telephony to STT to LLM.
 
 ---
 
@@ -14,7 +14,10 @@ voice-agent/
 │   ├── config.py # All tunable constants (model size, beam, VAD, etc.)
 │   └── stt.py    # transcribe_audio(bytes) -> str
 ├── telephony/    # Telephony/WebSocket transport layer (future)
-├── tts/          # Text-to-Speech synthesis (future)
+├── tts/          # Text-to-Speech synthesis — Kokoro-82M, implemented
+│   ├── config.py # TTS constants (voices, speeds, caching)
+│   ├── speech_formatter.py # Text preprocessing for natural speech
+│   └── tts_kokoro.py # generate_speech(text) -> bytes
 ├── requirements.txt
 └── README.md
 ```
@@ -42,6 +45,32 @@ text = transcribe_audio(audio_bytes)
 
 ---
 
+## TTS Module
+
+| Item            | Detail                                              |
+|-----------------|-----------------------------------------------------|
+| **Input**       | Plain text string (with automatic batching)         |
+| **Output**      | Audio bytes - 24 kHz, mono, PCM16                   |
+| **Languages**   | English, Hindi, Hinglish                            |
+| **Engine**      | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)|
+| **Performance** | Optimized for low-latency CPU generation            |
+| **Features**    | Advanced text clean-up, rhythm optimization, pauses |
+
+### Public API
+
+```python
+from tts import generate_speech, generate_speech_stream
+
+# Get complete audio all at once
+audio_bytes = generate_speech("Hello, world!", lang_code="e")
+
+# Or stream audio chunks sentence-by-sentence as they are generated
+for chunk in generate_speech_stream("Hello, world! I am streaming.", lang_code="e"):
+    send_to_websocket(chunk)
+```
+
+---
+
 ## Setup
 
 ### 1. System dependencies
@@ -51,10 +80,12 @@ text = transcribe_audio(audio_bytes)
 brew install ffmpeg
 
 # Ubuntu / Debian
-sudo apt install ffmpeg
+sudo apt install ffmpeg espeak-ng
 ```
 
 ### 2. Python environment
+
+Requirements: **Python 3.11+**
 
 ```bash
 python -m venv .venv
@@ -62,7 +93,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-The faster-whisper model weights are downloaded automatically on first import (cached in `~/.cache/huggingface`).
+The faster-whisper and Kokoro-82M model weights are downloaded automatically on first import (cached in `~/.cache/huggingface` by default or as configured).
 
 ---
 
@@ -80,6 +111,8 @@ All constants live in `stt/config.py`. Edit that file to tune behaviour - no cod
 | `VAD_FILTER`     | `True`    | Silero VAD to skip silent frames               |
 | `MIN_SILENCE_MS` | `300`     | Minimum silence duration threshold (ms)        |
 
+For the TTS module, edit `tts/config.py` to tune voice models (`VOICE_EN`, `VOICE_HI`), connection parameters, and chunking limits.
+
 ---
 
 ## Integration
@@ -93,7 +126,8 @@ from stt import transcribe_audio
 user_text = transcribe_audio(audio_chunk)
 if user_text:
     llm_response = llm.generate(user_text)   # future llm module
-    audio_out = tts.synthesise(llm_response)  # future tts module
+    for chunk in generate_speech_stream(llm_response, lang_code="e"): # TTS module
+        send_to_websocket(chunk)
 ```
 
 ### LiveKit / VoBiz streaming
