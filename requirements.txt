@@ -6,6 +6,8 @@ python-dotenv
 fastapi
 uvicorn
 websockets
+pipecat-ai
+spacy
 
 # System dependency (install separately):
 # Ubuntu/Debian: sudo apt install ffmpeg
