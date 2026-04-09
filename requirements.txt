@@ -23,3 +23,5 @@ soundfile
 # System dependency for Kokoro / misaki G2P:
 # Ubuntu/Debian: sudo apt install espeak-ng
 # macOS:         brew install espeak-ng
+
+sounddevice
