@@ -95,6 +95,25 @@ pip install -r requirements.txt
 
 The faster-whisper and Kokoro-82M model weights are downloaded automatically on first import (cached in `~/.cache/huggingface` by default or as configured).
 
+For offline or firewalled machines, you can skip the Hugging Face download step by placing Kokoro voice packs locally and pointing the app to them:
+
+```powershell
+$env:KOKORO_VOICE_DIR = "C:\Users\vishn\OneDrive\Desktop\Ai-voice agent\voice-agent-2.0\tts\voices"
+```
+
+Expected files in that directory:
+- `af_heart.pt`
+- `hf_alpha.pt`
+
+You can also target one file directly:
+
+```powershell
+$env:KOKORO_AF_HEART_PATH = "C:\path\to\af_heart.pt"
+$env:KOKORO_HF_ALPHA_PATH = "C:\path\to\hf_alpha.pt"
+```
+
+The local test scripts `check_voice.py` and `mic_test.py` now preflight this before playback starts, so they will tell you exactly which asset is missing.
+
 ---
 
 ## Configuration

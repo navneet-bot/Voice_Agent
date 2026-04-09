@@ -1,6 +1,7 @@
 faster-whisper
 numpy
 scipy
+sounddevice
 groq
 python-dotenv
 fastapi

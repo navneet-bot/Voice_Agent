@@ -4,11 +4,14 @@ Speak into your computer's microphone and listen to Neha through your speakers.
 """
 
 import asyncio
+import io
 import logging
 import os
 import sys
 
 from dotenv import load_dotenv
+import sounddevice as sd
+import soundfile as sf
 
 # Pipecat imports
 from pipecat.pipeline.pipeline import Pipeline
@@ -17,12 +20,42 @@ from pipecat.pipeline.task import PipelineTask
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
 from flows.conversation import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
+from tts import check_voice_assets, generate_speech
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MIC-TEST")
 load_dotenv()
 
+
+def _configure_stdout() -> None:
+    """Avoid Windows console encoding crashes during local diagnostics."""
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        pass
+
+
+def _play_startup_greeting() -> bool:
+    """Verify speaker playback before starting the live mic loop."""
+    ok, message = check_voice_assets()
+    if not ok:
+        print(f"TTS preflight failed: {message}")
+        return False
+
+    greeting = generate_speech("Hello, I am Neha. If you can hear this, local TTS playback is working.")
+    if not greeting:
+        print("TTS preflight failed: Kokoro returned no audio.")
+        return False
+
+    data, sample_rate = sf.read(io.BytesIO(greeting))
+    print("Playing startup greeting to verify your speakers...")
+    sd.play(data, sample_rate)
+    sd.wait()
+    return True
+
 async def main():
+    _configure_stdout()
     if not os.getenv("GROQ_API_KEY"):
         print("❌ Error: GROQ_API_KEY not found in .env file.")
         sys.exit(1)
@@ -39,6 +72,8 @@ async def main():
 
     # 1. Initialize Local Audio Transport (PyAudio wrapper)
     print("[INIT] Using system default microphone and speakers.")
+    if not _play_startup_greeting():
+        return
     
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_sample_rate=16000,
@@ -71,11 +106,13 @@ async def main():
 
     print("\n" + "="*50)
     print("🚀 Pipeline starting...")
+    print("Speak into the microphone after startup. The live pipeline does not reply until it hears input.")
     print("Press Ctrl+C to stop.")
     print("="*50 + "\n")
 
     try:
         print("🟢 Running... (Neha should speak now)")
+        print("Running... Waiting for microphone input.")
         await runner.run(task)
 
 

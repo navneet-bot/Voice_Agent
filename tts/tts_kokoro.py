@@ -25,12 +25,15 @@ How to swap TTS engine later:
 """
 
 import io
+import os
 import re
 import logging
+from pathlib import Path
 
 import torch
 import numpy as np
 import soundfile as sf
+from huggingface_hub import hf_hub_download
 
 from kokoro import KPipeline
 
@@ -54,6 +57,66 @@ logger = logging.getLogger(__name__)
 # language at construction time.  The dict avoids re-creating a pipeline
 # when the same language is requested again.
 _pipelines: dict[str, KPipeline] = {}
+
+
+def _get_repo_id() -> str:
+    """Best-effort lookup for the Hugging Face repo used by Kokoro."""
+    repo_id = getattr(KPipeline, "repo_id", None)
+    if isinstance(repo_id, str) and repo_id.strip():
+        return repo_id
+    return "hexgrad/Kokoro-82M"
+
+
+def check_voice_assets(voice: str | None = None) -> tuple[bool, str]:
+    """Check whether the configured Kokoro voice pack is available locally."""
+    requested_voice = voice or VOICE_NAME
+    local_voice_path = _resolve_local_voice_path(requested_voice)
+
+    if local_voice_path is not None:
+        return True, f"Voice pack ready: {local_voice_path}"
+
+    try:
+        local_path = hf_hub_download(
+            repo_id=_get_repo_id(),
+            filename=f"voices/{requested_voice}.pt",
+            local_files_only=True,
+        )
+        return True, f"Voice pack ready: {Path(local_path)}"
+    except Exception:
+        return (
+            False,
+            "Kokoro voice pack is not cached locally. Either set KOKORO_VOICE_DIR or "
+            "KOKORO_<VOICE_NAME>_PATH to a local .pt file, or connect to the internet once "
+            f"so Hugging Face can download voices/{requested_voice}.pt, then rerun the test.",
+        )
+
+
+def resolve_voice_identifier(voice: str) -> str:
+    """Resolve a voice name to either a local .pt path or the original voice id."""
+    local_voice_path = _resolve_local_voice_path(voice)
+    return str(local_voice_path) if local_voice_path is not None else voice
+
+
+def _resolve_local_voice_path(voice: str) -> Path | None:
+    """Resolve a Kokoro voice name to a local .pt file when configured."""
+    requested = Path(voice)
+    if requested.suffix.lower() == ".pt" and requested.is_file():
+        return requested.resolve()
+
+    voice_env_key = f"KOKORO_{re.sub(r'[^A-Za-z0-9]+', '_', voice).upper()}_PATH"
+    explicit_path = os.getenv(voice_env_key)
+    if explicit_path:
+        candidate = Path(explicit_path).expanduser()
+        if candidate.is_file():
+            return candidate.resolve()
+
+    voice_dir = os.getenv("KOKORO_VOICE_DIR")
+    if voice_dir:
+        candidate = Path(voice_dir).expanduser() / f"{voice}.pt"
+        if candidate.is_file():
+            return candidate.resolve()
+
+    return None
 
 
 def _get_pipeline(lang_code: str) -> KPipeline:
@@ -133,7 +196,7 @@ def generate_speech(text: str) -> bytes:
         logger.debug("Detected language: %s", detected_lang)
 
         lang_code = LANG_CODE_MAP.get(detected_lang, "a")
-        voice = VOICE_MAP.get(detected_lang, VOICE_NAME)
+        voice = resolve_voice_identifier(VOICE_MAP.get(detected_lang, VOICE_NAME))
 
         # --- inference ---------------------------------------------------
         pipeline = _get_pipeline(lang_code)

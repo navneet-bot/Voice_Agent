@@ -7,8 +7,9 @@
 # generate_speech(text: str) -> bytes signature.
 # ---------------------------------------------------------------------------
 
-from tts.tts_kokoro import generate_speech
+from tts.tts_kokoro import check_voice_assets, generate_speech
 
 __all__ = [
+    "check_voice_assets",
     "generate_speech",
 ]
