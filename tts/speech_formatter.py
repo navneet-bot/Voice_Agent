@@ -18,7 +18,21 @@ def optimize_for_tts(text: str) -> str:
     if not text:
         return ""
 
-    # 1. NORMALIZE WHITESPACE
+    # 1. EXPAND ABBREVIATIONS
+    # Ensure technical terms are pronounced fully and correctly by the neural engine.
+    expansions = {
+        r'\bsq\.?ft\.?\b': 'square feet',
+        r'\bsq\.?\s?feet\b': 'square feet',
+        r"\bBHK\b": "B H K",       # Spacing forces letter-by-letter pronunciation
+        r"\bCr\b": "crore",
+        r"\blakhs?\b": "lakh",
+        r"\bpossession\b": "possession",
+        r"\bcarpet area\b": "carpet area",
+    }
+    for pattern, replacement in expansions.items():
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+
+    # 2. NORMALIZE WHITESPACE
     # Improve naturalness by ensuring clean and consistent spacing. Removes excessive gaps.
     text = text.strip()
     text = re.sub(r' {2,}', ' ', text)

@@ -56,15 +56,16 @@ def run_conversation():
 
     conversation_history = []
     
+    # Text buffers for multi-turn thought accumulation
+    accumulated_text = ""
+    
     try:
         while True:
             try:
-                # STEP 1 — Listen (Reduced to 3 seconds for lower latency)
-                print("\nListening...")
+                # STEP 1 — Listen
                 audio = record_audio(3.0, INPUT_SAMPLE_RATE)
                 
                 if audio.size == 0:
-                    print("[WARN] Microphone returned no audio — retrying...")
                     continue
 
                 # STEP 2 — STT
@@ -73,27 +74,49 @@ def run_conversation():
                 text = transcribe_audio(wav_bytes)
                 stt_time = perf_counter() - t0
                 
-                if not text or len(text.strip()) < 2:  # Reduced from 3 to 2
-                    print("[WARN] No speech detected — listening again")
+                if not text or len(text.strip()) < 2:
                     continue
                 
-                print(f"[USER] {text}")
+                # --- Context-Aware Endpointing Check ---
+                # Check if the thought is incomplete (ends in conjunctions) or is a stammer (very short)
+                current_text = (accumulated_text + " " + text).strip()
                 
-                # Append user message to history
-                conversation_history.append({"role": "user", "content": text})
+                # Incomplete sentence markers (conjunctions, prepositions, or leading words)
+                incomplete_markers = [
+                    'and', 'but', 'so', 'with', 'the', 'my', 'is', 'a', 
+                    'it', 'to', 'for', 'of', 'at', 'on', 'if', 'or', 'because'
+                ]
+                last_word = text.lower().split()[-1] if text.split() else ""
+                
+                is_incomplete = (
+                    last_word in incomplete_markers or 
+                    len(text.split()) < 2 or 
+                    text.endswith('...')
+                )
+                
+                if is_incomplete:
+                    print(f" (thought incomplete: '{text}'... keeping microphone open)")
+                    accumulated_text = current_text
+                    continue  # Loop back to record more
+                
+                # Thought is complete
+                final_text = current_text
+                accumulated_text = "" # Reset buffer
+                
+                print(f"[USER] {final_text}")
+                
+                # Append to history
+                conversation_history.append({"role": "user", "content": final_text})
 
-                # STEP 3 — LLM (Now with history)
+                # STEP 3 — LLM
                 t1 = perf_counter()
-                response_text = generate_response(text, conversation_history)
+                response_text = generate_response(final_text, conversation_history)
                 llm_time = perf_counter() - t1
                 
                 if not response_text:
-                    print("[WARN] LLM returned empty response, continuing...")
                     continue
                     
                 print(f"[AI]   {response_text}")
-                
-                # Append AI message to history
                 conversation_history.append({"role": "assistant", "content": response_text})
 
                 # STEP 4 — TTS
@@ -101,19 +124,11 @@ def run_conversation():
                 audio_bytes = generate_speech(response_text)
                 tts_time = perf_counter() - t2
                 
-                if not audio_bytes:
-                    print("[ERROR] TTS failed — skipping playback")
-                    continue
-                
-                if VERBOSE:
-                    print(f"[TIME] STT: {stt_time:.2f}s  LLM: {llm_time:.2f}s  TTS: {tts_time:.2f}s")
-                
-                total_latency = stt_time + llm_time + tts_time
-                print(f"[LATENCY] Total: {total_latency:.2f}s")
-
-                # STEP 5 — Playback
-                play_audio(audio_bytes, OUTPUT_SAMPLE_RATE)
-                time.sleep(POST_RESPONSE_PAUSE_S)
+                if audio_bytes:
+                    if VERBOSE:
+                        print(f"[TIME] STT: {stt_time:.2f}s  LLM: {llm_time:.2f}s  TTS: {tts_time:.2f}s")
+                    play_audio(audio_bytes, OUTPUT_SAMPLE_RATE)
+                    time.sleep(POST_RESPONSE_PAUSE_S)
 
             except Exception as e:
                 print(f"[ERROR] {e}")
