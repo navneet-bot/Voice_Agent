@@ -38,17 +38,11 @@ async def main():
     pa.terminate()
 
     # 1. Initialize Local Audio Transport (PyAudio wrapper)
-    # Using explicit indices found from list_audio.py:
-    # Index 5: Microphone Array (Realtek)
-    # Index 3: Speakers (Realtek)
-    print("🎤 Selecting Microphone (Index 5)...")
-    print("🔊 Selecting Speakers (Index 3)...")
+    print("[INIT] Using system default microphone and speakers.")
     
     transport = LocalAudioTransport(LocalAudioTransportParams(
         audio_in_sample_rate=16000,
-        audio_out_sample_rate=24000,
-        input_device_index=5,
-        output_device_index=3
+        audio_out_sample_rate=24000
     ))
 
     # 2. Initialize our Real Estate Processors
@@ -59,7 +53,8 @@ async def main():
     llm = RealEstateLLMProcessor()
     print("   - Initializing TTS (Kokoro)...")
     tts = RealEstateTTSProcessor()
-    print("✅ AI Engines Ready.")
+    print("[SUCCESS] AI Engines Ready.")
+
 
 
     # 3. Build the Pipeline

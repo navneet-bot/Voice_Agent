@@ -67,12 +67,6 @@ class RealEstateLLMProcessor(FrameProcessor):
                 
                 # Push the LLM's text response further down the pipeline (to TTS)
                 await self.push_frame(TextFrame(reply), direction)
-        elif isinstance(frame, StartFrame):
-            # Greeting: Neha speaks first when the pipeline starts
-            greeting = "Hi! This is Neha from the real estate team. Can you hear me?"
-            self.history.append({"role": "assistant", "content": greeting})
-            await self.push_frame(TextFrame(greeting), direction)
-            await super().process_frame(frame, direction)
         else:
             await super().process_frame(frame, direction)
 
@@ -92,6 +86,9 @@ class RealEstateSTTProcessor(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection = None): # type: ignore
         if isinstance(frame, AudioRawFrame):
             self.audio_buffer.extend(frame.audio)
+            
+            if len(self.audio_buffer) % 16000 == 0:
+                logging.info(f"🎤 Receiving audio... Buffer size: {len(self.audio_buffer)}")
             
             # Simple chunking: if we hit 1 second of audio, run STT
             # (Note: In production pipelines, Silero VAD frames trigger the flush)
