@@ -150,4 +150,10 @@ class RealEstateTTSProcessor(FrameProcessor):
             await super().process_frame(frame, direction)
 
 
+# Backward-compatible exports: keep older imports pointing at the improved runtime processors.
+from flows.runtime import RealEstateLLMProcessor as RealEstateLLMProcessor  # noqa: E402
+from flows.runtime import RealEstateSTTProcessor as RealEstateSTTProcessor  # noqa: E402
+from flows.runtime import RealEstateTTSProcessor as RealEstateTTSProcessor  # noqa: E402
+
+
 

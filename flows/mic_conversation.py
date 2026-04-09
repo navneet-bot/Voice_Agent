@@ -54,12 +54,14 @@ def run_conversation():
     print(" Press Ctrl+C to end conversation")
     print("─────────────────────────────────")
 
+    conversation_history = []
+    
     try:
         while True:
             try:
-                # STEP 1 — Listen
+                # STEP 1 — Listen (Reduced to 3 seconds for lower latency)
                 print("\nListening...")
-                audio = record_audio(RECORD_DURATION_S, INPUT_SAMPLE_RATE)
+                audio = record_audio(3.0, INPUT_SAMPLE_RATE)
                 
                 if audio.size == 0:
                     print("[WARN] Microphone returned no audio — retrying...")
@@ -71,15 +73,18 @@ def run_conversation():
                 text = transcribe_audio(wav_bytes)
                 stt_time = perf_counter() - t0
                 
-                if not text or len(text.strip()) < MIN_TRANSCRIPTION_CHARS:
+                if not text or len(text.strip()) < 2:  # Reduced from 3 to 2
                     print("[WARN] No speech detected — listening again")
                     continue
                 
                 print(f"[USER] {text}")
+                
+                # Append user message to history
+                conversation_history.append({"role": "user", "content": text})
 
-                # STEP 3 — LLM
+                # STEP 3 — LLM (Now with history)
                 t1 = perf_counter()
-                response_text = generate_response(text)
+                response_text = generate_response(text, conversation_history)
                 llm_time = perf_counter() - t1
                 
                 if not response_text:
@@ -87,6 +92,9 @@ def run_conversation():
                     continue
                     
                 print(f"[AI]   {response_text}")
+                
+                # Append AI message to history
+                conversation_history.append({"role": "assistant", "content": response_text})
 
                 # STEP 4 — TTS
                 t2 = perf_counter()

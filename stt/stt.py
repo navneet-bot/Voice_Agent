@@ -32,6 +32,7 @@ modern x86-64 with AVX2).
 
 import io
 import logging
+import time
 
 import numpy as np
 import scipy.io.wavfile as wavfile
@@ -121,19 +122,25 @@ def transcribe_audio(audio_chunk: bytes) -> str:
         return ""
 
     try:
+        t0 = time.perf_counter()
         segments, _info = _model.transcribe(
             audio_array,
             language=config.LANGUAGE,         # None = auto-detect
             beam_size=config.BEAM_SIZE,       # 1 = greedy search, fastest
             vad_filter=config.VAD_FILTER,     # Silero VAD skips non-speech frames
+            condition_on_previous_text=False, # reduce repeated text across chunked turns
             vad_parameters=dict(
                 min_silence_duration_ms=config.MIN_SILENCE_MS,
             ),
         )
 
         # segments is a generator — materialise and join texts
-        text_parts = [seg.text for seg in segments]
-        return "".join(text_parts).strip()
+        text_parts = [seg.text.strip() for seg in segments if seg.text and seg.text.strip()]
+        text = " ".join(text_parts).strip()
+        latency = time.perf_counter() - t0
+        if text:
+            logger.info("STT produced '%s' in %.3fs", text, latency)
+        return text
 
     except Exception:
         logger.exception("Transcription failed — returning empty string.")

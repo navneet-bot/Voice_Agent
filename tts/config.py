@@ -30,7 +30,7 @@ LANG_CODE_MAP = {
 }
 
 # ── Inference ──────────────────────────────────────────────────────────────
-SPEECH_SPEED = 0.92
+SPEECH_SPEED = 1.15
 TEMPERATURE = 0.82
 
 # ── Text preprocessing ────────────────────────────────────────────────────
@@ -38,3 +38,5 @@ MAX_TEXT_LENGTH = 500         # characters — truncate beyond this
 
 # ── Feature flags ─────────────────────────────────────────────────────────
 ENABLE_LANGUAGE_AUTO_DETECT = True
+MAX_SENTENCES = 2
+SENTENCE_PAUSE_MS = 80

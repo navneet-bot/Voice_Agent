@@ -19,7 +19,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
-from flows.conversation import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
+from flows.runtime import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
 from tts import check_voice_assets, generate_speech
 
 logging.basicConfig(level=logging.INFO)

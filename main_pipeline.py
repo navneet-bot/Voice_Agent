@@ -20,7 +20,7 @@ except ImportError:
     logging.fatal("pipecat-ai not found. Please install it.")
     exit(1)
 
-from flows.conversation import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
+from flows.runtime import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

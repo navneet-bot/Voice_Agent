@@ -41,8 +41,10 @@ from tts.config import (
     CHANNELS,
     ENABLE_LANGUAGE_AUTO_DETECT,
     LANG_CODE_MAP,
+    MAX_SENTENCES,
     MAX_TEXT_LENGTH,
     SAMPLE_RATE,
+    SENTENCE_PAUSE_MS,
     SPEECH_SPEED,
     VOICE_MAP,
     VOICE_NAME,
@@ -156,7 +158,7 @@ except Exception:
 # Public API
 # ---------------------------------------------------------------------------
 
-def generate_speech(text: str) -> bytes:
+def generate_speech(text: str, preferred_language: str | None = None) -> bytes:
     """Convert plain text to WAV audio bytes using Kokoro-82M.
 
     This is the only public function in this module.  It accepts raw text
@@ -166,6 +168,8 @@ def generate_speech(text: str) -> bytes:
     Args:
         text: Plain-text string to synthesise.  May contain English,
             Hindi (Devanagari), or Hinglish (mixed script).
+        preferred_language: Optional stable language hint from the
+            conversation layer ("en", "hi", "mr", or "hinglish").
 
     Returns:
         ``bytes`` containing a valid WAV file (mono, 24 000 Hz), or
@@ -173,7 +177,7 @@ def generate_speech(text: str) -> bytes:
         during inference.  This function **never raises**.
     """
     try:
-        from tts.speech_formatter import optimize_for_tts
+        from tts.response_formatter import optimize_for_tts
         text = optimize_for_tts(text)
 
         # --- pre-process ------------------------------------------------
@@ -189,7 +193,11 @@ def generate_speech(text: str) -> bytes:
             return b""
 
         # --- language detection ------------------------------------------
-        if ENABLE_LANGUAGE_AUTO_DETECT:
+        if preferred_language in LANG_CODE_MAP:
+            detected_lang = preferred_language
+        elif preferred_language == "mr":
+            detected_lang = "hi"
+        elif ENABLE_LANGUAGE_AUTO_DETECT:
             detected_lang = _detect_language(processed)
         else:
             detected_lang = "en"
@@ -202,12 +210,16 @@ def generate_speech(text: str) -> bytes:
         pipeline = _get_pipeline(lang_code)
         
         sentences = _split_sentences(processed)
-        if len(sentences) > 4:
-            logger.warning("generate_speech: response exceeds 4 sentences. Processing first 4 only.")
-            sentences = sentences[:4]
+        if len(sentences) > MAX_SENTENCES:
+            logger.warning(
+                "generate_speech: response exceeds %d sentences. Processing first %d only.",
+                MAX_SENTENCES,
+                MAX_SENTENCES,
+            )
+            sentences = sentences[:MAX_SENTENCES]
 
         audio_segments = []
-        silence = _generate_silence(duration_ms=180)   # 180ms between sentences
+        silence = _generate_silence(duration_ms=SENTENCE_PAUSE_MS)
 
         def _run_kokoro(sentence_text: str) -> np.ndarray:
             generator = pipeline(sentence_text, voice=voice, speed=SPEECH_SPEED)
@@ -215,12 +227,13 @@ def generate_speech(text: str) -> bytes:
             return np.concatenate(chunks) if chunks else np.array([])
 
         with torch.no_grad():
-            for sentence in sentences:
+            for index, sentence in enumerate(sentences):
                 if sentence.strip():
                     audio = _run_kokoro(sentence)
                     if len(audio) > 0:
                         audio_segments.append(audio)
-                        audio_segments.append(silence)
+                        if index < len(sentences) - 1:
+                            audio_segments.append(silence)
 
         if not audio_segments:
             logger.warning("Kokoro returned no audio chunks for input: %.80s…", processed)

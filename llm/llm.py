@@ -8,8 +8,10 @@ This module is stateless. All conversational state is managed by the
 flows/conversation.py orchestrator.
 """
 
-import time
 import logging
+import os
+import re
+import time
 from typing import Optional
 
 from groq import Groq, APIError, APITimeoutError, RateLimitError
@@ -27,6 +29,7 @@ if not cfg.GROQ_API_KEY:
     )
 
 _client = Groq(api_key=cfg.GROQ_API_KEY, timeout=cfg.REQUEST_TIMEOUT_S)
+_prompt_cache: Optional[str] = None
 
 
 def generate_response(
@@ -70,7 +73,10 @@ def generate_response(
                 top_p=cfg.TOP_P,
             )
             latency = time.time() - t0
-            response_text = completion.choices[0].message.content.strip()
+            response_text = _postprocess_response(
+                completion.choices[0].message.content or "",
+                history=conversation_history or [],
+            )
             logger.info(
                 "LLM response generated in %.3fs (attempt %d/%d)",
                 latency, attempt, cfg.MAX_RETRIES,
@@ -105,6 +111,8 @@ def _build_messages(
     """Construct the full message list to send to the LLM."""
     system_prompt = _get_system_prompt(language)
     messages = [{"role": "system", "content": system_prompt}]
+    if cfg.MAX_HISTORY_MESSAGES > 0:
+        history = history[-cfg.MAX_HISTORY_MESSAGES:]
     messages.extend(history)
     messages.append({"role": "user", "content": user_text})
     return messages
@@ -115,23 +123,83 @@ def _get_system_prompt(language: str) -> str:
     Returns the system prompt for the AI voice agent.
     Reads from prompt.txt and appends language-specific instructions.
     """
-    import os
-    
-    # Check for prompt.txt in the current working directory
-    base_prompt = ""
-    prompt_path = "prompt.txt"
-    if os.path.exists(prompt_path):
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            base_prompt = f.read().strip()
-    else:
-        # Fallback if prompt.txt is missing
-        base_prompt = "You are a professional, friendly AI voice agent for real-estate outbound calls."
+    global _prompt_cache
+
+    if _prompt_cache is None:
+        prompt_path = "prompt.txt"
+        if os.path.exists(prompt_path):
+            with open(prompt_path, "r", encoding="utf-8") as f:
+                _prompt_cache = f.read().strip()
+        else:
+            _prompt_cache = "You are a professional, friendly AI voice agent for real-estate outbound calls."
 
     lang_instructions = {
-        "en": "Always respond in English.",
-        "hi": "Always respond in Hindi (Devanagari script).",
-        "mr": "Always respond in Marathi (Devanagari script).",
+        "en": "Respond in English only.",
+        "hi": "Respond in Hindi using standard Devanagari script.",
+        "mr": "Respond in Marathi using standard Devanagari script.",
+        "hinglish": "Respond in natural Hinglish using normal sentence casing. Keep common real-estate terms in English.",
     }
 
-    return f"{base_prompt}\n\n{lang_instructions.get(language, lang_instructions['en'])}"
+    call_style = (
+        "Keep every reply crisp for a live phone call: 1 or 2 short sentences, one question at a time, "
+        "no bullet points, no repetition, and no restating the same sentence in different words. "
+        "Keep a warm, steady, confident pace."
+    )
+
+    return f"{_prompt_cache}\n\n{lang_instructions.get(language, lang_instructions['en'])}\n{call_style}"
+
+
+def _postprocess_response(raw_text: str, history: list[dict]) -> str:
+    """Normalize LLM output for short, non-repetitive voice responses."""
+    text = re.sub(r"\s+", " ", raw_text or "").strip()
+    if not text:
+        return ""
+
+    text = re.sub(r"[*_#`]+", "", text)
+    text = re.sub(r"\b(um+|uh+)\b", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip()
+
+    sentences = _split_sentences(text)
+    deduped_sentences: list[str] = []
+    seen_normalized: set[str] = set()
+    for sentence in sentences:
+        normalized = _normalize_text(sentence)
+        if not normalized or normalized in seen_normalized:
+            continue
+        seen_normalized.add(normalized)
+        deduped_sentences.append(sentence.strip())
+        if len(deduped_sentences) >= cfg.MAX_RESPONSE_SENTENCES:
+            break
+
+    if not deduped_sentences:
+        deduped_sentences = [text]
+
+    response = " ".join(deduped_sentences).strip()
+    words = response.split()
+    if len(words) > cfg.MAX_RESPONSE_WORDS:
+        response = " ".join(words[:cfg.MAX_RESPONSE_WORDS]).rstrip(",;:- ")
+        if response and response[-1] not in ".!?":
+            response += "."
+
+    previous_assistant = next(
+        (msg.get("content", "") for msg in reversed(history) if msg.get("role") == "assistant"),
+        "",
+    )
+    if previous_assistant and _normalize_text(response) == _normalize_text(previous_assistant):
+        logger.warning("LLM repeated the previous assistant turn; suppressing duplicate reply.")
+        return ""
+
+    return response
+
+
+def _split_sentences(text: str) -> list[str]:
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    return [part.strip() for part in parts if part and part.strip()]
+
+
+def _normalize_text(text: str) -> str:
+    lowered = text.casefold()
+    lowered = re.sub(r"[^\w\s]", "", lowered)
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    return lowered
 

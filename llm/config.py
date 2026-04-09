@@ -26,15 +26,20 @@ GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
 MODEL_NAME: str = "llama-3.1-8b-instant"
 
 # ── Generation Parameters ──────────────────────────────────────────────────────
-TEMPERATURE: float = 0.7       # 0.0 = deterministic, 1.0 = creative
-MAX_TOKENS: int = 200          # Keep short for real-time voice (< 1s latency)
-TOP_P: float = 1.0             # Nucleus sampling; 1.0 = disabled
+TEMPERATURE: float = 0.0       # deterministic replies for stable script following
+MAX_TOKENS: int = 80           # short voice turns reduce latency and rambling
+TOP_P: float = 0.9             # slight nucleus cap for consistency
 
 # ── Retry & Timeout ────────────────────────────────────────────────────────────
 REQUEST_TIMEOUT_S: int = 8     # Max seconds to wait for a Groq response
 MAX_RETRIES: int = 2           # Number of retries on transient failure
 
+# Runtime response shaping
+MAX_HISTORY_MESSAGES: int = 8
+MAX_RESPONSE_SENTENCES: int = 2
+MAX_RESPONSE_WORDS: int = 28
+
 # ── Supported Languages ────────────────────────────────────────────────────────
 # Matches the STT module's language support
-SUPPORTED_LANGUAGES: list[str] = ["en", "hi", "mr"]
+SUPPORTED_LANGUAGES: list[str] = ["en", "hi", "mr", "hinglish"]
 DEFAULT_LANGUAGE: str = "en"
