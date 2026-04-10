@@ -6,10 +6,14 @@ from difflib import SequenceMatcher
 import io
 import logging
 import time
+import concurrent.futures
 
 import numpy as np
 import soundfile as sf
 from scipy.signal import resample_poly
+
+_executor = concurrent.futures.ThreadPoolExecutor(max_workers=30)
+_ml_semaphore = asyncio.Semaphore(4)
 
 try:
     from pipecat.frames.frames import AudioRawFrame, Frame, TextFrame
@@ -23,7 +27,13 @@ except ImportError:
     AudioRawFrame = None
 
 from llm.llm import generate_response
+from llm.state_manager import StateManager
+from llm.pipeline_logger import pipeline_logger
+from pipecat.frames.frames import StartFrame
 from stt import config as stt_cfg
+
+# Global state manager loaded directly from JSON specification
+state_manager = StateManager("Updated_Real_Estate_Agent.json")
 
 try:
     from stt.stt import transcribe_audio
@@ -34,12 +44,12 @@ except ImportError:
         return "mock transcription"
 
 try:
-    from tts import generate_speech
+    from tts import generate_speech_stream
 except ImportError:
     logging.warning("tts engine not found. Using mock TTS.")
 
-    def generate_speech(text: str, preferred_language: str | None = None) -> bytes:
-        return b""
+    def generate_speech_stream(text: str, preferred_language: str | None = None):
+        return iter([])
 
 
 logger = logging.getLogger(__name__)
@@ -51,7 +61,7 @@ class AgentTextFrame(TextFrame):
 
 
 class RealEstateLLMProcessor(FrameProcessor):
-    """Turn user transcriptions into short, stable LLM responses."""
+    """Turn user transcriptions into short, stable LLM responses and manage node states."""
 
     def __init__(self):
         super().__init__()
@@ -59,8 +69,28 @@ class RealEstateLLMProcessor(FrameProcessor):
         self.current_language = "en"
         self.last_user_text = ""
         self.last_user_at = 0.0
+        self._booted = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
+        if isinstance(frame, StartFrame) and not self._booted:
+            self._booted = True
+            state_manager.reset_state()
+            pipeline_logger.log_event("call_started", {"start_node": state_manager.start_node_id})
+            
+            logger.info("Triggering initial greeting from StateManager...")
+            reply = await generate_response(
+                user_text="[System: The call has just been connected. Introduce yourself immediately.]",
+                conversation_history=self.history,
+                language=self.current_language,
+                state_manager=state_manager
+            )
+            if reply:
+                self.history.append({"role": "assistant", "content": reply})
+                pipeline_logger.log_event("agent_reply", {"content": reply, "node": state_manager.current_node_id})
+                await self.push_frame(AgentTextFrame(reply, language=self.current_language), direction)
+                
+            await super().process_frame(frame, direction)
+            return
         if not isinstance(frame, TextFrame):
             await super().process_frame(frame, direction)
             return
@@ -78,16 +108,20 @@ class RealEstateLLMProcessor(FrameProcessor):
         self.last_user_at = now
         self.current_language = _detect_language_from_text(user_text, fallback=self.current_language)
         logger.info("LLM received text (%s): %s", self.current_language, user_text)
+        
+        pipeline_logger.log_event("user_reply", {"content": user_text, "node": state_manager.current_node_id})
 
-        reply = await asyncio.to_thread(
-            generate_response,
+        reply = await generate_response(
             user_text,
             self.history,
             self.current_language,
+            state_manager=state_manager
         )
         if not reply:
             return
 
+        pipeline_logger.log_event("agent_reply", {"content": reply, "node": state_manager.current_node_id})
+        
         self.history.append({"role": "user", "content": user_text})
         self.history.append({"role": "assistant", "content": reply})
         if len(self.history) > 8:
@@ -130,7 +164,10 @@ class RealEstateSTTProcessor(FrameProcessor):
 
         chunk = bytes(self.audio_buffer)
         self.audio_buffer.clear()
-        text = await asyncio.to_thread(transcribe_audio, chunk)
+        
+        async with _ml_semaphore:
+            text = await asyncio.get_running_loop().run_in_executor(_executor, transcribe_audio, chunk)
+            
         normalized_text = _normalize_text(text)
         if not normalized_text or len(normalized_text) < stt_cfg.MIN_TRANSCRIPT_CHARS:
             return
@@ -167,19 +204,25 @@ class RealEstateTTSProcessor(FrameProcessor):
 
         preferred_language = getattr(frame, "language", None)
         logger.info("TTS synthesizing (%s): %s", preferred_language or "auto", text)
-        wav_bytes = await asyncio.to_thread(generate_speech, text, preferred_language)
-        if not wav_bytes:
+        
+        speech_gen = generate_speech_stream(text, preferred_language)
+        if not speech_gen:
             return
 
         try:
-            data, samplerate = sf.read(io.BytesIO(wav_bytes))
-            pcm16_data = (np.asarray(data, dtype=np.float32) * 32767).astype(np.int16).tobytes()
             self.last_reply = text
             self.last_reply_at = now
-            await self.push_frame(
-                AudioRawFrame(audio=pcm16_data, sample_rate=samplerate, num_channels=1),
-                direction,
-            )
+            async with _ml_semaphore:
+                while True:
+                    try:
+                        chunk_bytes = await asyncio.get_running_loop().run_in_executor(_executor, next, speech_gen)
+                        if chunk_bytes:
+                            await self.push_frame(
+                                AudioRawFrame(audio=chunk_bytes, sample_rate=24000, num_channels=1),
+                                direction,
+                            )
+                    except StopIteration:
+                        break
         except Exception as exc:
             logger.error("Error converting TTS audio: %s", exc)
 

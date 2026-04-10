@@ -28,6 +28,7 @@ import io
 import os
 import re
 import logging
+from typing import Iterator
 from pathlib import Path
 
 import torch
@@ -158,7 +159,7 @@ except Exception:
 # Public API
 # ---------------------------------------------------------------------------
 
-def generate_speech(text: str, preferred_language: str | None = None) -> bytes:
+def generate_speech_stream(text: str, preferred_language: str | None = None) -> Iterator[bytes]:
     """Convert plain text to WAV audio bytes using Kokoro-82M.
 
     This is the only public function in this module.  It accepts raw text
@@ -183,14 +184,14 @@ def generate_speech(text: str, preferred_language: str | None = None) -> bytes:
         # --- pre-process ------------------------------------------------
         processed = _preprocess_text(text)
         if not processed:
-            logger.debug("generate_speech: empty after preprocessing, returning b''")
-            return b""
+            logger.debug("generate_speech: empty after preprocessing, returning")
+            return
 
         # Strip out anything that is not a letter, digit, or common punct.
         speakable = re.sub(r"[^\w\s]", "", processed, flags=re.UNICODE).strip()
         if not speakable:
-            logger.debug("generate_speech: no speakable content, returning b''")
-            return b""
+            logger.debug("generate_speech: no speakable content, returning")
+            return
 
         # --- language detection ------------------------------------------
         if preferred_language in LANG_CODE_MAP:
@@ -218,38 +219,52 @@ def generate_speech(text: str, preferred_language: str | None = None) -> bytes:
             )
             sentences = sentences[:MAX_SENTENCES]
 
-        audio_segments = []
         silence = _generate_silence(duration_ms=SENTENCE_PAUSE_MS)
 
-        def _run_kokoro(sentence_text: str) -> np.ndarray:
+        def _run_kokoro(sentence_text: str) -> Iterator[np.ndarray]:
             generator = pipeline(sentence_text, voice=voice, speed=SPEECH_SPEED)
-            chunks = [aud for _gs, _ps, aud in generator if aud is not None and len(aud) > 0]
-            return np.concatenate(chunks) if chunks else np.array([])
+            for _gs, _ps, aud in generator:
+                if aud is not None and len(aud) > 0:
+                    yield aud
 
         with torch.no_grad():
             for index, sentence in enumerate(sentences):
                 if sentence.strip():
-                    audio = _run_kokoro(sentence)
-                    if len(audio) > 0:
-                        audio_segments.append(audio)
-                        if index < len(sentences) - 1:
-                            audio_segments.append(silence)
-
-        if not audio_segments:
-            logger.warning("Kokoro returned no audio chunks for input: %.80s…", processed)
-            return b""
-
-        final_audio = np.concatenate(audio_segments) if audio_segments else np.array([])
-        return _to_wav_bytes(final_audio, SAMPLE_RATE)
+                    for audio in _run_kokoro(sentence):
+                        yield _to_pcm16_bytes(audio)
+                    if index < len(sentences) - 1:
+                        yield _to_pcm16_bytes(silence)
 
     except Exception:
         logger.error("generate_speech failed", exc_info=True)
-        return b""
+        return
 
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
+
+def generate_speech(text: str, preferred_language: str | None = None) -> bytes:
+    """Synchronous backwards-compatibility wrapper for mic_conversation.py."""
+    import io
+    import soundfile as sf
+    stream = generate_speech_stream(text, preferred_language)
+    if not stream:
+        return b""
+    
+    chunks = []
+    for pcm16 in stream:
+        if pcm16:
+            chunks.append(np.frombuffer(pcm16, dtype=np.int16))
+            
+    if not chunks:
+        return b""
+        
+    final_pcm16 = np.concatenate(chunks)
+    buf = io.BytesIO()
+    sf.write(buf, final_pcm16, SAMPLE_RATE, format="WAV", subtype="PCM_16")
+    buf.seek(0)
+    return buf.read()
 
 def _detect_language(text: str) -> str:
     """Detect script/language of *text* using Unicode range heuristics.
@@ -341,28 +356,18 @@ def _preprocess_text(text: str) -> str:
     return cleaned
 
 
-def _to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
-    """Encode a float32 numpy audio array into WAV bytes.
-
-    Output specification:
-        - Format: WAV (RIFF)
-        - Channels: 1 (mono) — required for telephony
-        - Sample rate: *sample_rate* Hz (typically 24 000)
+def _to_pcm16_bytes(audio: np.ndarray) -> bytes:
+    """Encode a float32 numpy audio array into PCM16 bytes.
 
     Args:
         audio: 1-D ``np.float32`` array of audio samples.
-        sample_rate: Target sample rate in Hz.
 
     Returns:
-        ``bytes`` containing a complete WAV file.
+        ``bytes`` containing raw PCM16 bytes.
     """
-    # Ensure the array is 1-D float32
     audio = np.asarray(audio, dtype=np.float32).ravel()
-
-    buf = io.BytesIO()
-    sf.write(buf, audio, sample_rate, format="WAV", subtype="FLOAT")
-    buf.seek(0)
-    return buf.read()
+    pcm16 = np.clip(audio * 32767.0, -32768.0, 32767.0).astype(np.int16)
+    return pcm16.tobytes()
 
 
 def _split_sentences(text: str) -> list[str]:

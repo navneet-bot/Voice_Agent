@@ -7,9 +7,13 @@
 # generate_speech(text: str) -> bytes signature.
 # ---------------------------------------------------------------------------
 
-from tts.tts_kokoro import check_voice_assets, generate_speech
+from tts.tts_edge import generate_speech_stream
+
+def check_voice_assets():
+    # Edge TTS requires no local assets!
+    pass
 
 __all__ = [
     "check_voice_assets",
-    "generate_speech",
+    "generate_speech_stream"
 ]

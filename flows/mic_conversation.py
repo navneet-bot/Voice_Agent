@@ -6,6 +6,7 @@ Integration Note: Orchestrates STT, LLM, and TTS modules for real-time interacti
 import sys
 import os
 import time
+import asyncio
 from time import perf_counter
 
 # Ensure project root is in sys.path for module imports
@@ -43,9 +44,16 @@ def run_conversation():
         sys.exit(1)
 
     try:
-        from tts.tts_kokoro import generate_speech
+        from tts.tts_edge import generate_speech_stream
     except ImportError:
-        print("[ERROR] Failed to import TTS module (tts/tts_kokoro.py)")
+        print("[ERROR] Failed to import TTS module (tts/tts_edge.py)")
+        sys.exit(1)
+
+    try:
+        from llm.state_manager import StateManager
+        state_manager = StateManager("Updated_Real_Estate_Agent.json")
+    except ImportError:
+        print("[ERROR] Failed to import state_manager")
         sys.exit(1)
 
     # Startup Header
@@ -74,30 +82,13 @@ def run_conversation():
                 text = transcribe_audio(wav_bytes)
                 stt_time = perf_counter() - t0
                 
-                if not text or len(text.strip()) < 2:
+                if not text or len(text.strip()) < 1:
                     continue
                 
-                # --- Context-Aware Endpointing Check ---
-                # Check if the thought is incomplete (ends in conjunctions) or is a stammer (very short)
                 current_text = (accumulated_text + " " + text).strip()
                 
-                # Incomplete sentence markers (conjunctions, prepositions, or leading words)
-                incomplete_markers = [
-                    'and', 'but', 'so', 'with', 'the', 'my', 'is', 'a', 
-                    'it', 'to', 'for', 'of', 'at', 'on', 'if', 'or', 'because'
-                ]
-                last_word = text.lower().split()[-1] if text.split() else ""
-                
-                is_incomplete = (
-                    last_word in incomplete_markers or 
-                    len(text.split()) < 2 or 
-                    text.endswith('...')
-                )
-                
-                if is_incomplete:
-                    print(f" (thought incomplete: '{text}'... keeping microphone open)")
-                    accumulated_text = current_text
-                    continue  # Loop back to record more
+                # Removed 'thought incomplete' arbitrary blockers.
+                # All detected speech drops to LLM to evaluate State Rules directly.
                 
                 # Thought is complete
                 final_text = current_text
@@ -110,7 +101,7 @@ def run_conversation():
 
                 # STEP 3 — LLM
                 t1 = perf_counter()
-                response_text = generate_response(final_text, conversation_history)
+                response_text = asyncio.run(generate_response(final_text, conversation_history, state_manager=state_manager))
                 llm_time = perf_counter() - t1
                 
                 if not response_text:
@@ -121,13 +112,26 @@ def run_conversation():
 
                 # STEP 4 — TTS
                 t2 = perf_counter()
-                audio_bytes = generate_speech(response_text)
-                tts_time = perf_counter() - t2
+                speech_gen = generate_speech_stream(response_text)
                 
-                if audio_bytes:
+                if speech_gen:
+                    import sounddevice as sd
+                    import numpy as np
+                    
+                    tts_time = perf_counter() - t2
                     if VERBOSE:
-                        print(f"[TIME] STT: {stt_time:.2f}s  LLM: {llm_time:.2f}s  TTS: {tts_time:.2f}s")
-                    play_audio(audio_bytes, OUTPUT_SAMPLE_RATE)
+                        print(f"[TIME] STT: {stt_time:.2f}s  LLM: {llm_time:.2f}s  TTFB: {tts_time:.2f}s")
+                        
+                    stream = sd.OutputStream(samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype='int16')
+                    stream.start()
+                    try:
+                        for pcm16 in speech_gen:
+                            if pcm16:
+                                chunk_array = np.frombuffer(pcm16, dtype=np.int16)
+                                stream.write(chunk_array)
+                    finally:
+                        stream.stop()
+                        stream.close()
                     time.sleep(POST_RESPONSE_PAUSE_S)
 
             except Exception as e:

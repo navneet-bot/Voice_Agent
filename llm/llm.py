@@ -8,13 +8,14 @@ This module is stateless. All conversational state is managed by the
 flows/conversation.py orchestrator.
 """
 
+import asyncio
 import logging
 import os
 import re
 import time
-from typing import Optional
+from typing import Optional, Any
 
-from groq import Groq, APIError, APITimeoutError, RateLimitError
+from groq import AsyncGroq, APIError, APITimeoutError, RateLimitError
 
 import llm.config as cfg
 
@@ -28,14 +29,15 @@ if not cfg.GROQ_API_KEY:
         "Or:  export GROQ_API_KEY='your_key_here'  (Linux/Mac)"
     )
 
-_client = Groq(api_key=cfg.GROQ_API_KEY, timeout=cfg.REQUEST_TIMEOUT_S)
+_client = AsyncGroq(api_key=cfg.GROQ_API_KEY, timeout=cfg.REQUEST_TIMEOUT_S)
 _prompt_cache: Optional[str] = None
 
 
-def generate_response(
+async def generate_response(
     user_text: str,
     conversation_history: Optional[list[dict]] = None,
     language: str = cfg.DEFAULT_LANGUAGE,
+    state_manager: Optional[Any] = None,
 ) -> str:
     """
     Generate a conversational response from the LLM.
@@ -59,22 +61,40 @@ def generate_response(
         language = cfg.DEFAULT_LANGUAGE
 
     # Build the message list: system prompt + history + new user message
-    messages = _build_messages(user_text, conversation_history or [], language)
+    messages = _build_messages(user_text, conversation_history or [], language, state_manager)
 
     # Call Groq API with retry logic
     for attempt in range(1, cfg.MAX_RETRIES + 1):
         try:
             t0 = time.time()
-            completion = _client.chat.completions.create(
+            completion = await _client.chat.completions.create(
                 model=cfg.MODEL_NAME,
                 messages=messages,
                 temperature=cfg.TEMPERATURE,
                 max_tokens=cfg.MAX_TOKENS,
                 top_p=cfg.TOP_P,
+                response_format={"type": "json_object"}
             )
             latency = time.time() - t0
+            raw_content = completion.choices[0].message.content or "{}"
+            
+            # Parse state transitions from JSON
+            clean_content = ""
+            try:
+                import json
+                data = json.loads(raw_content)
+                edge_id = data.get("transition_edge_id")
+                
+                if state_manager and edge_id and str(edge_id).lower() != "null":
+                    state_manager.transition_to(edge_id)
+                    
+                clean_content = data.get("response_text", "")
+            except Exception as e:
+                logger.error("JSON parsing failed, falling back to raw output. Error: %s", e)
+                clean_content = raw_content
+            
             response_text = _postprocess_response(
-                completion.choices[0].message.content or "",
+                clean_content,
                 history=conversation_history or [],
             )
             logger.info(
@@ -89,7 +109,7 @@ def generate_response(
 
         except RateLimitError:
             logger.error("Groq rate limit hit on attempt %d.", attempt)
-            time.sleep(2 ** attempt)   # exponential backoff
+            await asyncio.sleep(2 ** attempt)   # exponential backoff
 
         except APITimeoutError:
             logger.error("Groq request timed out on attempt %d.", attempt)
@@ -107,9 +127,14 @@ def _build_messages(
     user_text: str,
     history: list[dict],
     language: str,
+    state_manager: Optional[Any] = None,
 ) -> list[dict]:
     """Construct the full message list to send to the LLM."""
-    system_prompt = _get_system_prompt(language)
+    if state_manager:
+        system_prompt = state_manager.get_system_prompt()
+    else:
+        system_prompt = _get_system_prompt(language)
+        
     messages = [{"role": "system", "content": system_prompt}]
     if cfg.MAX_HISTORY_MESSAGES > 0:
         history = history[-cfg.MAX_HISTORY_MESSAGES:]

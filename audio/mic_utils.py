@@ -21,7 +21,7 @@ def record_audio(duration_seconds: float, sample_rate: int = 16000) -> np.ndarra
     from stt.config import ENERGY_THRESHOLD
     chunk_size = 1024
     threshold = ENERGY_THRESHOLD  # Use config threshold
-    silence_duration = 1.2        # Relaxed from 0.8s
+    silence_duration = 0.5        # Fast conversational endpointing (down from 1.2s)
     max_silent_chunks = int(silence_duration * sample_rate / chunk_size)
     
     recorded_chunks = []
