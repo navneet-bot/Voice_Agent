@@ -18,4 +18,4 @@ TRAILING_SILENCE_MS: int = 180
 SILENCE_RMS_THRESHOLD: float = 0.012
 MIN_TRANSCRIPT_CHARS: int = 1
 DUPLICATE_TEXT_WINDOW_S: float = 3.0
-ENERGY_THRESHOLD: float = 0.004  # RMS threshold for mic silence detection (very sensitive)
+ENERGY_THRESHOLD: float = 0.015  # Raised to 0.015 to reject background hum/noise

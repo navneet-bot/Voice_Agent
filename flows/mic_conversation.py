@@ -20,9 +20,62 @@ from audio.mic_utils import record_audio, play_audio, convert_to_wav_bytes
 INPUT_SAMPLE_RATE    = 16000    # Hz — microphone recording
 OUTPUT_SAMPLE_RATE   = 24000    # Hz — Kokoro TTS output
 RECORD_DURATION_S    = 4        # seconds per recording window
-POST_RESPONSE_PAUSE_S = 0.2     # silence gap after AI speaks before next listen
+POST_RESPONSE_PAUSE_S = 1.0     # silence gap after AI speaks before next listen
 MIN_TRANSCRIPTION_CHARS = 3     # ignore STT output shorter than this
 VERBOSE              = True
+
+
+def interruptible_play(speech_gen, start_time):
+    """Plays audio from a generator while listening for barge-in interruptions."""
+    import sounddevice as sd
+    import numpy as np
+    import threading
+    from stt.config import ENERGY_THRESHOLD
+    
+    stream = sd.OutputStream(samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype='int16')
+    stream.start()
+    
+    interrupted = [False]
+    
+    def check_interruption():
+        time.sleep(0.4) # Guard period
+        barrage_threshold = ENERGY_THRESHOLD * 5.0
+        try:
+            with sd.InputStream(samplerate=INPUT_SAMPLE_RATE, channels=1, dtype='float32') as in_stream:
+                while not interrupted[0]:
+                    chunk, _ = in_stream.read(512)
+                    rms = np.sqrt(np.mean(chunk**2))
+                    if rms > barrage_threshold:
+                        chunk2, _ = in_stream.read(512)
+                        rms2 = np.sqrt(np.mean(chunk2**2))
+                        if rms2 > barrage_threshold:
+                            interrupted[0] = True
+                            break
+        except Exception:
+            pass
+
+    try:
+        first_chunk = True
+        for pcm16 in speech_gen:
+            if first_chunk:
+                tts_time = perf_counter() - start_time
+                if VERBOSE:
+                    print(f" [TTFB: {tts_time:.2f}s]")
+                threading.Thread(target=check_interruption, daemon=True).start()
+                first_chunk = False
+
+            if interrupted[0]:
+                sd.stop() 
+                print(" (INTERRUPTED - Flushing Echo...)")
+                time.sleep(0.6)
+                break
+            if pcm16:
+                stream.write(np.frombuffer(pcm16, dtype=np.int16))
+    finally:
+        interrupted[0] = True 
+        stream.stop()
+        stream.close()
+
 
 def run_conversation():
     """
@@ -68,6 +121,24 @@ def run_conversation():
     accumulated_text = ""
     
     try:
+        # STEP 0: Initial Greeting (AI Speaks First)
+        state_manager.reset_state()
+        print("[AI] Initializing greeting...")
+        start_time_tts = perf_counter()
+        response_text = asyncio.run(generate_response(
+            "[System: The call starting. Say a charismatic 'Hello, is this Prashant?' and wait. DO NOT transition yet.]", 
+            conversation_history, 
+            state_manager=state_manager
+        ))
+        if response_text:
+            print(f"[AI]   {response_text}")
+            conversation_history.append({"role": "assistant", "content": response_text})
+            
+            # Start TTS for greeting
+            speech_gen = generate_speech_stream(response_text)
+            if speech_gen:
+                interruptible_play(speech_gen, start_time_tts)
+
         while True:
             try:
                 # STEP 1 — Listen
@@ -115,23 +186,7 @@ def run_conversation():
                 speech_gen = generate_speech_stream(response_text)
                 
                 if speech_gen:
-                    import sounddevice as sd
-                    import numpy as np
-                    
-                    tts_time = perf_counter() - t2
-                    if VERBOSE:
-                        print(f"[TIME] STT: {stt_time:.2f}s  LLM: {llm_time:.2f}s  TTFB: {tts_time:.2f}s")
-                        
-                    stream = sd.OutputStream(samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype='int16')
-                    stream.start()
-                    try:
-                        for pcm16 in speech_gen:
-                            if pcm16:
-                                chunk_array = np.frombuffer(pcm16, dtype=np.int16)
-                                stream.write(chunk_array)
-                    finally:
-                        stream.stop()
-                        stream.close()
+                    interruptible_play(speech_gen, t2)
                     time.sleep(POST_RESPONSE_PAUSE_S)
 
             except Exception as e:

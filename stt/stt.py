@@ -93,6 +93,14 @@ def transcribe_audio(audio_chunk: bytes) -> str:
         latency = time.perf_counter() - t0
         text = transcription.text.strip()
         
+        # --- Hallucination Filter ---
+        # Whisper-large-v3-turbo often hallucination "Thank you", "you", or "Mm-hmm" 
+        # on silence or static. We filter these out if they are the only words.
+        hallucinations = {"thank you.", "thank you", "you.", "you", "thanks.", "thanks"}
+        if text.lower() in hallucinations:
+            logger.info("STT (Groq Cloud) ignored hallucination: '%s'", text)
+            return ""
+
         if text:
             logger.info("STT (Groq Cloud) produced '%s' in %.3fs", text, latency)
         return text
