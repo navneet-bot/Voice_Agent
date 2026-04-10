@@ -7,6 +7,7 @@ import sys
 import os
 import time
 import asyncio
+import math
 from time import perf_counter
 
 # Ensure project root is in sys.path for module imports
@@ -23,6 +24,12 @@ RECORD_DURATION_S    = 4        # seconds per recording window
 POST_RESPONSE_PAUSE_S = 1.0     # silence gap after AI speaks before next listen
 MIN_TRANSCRIPTION_CHARS = 3     # ignore STT output shorter than this
 VERBOSE              = True
+BARGE_IN_GUARD_S     = 0.9      # do not allow interruptions in the first part of playback
+BARGE_IN_MIN_VOICE_S = 0.20     # require sustained voice, not a single loud spike
+BARGE_IN_RELEASE_S   = 0.12     # reset detector after a brief quiet gap
+BARGE_IN_CHUNK_SIZE  = 512
+BARGE_IN_RMS_MULTIPLIER = 8.0
+BARGE_IN_MIN_RMS     = 0.10
 
 
 def interruptible_play(speech_gen, start_time):
@@ -35,46 +42,92 @@ def interruptible_play(speech_gen, start_time):
     stream = sd.OutputStream(samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype='int16')
     stream.start()
     
-    interrupted = [False]
+    interrupted = threading.Event()
+    stop_monitor = threading.Event()
+    monitor_thread = None
     
-    def check_interruption():
-        time.sleep(0.4) # Guard period
-        barrage_threshold = ENERGY_THRESHOLD * 5.0
+    def check_interruption(playback_started_at: float):
+        chunk_duration_s = BARGE_IN_CHUNK_SIZE / INPUT_SAMPLE_RATE
+        required_voiced_chunks = max(3, math.ceil(BARGE_IN_MIN_VOICE_S / chunk_duration_s))
+        release_chunks = max(2, math.ceil(BARGE_IN_RELEASE_S / chunk_duration_s))
+        barrage_threshold = max(ENERGY_THRESHOLD * BARGE_IN_RMS_MULTIPLIER, BARGE_IN_MIN_RMS)
+        voiced_chunks = 0
+        quiet_chunks = 0
+
         try:
-            with sd.InputStream(samplerate=INPUT_SAMPLE_RATE, channels=1, dtype='float32') as in_stream:
-                while not interrupted[0]:
-                    chunk, _ = in_stream.read(512)
-                    rms = np.sqrt(np.mean(chunk**2))
-                    if rms > barrage_threshold:
-                        chunk2, _ = in_stream.read(512)
-                        rms2 = np.sqrt(np.mean(chunk2**2))
-                        if rms2 > barrage_threshold:
-                            interrupted[0] = True
+            with sd.InputStream(
+                samplerate=INPUT_SAMPLE_RATE,
+                channels=1,
+                dtype='float32',
+                blocksize=BARGE_IN_CHUNK_SIZE,
+            ) as in_stream:
+                while not stop_monitor.is_set():
+                    chunk, _ = in_stream.read(BARGE_IN_CHUNK_SIZE)
+                    if stop_monitor.is_set():
+                        break
+
+                    if perf_counter() - playback_started_at < BARGE_IN_GUARD_S:
+                        voiced_chunks = 0
+                        quiet_chunks = 0
+                        continue
+
+                    rms = float(np.sqrt(np.mean(chunk ** 2)))
+                    if rms >= barrage_threshold:
+                        voiced_chunks += 1
+                        quiet_chunks = 0
+                        if voiced_chunks >= required_voiced_chunks:
+                            interrupted.set()
                             break
+                    else:
+                        quiet_chunks += 1
+                        if quiet_chunks >= release_chunks:
+                            voiced_chunks = 0
         except Exception:
             pass
 
     try:
         first_chunk = True
+        was_interrupted = False
         for pcm16 in speech_gen:
             if first_chunk:
                 tts_time = perf_counter() - start_time
                 if VERBOSE:
                     print(f" [TTFB: {tts_time:.2f}s]")
-                threading.Thread(target=check_interruption, daemon=True).start()
+                playback_started_at = perf_counter()
+                monitor_thread = threading.Thread(
+                    target=check_interruption,
+                    args=(playback_started_at,),
+                    daemon=True,
+                )
+                monitor_thread.start()
                 first_chunk = False
 
-            if interrupted[0]:
-                sd.stop() 
-                print(" (INTERRUPTED - Flushing Echo...)")
-                time.sleep(0.6)
+            if interrupted.is_set():
+                was_interrupted = True
                 break
             if pcm16:
                 stream.write(np.frombuffer(pcm16, dtype=np.int16))
+                if interrupted.is_set():
+                    was_interrupted = True
+                    break
+
+        if was_interrupted:
+            print(" (INTERRUPTED - Flushing Echo...)")
+            time.sleep(0.25)
     finally:
-        interrupted[0] = True 
-        stream.stop()
-        stream.close()
+        stop_monitor.set()
+        if monitor_thread and monitor_thread.is_alive():
+            monitor_thread.join(timeout=0.2)
+        try:
+            if interrupted.is_set():
+                try:
+                    stream.abort()
+                except Exception:
+                    stream.stop()
+            else:
+                stream.stop()
+        finally:
+            stream.close()
 
 
 def run_conversation():

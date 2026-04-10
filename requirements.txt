@@ -14,7 +14,11 @@ spacy
 # Ubuntu/Debian: sudo apt install ffmpeg
 # macOS:         brew install ffmpeg
 
-# TTS — Kokoro-82M
+# TTS — Edge-TTS (Cloud)
+edge-tts
+miniaudio
+
+# TTS — Kokoro-82M (Local)
 kokoro>=0.9.4
 torch
 soundfile
