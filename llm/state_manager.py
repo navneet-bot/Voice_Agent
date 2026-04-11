@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-SHORT_NOISE = {".", ",", "uh", "ah", "hmm", "hm", "um"}
+SHORT_NOISE = {".", ",", "uh", "ah", "hmm", "hm", "um", "oh", "ohh", "this", "that"}
 NON_SKIPPABLE_NAMES = {
     "Smart Greeting",
     "Confirm and End",
@@ -19,6 +19,32 @@ NON_SKIPPABLE_NAMES = {
 }
 ENTITY_KEYS = ("location", "budget", "property_type", "intent_value", "timeline")
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "Updated_Real_Estate_Agent.json"
+INVALID_LOCATION_VALUES = {"location", "place", "area", "there", "nek", "city", "property", "this"}
+INVALID_BUDGET_VALUES = {"budget", "price", "amount"}
+INVALID_PROPERTY_TYPE_VALUES = {"property", "home", "n property", "bhk"}
+LOCATION_NORMALIZATION = {
+    "banner": "Baner",
+    "wakud": "Wakad",
+    "hinjewdi": "Hinjewadi",
+    "kharady": "Kharadi"
+}
+LOCATION_SUGGESTION_PHRASES = (
+    "suggest",
+    "recommend",
+    "which area",
+    "best location",
+    "good location",
+    "any options",
+)
+UNCERTAIN_PHRASES = (
+    "i don't know",
+    "dont know",
+    "don't know",
+    "not sure",
+    "maybe",
+    "not certain",
+    "unsure",
+)
 
 
 def _log(tag: str, message: str) -> None:
@@ -69,9 +95,15 @@ def _is_actionable(text: str) -> bool:
     Allow short confirmations through. Block empty, punctuation-only, or noise.
     """
     t = (text or "").strip().lower()
+    if not t:
+        return False
+    if t in {"yes", "yeah", "yep", "ok", "okay", "sure", "no", "nope", "nah"}:
+        return True
     if len(t) < 2:
         return False
     if t in SHORT_NOISE:
+        return False
+    if re.fullmatch(r"[\W_]+", t):
         return False
     if not any(c.isalpha() for c in t):
         return False
@@ -85,15 +117,64 @@ def _resolve_response(node: dict[str, Any], data: dict[str, Any], user_text: str
     """
     del user_text
     template = node.get("response")
+    missing_slot_responses = node.get("missing_slot_responses")
+    if isinstance(missing_slot_responses, dict):
+        collects = node.get("collects")
+        missing_slots: list[str] = []
+        if isinstance(collects, list):
+            missing_slots = [slot for slot in collects if not data.get(slot)]
+        if len(missing_slots) == 1:
+            override = missing_slot_responses.get(missing_slots[0])
+            if isinstance(override, str) and override.strip():
+                template = override
     if template is None:
         template = node.get("instruction", {}).get("text", "") or "I can help with real estate."
 
     def fill(match: re.Match[str]) -> str:
         key = match.group(1)
-        return str(data.get(key) or "that")
+        val = data.get(key)
+        if val:
+            return str(val)
+        if key == "property_type":
+            return ""
+        return "that"
 
     resolved = re.sub(r"\{\{(\w+)\}\}", fill, template).strip()
+    resolved = re.sub(r" +", " ", resolved)
     return resolved or "I can help with real estate."
+
+
+# ---------------------------------------------------------------------------
+# Informational-query gate — decides if LLM fallback is permitted
+# ---------------------------------------------------------------------------
+
+_QUESTION_STARTERS = (
+    "what", "which", "where", "how", "why",
+    "is", "are", "does", "do", "can", "should",
+)
+
+
+def _is_informational_query(text: str, intent: str) -> bool:
+    """
+    Return True only if the user is asking an informational question
+    that is not a structured slot-filling response.
+
+    Conditions (ALL must be true):
+    1. intent is "ask_off_topic" or "unclear"
+    2. text contains a question indicator:
+       - ends with "?"  OR
+       - starts with a question word
+    3. text is at least 4 words long (avoids noise like "what?")
+    """
+    if intent not in ("ask_off_topic", "unclear"):
+        return False
+    t = text.strip().lower()
+    words = t.split()
+    if len(words) < 4:
+        return False
+    has_question_mark = t.endswith("?")
+    has_question_word = any(t.startswith(w) for w in _QUESTION_STARTERS)
+    return has_question_mark or has_question_word
 
 
 class StateManager:
@@ -174,6 +255,19 @@ class StateManager:
     def is_actionable(self, text: str) -> bool:
         return _is_actionable(text)
 
+    def process_noise_turn(self, user_text: str) -> str:
+        self._last_user_text = user_text or ""
+        _log("STT", f"\"{user_text}\"")
+
+        current_node = self.get_current_node()
+        if not current_node:
+            return ""
+
+        _log("NOISE FILTERED", f"\"{user_text}\"")
+        response = _resolve_response(current_node, self.conversation_data, user_text)
+        self._log_response(current_node, response)
+        return response
+
     def next_step(self, user_text: str = "", allow_transition: bool = True) -> str:
         node = self.get_current_node()
         if not node:
@@ -192,17 +286,33 @@ class StateManager:
         if not current_node:
             return ""
 
-        if intent_data is None:
-            _log("STT", f"Non-actionable input — skipping LLM call: '{user_text}'")
-            response = _resolve_response(current_node, self.conversation_data, user_text)
-            self._log_response(current_node, response)
-            return response
+        if current_node.get("type") == "end":
+            _log("END NODE REACHED", "Conversation terminated gracefully.")
+            raise KeyboardInterrupt
 
+        if intent_data is None:
+            return self.process_noise_turn(user_text)
+
+        # ── Phase 1: intent extraction & normalization ──
         intent = str(intent_data.get("intent") or "unclear").strip() or "unclear"
         entities = intent_data.get("entities") or {}
+        if not isinstance(entities, dict):
+            entities = {}
+
+        raw_intent = intent
         intent = self._normalize_intent_for_context(current_node, intent, entities, user_text)
+        if intent != raw_intent:
+            _log("INTENT NORMALIZED", f"{raw_intent} -> {intent}")
+
+        if intent in {"confirm", "deny"}:
+            entities = {"confirmation": entities.get("confirmation")}
+
         _log("INTENT", self._format_intent_log(intent, entities))
         self._merge_entities(entities)
+
+        # ── Phase 2: node resolution ──
+        supplemental = ""  # optional LLM informational reply
+        stayed_on_current = False
 
         if intent in {"confirm", "deny"}:
             _log("STATE", "Confirmation handled via edge — not intent index")
@@ -211,16 +321,47 @@ class StateManager:
             next_node = self._resolve_by_intent(current_node, intent)
 
         next_node = self._apply_forward_guard(next_node or current_node)
+
+        # Detect whether the state actually moved
+        if next_node["id"] == current_node["id"]:
+            stayed_on_current = True
+
         self.current_node_id = next_node["id"]
         if next_node.get("type") != "fallback":
             self.visited_nodes.add(next_node["id"])
 
-        response = _resolve_response(next_node, self.conversation_data, self._last_user_text)
-        self._log_response(next_node, response)
-        return response
+        # ── Phase 3: informational LLM fallback (only when no node matched) ──
+        if stayed_on_current and _is_informational_query(user_text, raw_intent):
+            from llm.llm import generate_informational_response
+            supplemental = generate_informational_response(
+                user_text, self.conversation_data
+            )
+            _log("LLM FALLBACK", f'"{supplemental}"')
+
+        # ── Phase 4: resolve JSON response (always present) ──
+        json_response = _resolve_response(
+            next_node, self.conversation_data, self._last_user_text
+        )
+
+        # ── Phase 5: combine supplemental + JSON ──
+        if supplemental:
+            final_response = f"{supplemental} {json_response}"
+            _log("RESPONSE", f'[FALLBACK + JSON] "{final_response}"')
+        else:
+            final_response = json_response
+            _log("RESPONSE", f'[JSON] "{final_response}"')
+
+        return final_response.strip()
 
     def _resolve_by_intent(self, current_node: dict[str, Any], intent: str) -> dict[str, Any]:
         candidate = find_node_by_intent(intent)
+        
+        if candidate and candidate.get("type") == "fallback":
+            expected = candidate.get("expected_input_type")
+            if expected and self.conversation_data.get(expected):
+                _log("SKIP FALLBACK", f"{candidate['id']} ignored because '{expected}' is already collected")
+                candidate = None
+
         if not candidate:
             _log("STATE", f"No node for intent '{intent}' — staying on {current_node['id']}")
             return current_node
@@ -232,7 +373,7 @@ class StateManager:
 
         path = self._find_path(current_node["id"], candidate["id"])
         if path:
-            for node_id in path[1:]:
+            for node_id in path[1:-1]:
                 node = self.nodes.get(node_id)
                 if not node:
                     continue
@@ -277,11 +418,7 @@ class StateManager:
             "agrees",
             "agree",
             "hear more",
-            "buy or rent or invest",
             "wants to visit",
-            "mentions specific date or time",
-            "mentions a date or time for callback",
-            "details provided",
             "finished confirmation",
             "done",
             "speak",
@@ -314,8 +451,6 @@ class StateManager:
             if any(marker in condition for marker in markers):
                 return edge
 
-        if intent == "confirm":
-            return edges[0]
         return None
 
     def _advance_from_node(self, node: dict[str, Any]) -> dict[str, Any]:
@@ -373,8 +508,12 @@ class StateManager:
                 continue
             if key in self.conversation_data and self.conversation_data.get(key):
                 continue
-            self.conversation_data[key] = value
-            _log("ENTITY", f"{key} = {value}")
+            cleaned = self._clean_entity_value(key, value)
+            if cleaned is None:
+                _log("ENTITY SKIPPED", f'{key}="{value}"')
+                continue
+            self.conversation_data[key] = cleaned
+            _log("ENTITY", f"{key} = {cleaned}")
 
     def _should_skip_node(self, node: dict[str, Any]) -> bool:
         if node.get("name") in NON_SKIPPABLE_NAMES or node.get("type") == "end":
@@ -400,6 +539,9 @@ class StateManager:
             return [slot for slot in collects if isinstance(slot, str) and slot]
         return []
 
+    def _missing_slots(self, node: dict[str, Any]) -> list[str]:
+        return [slot for slot in self._collect_slots(node) if not self.conversation_data.get(slot)]
+
     def _first_destination(self, node: dict[str, Any]) -> str:
         edge = next(iter(node.get("edges", [])), None)
         return edge.get("destination_node_id", "") if edge else ""
@@ -412,6 +554,17 @@ class StateManager:
         user_text: str,
     ) -> str:
         text = (user_text or "").strip().lower()
+        clean_text = text.strip(" .!,?")
+
+        if entities.get("location") and not intent.startswith("provide"):
+            return "provide_location"
+        if entities.get("budget") and not intent.startswith("provide"):
+            return "provide_budget"
+
+        if clean_text in {"ok", "okay", "alright", "fine", "cool", "great", "sure", "thanks", "thank you", "done"}:
+            if intent.startswith("unclear"):
+                return "confirm"
+
         uncertain = {
             "i don't know",
             "dont know",
@@ -439,22 +592,106 @@ class StateManager:
             if current_node["id"] == "node-1736492391269":
                 return "unclear_callback_time"
 
-        if intent in {"unclear", "ask_off_topic"}:
-            if current_node["id"] == "node-1735264921453":
+        if intent.startswith("unclear") or intent == "ask_off_topic":
+            if current_node["id"] in ("node-1735265209472", "node-1736567518748", "node-1736492485610"):
+                return "confirm"
+            if current_node["id"] in ("node-1735264921453", "fallback_intent"):
                 return "unclear_intent"
-            if current_node["id"] == "node-1735267546732":
-                if self.conversation_data.get("location"):
+            if current_node["id"] in ("node-1735267546732", "fallback_location", "fallback_budget"):
+                if self.conversation_data.get("location") or entities.get("location"):
                     return "unclear_budget"
-                if self.conversation_data.get("budget"):
+                if self.conversation_data.get("budget") or entities.get("budget"):
                     return "unclear_location"
                 return "unclear_location"
-            if current_node["id"] == "node-1767420514711":
+            if current_node["id"] in ("node-1767420514711", "fallback_property_type"):
                 return "unclear_property_type"
-            if current_node["id"] == "node-1735265015507":
+            if current_node["id"] in ("node-1735265015507", "fallback_visit_datetime"):
                 return "unclear_visit_datetime"
-            if current_node["id"] == "node-1736492391269":
+            if current_node["id"] in ("node-1736492391269", "fallback_callback_time"):
                 return "unclear_callback_time"
+            return "confirm"
+
+        if intent in {"provide_timeline", "provide_visit_datetime"}:
+            if current_node["id"] in {"node-1735265015507", "node-1736323961832"}:
+                return "provide_visit_datetime"
+            if current_node["id"] == "node-1736492391269":
+                return "provide_timeline"
+
         return intent
+
+    def _contextual_unclear_intent(self, current_node: dict[str, Any], entities: dict[str, Any], text: str) -> str:
+        node_id = current_node.get("id")
+        if node_id in {"node-1735264921453", "fallback_intent"}:
+            return "unclear_intent"
+        if node_id in {"node-1735267546732", "fallback_location", "fallback_budget"}:
+            if self.conversation_data.get("location") or entities.get("location"):
+                return "unclear_budget"
+            if self.conversation_data.get("budget") or entities.get("budget"):
+                return "unclear_location"
+            if "budget" in text or "price" in text or "amount" in text:
+                return "unclear_budget"
+            return "unclear_location"
+        if node_id in {"node-1767420514711", "fallback_property_type"}:
+            return "unclear_property_type"
+        if node_id in {"node-1735265015507", "fallback_visit_datetime"}:
+            return "unclear_visit_datetime"
+        if node_id in {"node-1736492391269", "fallback_callback_time"}:
+            return "unclear_callback_time"
+        return "unclear"
+
+    def _is_location_suggestion(self, text: str, current_node: dict[str, Any]) -> bool:
+        if current_node.get("id") not in {"node-1735267546732", "fallback_location"}:
+            return False
+        return any(phrase in text for phrase in LOCATION_SUGGESTION_PHRASES)
+
+    def _clean_entity_value(self, key: str, value: Any) -> Optional[str]:
+        text = re.sub(r"\s+", " ", str(value).strip())
+        if not text:
+            return None
+
+        if key == "location":
+            lowered = text.lower()
+            if lowered in LOCATION_NORMALIZATION:
+                normalized = LOCATION_NORMALIZATION[lowered]
+                _log("NORMALIZED LOCATION", f"{text} -> {normalized}")
+                text = normalized
+            return text if self._is_valid_location(text) else None
+        if key == "budget":
+            return text if self._is_valid_budget(text) else None
+        if key == "property_type":
+            normalized = self._normalize_property_type(text)
+            return normalized if normalized and self._is_valid_property_type(normalized) else None
+        return text
+
+    def _is_valid_location(self, value: str) -> bool:
+        lowered = value.strip().lower()
+        return len(lowered) > 2 and any(char.isalpha() for char in lowered) and lowered not in INVALID_LOCATION_VALUES
+
+    def _is_valid_budget(self, value: str) -> bool:
+        lowered = value.strip().lower()
+        return lowered not in INVALID_BUDGET_VALUES and any(char.isdigit() for char in lowered)
+
+    def _normalize_property_type(self, value: str) -> str:
+        normalized = re.sub(r"\b([123])\s*bhk\b", r"\1 BHK", value, flags=re.IGNORECASE)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if normalized.lower() == "apartment":
+            return "flat"
+        return normalized
+
+    def _is_valid_property_type(self, value: str) -> bool:
+        lowered = value.strip().lower()
+        allowed_patterns = (
+            r"\b1\s*bhk\b",
+            r"\b2\s*bhk\b",
+            r"\b3\s*bhk\b",
+            r"\bstudio\b",
+            r"\bvilla\b",
+            r"\bplot\b",
+            r"\bflat\b",
+        )
+        return lowered not in INVALID_PROPERTY_TYPE_VALUES and any(
+            re.search(pattern, lowered) for pattern in allowed_patterns
+        )
 
     def _format_intent_log(self, intent: str, entities: dict[str, Any]) -> str:
         pairs = [f"{key}: {value}" for key, value in entities.items() if value not in (None, "")]
@@ -463,6 +700,5 @@ class StateManager:
         return f"intent={intent}"
 
     def _log_response(self, node: dict[str, Any], response: str) -> None:
-        source = "JSON"
-        _log("RESPONSE SOURCE", source)
-        _log("RESPONSE TEXT", f"\"{response}\"")
+        """Used only by non-process_turn callers (noise, greeting, next_step)."""
+        _log("RESPONSE", f'[JSON] "{response}"')

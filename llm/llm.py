@@ -35,6 +35,7 @@ KNOWN_INTENTS = [
     "confirm_site_visit",
     "deny_site_visit",
     "provide_visit_datetime",
+    "ask_location_suggestion",
     "ask_off_topic",
     "unclear_intent",
     "unclear_location",
@@ -48,6 +49,8 @@ KNOWN_INTENTS = [
 INTENT_EXTRACTION_SYSTEM_PROMPT = """You are an intent classifier for a real estate voice agent.
 
 Extract structured intent and entities from the user's message.
+You must NOT generate conversational replies.
+You only classify intent and extract entities for a JSON-driven state machine.
 Respond ONLY with a valid JSON object. No markdown. No explanation. No prose.
 
 Schema:
@@ -65,7 +68,7 @@ Schema:
 
 KNOWN_INTENTS: confirm_identity, confirm, deny, provide_intent, provide_location,
 provide_budget, provide_property_type, provide_timeline, confirm_site_visit,
-deny_site_visit, provide_visit_datetime, ask_off_topic, unclear_intent,
+deny_site_visit, provide_visit_datetime, ask_location_suggestion, ask_off_topic, unclear_intent,
 unclear_location, unclear_budget, unclear_property_type, unclear_visit_datetime,
 unclear_callback_time, unclear
 
@@ -73,10 +76,13 @@ Rules:
 - Choose the single most specific intent
 - Confirmation words (yes, yeah, yep, correct, right, ok, okay, sure, go ahead) -> intent: "confirm"
 - Denial words (no, not now, busy, later, nahi) -> intent: "deny"
+- Location suggestion questions like "suggest", "recommend", "which area", "best location",
+  "good location", or "any options" -> intent: "ask_location_suggestion"
+- Do not label a suggestion question as "provide_location"
 - If the answer is uncertainty like "I don't know", "not sure", or "maybe", prefer a matching
   unclear intent when the user is hesitating about intent, location, budget, property type,
   site visit date/time, or callback time
-- Noise, punctuation, or < 3 characters -> intent: "unclear"
+- Noise like "hmm", "uh", "ah", "ohh", ".", ",", "this", or "that" -> intent: "unclear"
 - All entity fields default to null if not present"""
 
 _EMPTY_INTENT = {"intent": "unclear", "entities": {}}
@@ -165,6 +171,62 @@ def extract_intent(user_text: str) -> dict[str, Any]:
     return {"intent": intent, "entities": normalized_entities}
 
 
+# ---------------------------------------------------------------------------
+# Informational LLM fallback — called ONLY when no JSON node matches intent
+# ---------------------------------------------------------------------------
+
+_INFORMATIONAL_SYSTEM = (
+    "You are Neha, a real estate assistant on a phone call. "
+    "Answer the user's question in 1–2 sentences, maximum 25 words. "
+    "Be factual and neutral — do not pitch or persuade. "
+    "Do NOT ask any question — the system will ask the next question automatically. "
+    "Do NOT collect information like location, budget, or property type. "
+    "Plain text only. No JSON. No markdown."
+)
+
+_STATIC_FALLBACK = (
+    "That's a great question. Let me continue with a few details to help you better."
+)
+
+
+def generate_informational_response(user_text: str, context: dict) -> str:
+    """
+    Generate a short informational reply for off-topic or clarification questions.
+    Called ONLY when _is_informational_query() returns True in state_manager.
+
+    Constraints:
+    - Maximum 2 sentences, 25 words total
+    - Neutral, factual tone — not a sales pitch
+    - Must NOT ask a new question (JSON node handles the next question)
+    - Must NOT collect slot values (location, budget, etc.)
+    - Plain text only — no JSON, no markdown
+    - Falls back to _STATIC_FALLBACK on API failure — never raises
+
+    Settings: max_tokens=60, temperature=0.3
+    """
+    prompt = (
+        f'User asked: "{user_text}"\n'
+        f"Context: {context}\n"
+        "Provide a brief factual answer only."
+    )
+    messages = [
+        {"role": "system", "content": _INFORMATIONAL_SYSTEM},
+        {"role": "user", "content": prompt},
+    ]
+    try:
+        raw = _call_groq_api(messages, max_tokens=60, temperature=0.3)
+    except Exception as exc:
+        logger.error("[LLM FALLBACK] API error — using static fallback: %s", exc)
+        return _STATIC_FALLBACK
+
+    if not raw or not raw.strip():
+        return _STATIC_FALLBACK
+
+    # Strip trailing question marks — JSON node owns the next question
+    reply = raw.strip().rstrip("?").rstrip()
+    return reply or _STATIC_FALLBACK
+
+
 async def generate_response(
     user_text: str,
     conversation_history: Optional[list[dict]] = None,
@@ -183,8 +245,9 @@ async def generate_response(
     if not allow_transition:
         return await asyncio.to_thread(state_manager.next_step, user_text, False)
 
-    intent_data = None
-    if getattr(state_manager, "is_actionable", None) and state_manager.is_actionable(user_text):
-        intent_data = await asyncio.to_thread(extract_intent, user_text)
+    if getattr(state_manager, "is_actionable", None) and not state_manager.is_actionable(user_text):
+        return await asyncio.to_thread(state_manager.process_noise_turn, user_text)
+
+    intent_data = await asyncio.to_thread(extract_intent, user_text)
 
     return await asyncio.to_thread(state_manager.process_turn, user_text, intent_data)

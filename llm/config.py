@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 load_dotenv() # Load variables from .env if it exists
 
 # ── API ────────────────────────────────────────────────────────────────────────
-GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "gsk_3100000000000000000000000000000000000000000000000000000000000000")
 
 # ── Model ──────────────────────────────────────────────────────────────────────
 # Available Groq models (fast, free-tier):

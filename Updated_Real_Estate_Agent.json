@@ -220,7 +220,7 @@
                 "intent_triggers": [
                     "budget_high"
                 ],
-                "response": "I understand budget matters. We also have options in Mamurdi and Hinjewadi with flexible plans. Would you like to hear more?"
+                "response": "I understand budget matters, and we have options in Mamurdi and Hinjewadi with flexible plans. Would you like to hear more?"
             },
             {
                 "name": "Handle Objection Not Looking",
@@ -257,7 +257,7 @@
                 "intent_triggers": [
                     "not_looking_now"
                 ],
-                "response": "No problem. We also share pre-launch options for future plans. May I send details on WhatsApp?"
+                "response": "No problem, we share pre-launch options for future plans. May I send details on WhatsApp?"
             },
             {
                 "name": "Ask Location and Budget",
@@ -307,6 +307,10 @@
                     "provide_property_type"
                 ],
                 "response": "Which location are you considering, and what budget range should I keep in mind?",
+                "missing_slot_responses": {
+                    "location": "Which city or area are you considering?",
+                    "budget": "What budget range should I keep in mind?"
+                },
                 "collects": [
                     "location",
                     "budget"
@@ -419,7 +423,7 @@
                 "intent_triggers": [
                     "provide_visit_datetime"
                 ],
-                "response": "Thanks. I've noted the site visit for {{timeline}} and I'll share the location details on WhatsApp."
+                "response": "Thanks. I've noted the site visit for {{timeline}}.\nI'll share details on WhatsApp."
             },
             {
                 "name": "Confirm and End",
@@ -523,7 +527,7 @@
                 "intent_triggers": [
                     "provide_timeline"
                 ],
-                "response": "Noted. I'll call you back around {{timeline}}. Thank you and have a great day."
+                "response": "I'll call you back around {{timeline}}. Thank you."
             },
             {
                 "name": "Polite Goodbye",
@@ -580,6 +584,10 @@
                     "seller_interest"
                 ],
                 "response": "I can help with that. Which location is the property in, and what price range are you expecting?",
+                "missing_slot_responses": {
+                    "location": "Which location is the property in?",
+                    "budget": "What price range are you expecting?"
+                },
                 "collects": [
                     "location",
                     "budget"
@@ -660,7 +668,7 @@
                 "intent_triggers": [
                     "availability_retry"
                 ],
-                "response": "I'm sorry for the timing. This is about a previous property inquiry and it will just take two minutes. Is that okay?"
+                "response": "I'm sorry for the timing. Is this a good time for a two-minute call about your previous property inquiry?"
             },
             {
                 "name": "End Conversation",
@@ -724,9 +732,10 @@
                 "name": "Fallback Location",
                 "type": "fallback",
                 "intent_triggers": [
-                    "unclear_location"
+                    "unclear_location",
+                    "ask_location_suggestion"
                 ],
-                "response": "No problem. Which city or area are you interested in?",
+                "response": "Popular areas include Wakad, Baner, Hinjewadi, and Kharadi. Which location interests you?",
                 "collects": null,
                 "expected_input_type": "location",
                 "edges": [
