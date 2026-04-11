@@ -76,7 +76,11 @@
                     "x": -86.59994527922208,
                     "y": 106.01951486442819
                 },
-                "interruption_sensitivity": 0
+                "interruption_sensitivity": 0,
+                "intent_triggers": [
+                    "call_connected"
+                ],
+                "response": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?"
             },
             {
                 "name": "Availability Check",
@@ -109,7 +113,11 @@
                 "display_position": {
                     "x": 1100,
                     "y": 60
-                }
+                },
+                "intent_triggers": [
+                    "confirm_identity"
+                ],
+                "response": "Is this a good time for a quick two-minute call about a property option?"
             },
             {
                 "name": "Ask Intent",
@@ -155,12 +163,27 @@
                             "prompt": "user wants to sell"
                         },
                         "destination_node_id": "node-1736510533232"
+                    },
+                    {
+                        "condition": "unclear intent",
+                        "id": "edge-fallback-intent",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user is unsure whether they want to buy rent or invest"
+                        },
+                        "destination_node_id": "fallback_intent"
                     }
                 ],
                 "display_position": {
                     "x": 1650,
                     "y": 80
-                }
+                },
+                "intent_triggers": [
+                    "availability_confirmed"
+                ],
+                "response": "Are you looking to buy, rent, or invest in a property?",
+                "collects": "intent_value",
+                "expected_input_type": "any"
             },
             {
                 "name": "Handle Objection Budget High",
@@ -193,7 +216,11 @@
                 "display_position": {
                     "x": 1650,
                     "y": 400
-                }
+                },
+                "intent_triggers": [
+                    "budget_high"
+                ],
+                "response": "I understand budget matters. We also have options in Mamurdi and Hinjewadi with flexible plans. Would you like to hear more?"
             },
             {
                 "name": "Handle Objection Not Looking",
@@ -226,7 +253,11 @@
                 "display_position": {
                     "x": 1650,
                     "y": -150
-                }
+                },
+                "intent_triggers": [
+                    "not_looking_now"
+                ],
+                "response": "No problem. We also share pre-launch options for future plans. May I send details on WhatsApp?"
             },
             {
                 "name": "Ask Location and Budget",
@@ -245,12 +276,42 @@
                             "prompt": "provided location and budget"
                         },
                         "destination_node_id": "node-1736323961832"
+                    },
+                    {
+                        "condition": "unclear location",
+                        "id": "edge-fallback-location",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user is unsure about the preferred location"
+                        },
+                        "destination_node_id": "fallback_location"
+                    },
+                    {
+                        "condition": "unclear budget",
+                        "id": "edge-fallback-budget",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user is unsure about the budget range"
+                        },
+                        "destination_node_id": "fallback_budget"
                     }
                 ],
                 "display_position": {
                     "x": 2719.269057396452,
                     "y": 156.16344682717423
-                }
+                },
+                "intent_triggers": [
+                    "provide_intent",
+                    "provide_location",
+                    "provide_budget",
+                    "provide_property_type"
+                ],
+                "response": "Which location are you considering, and what budget range should I keep in mind?",
+                "collects": [
+                    "location",
+                    "budget"
+                ],
+                "expected_input_type": "any"
             },
             {
                 "name": "Share Property Details",
@@ -274,7 +335,11 @@
                 "display_position": {
                     "x": 3300,
                     "y": 50
-                }
+                },
+                "intent_triggers": [
+                    "buyer_requirements_ready"
+                ],
+                "response": "I have a few {{property_type}} options in {{location}} around {{budget}}. Would you like to schedule a site visit this weekend?"
             },
             {
                 "name": "Site Visit Availability",
@@ -306,12 +371,27 @@
                             "prompt": "user says they will tell later, will check schedule, or doesn't inform"
                         },
                         "destination_node_id": "node-1736492391269"
+                    },
+                    {
+                        "condition": "unclear site visit time",
+                        "id": "edge-fallback-visit-datetime",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user is unsure about the site visit date or time"
+                        },
+                        "destination_node_id": "fallback_visit_datetime"
                     }
                 ],
                 "display_position": {
                     "x": 3850,
                     "y": 80
-                }
+                },
+                "intent_triggers": [
+                    "confirm_site_visit"
+                ],
+                "response": "Sure, what date and time would suit you for the site visit?",
+                "collects": "timeline",
+                "expected_input_type": "datetime"
             },
             {
                 "name": "Save Lead & Confirm",
@@ -335,7 +415,11 @@
                 "display_position": {
                     "x": 4400,
                     "y": 0
-                }
+                },
+                "intent_triggers": [
+                    "provide_visit_datetime"
+                ],
+                "response": "Thanks. I've noted the site visit for {{timeline}} and I'll share the location details on WhatsApp."
             },
             {
                 "name": "Confirm and End",
@@ -359,7 +443,11 @@
                 "display_position": {
                     "x": 4965.433114690977,
                     "y": 143.98942611742885
-                }
+                },
+                "intent_triggers": [
+                    "visit_saved"
+                ],
+                "response": "Your site visit is confirmed. Thank you for your time."
             },
             {
                 "name": "Callback Scheduling",
@@ -387,12 +475,27 @@
                             "prompt": "user still says they will tell later"
                         },
                         "destination_node_id": "node-1736492520068"
+                    },
+                    {
+                        "condition": "unclear callback time",
+                        "id": "edge-fallback-callback-time",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user is unsure about the callback date or time"
+                        },
+                        "destination_node_id": "fallback_callback_time"
                     }
                 ],
                 "display_position": {
                     "x": 2750,
                     "y": 1305
-                }
+                },
+                "intent_triggers": [
+                    "schedule_callback"
+                ],
+                "response": "No problem. What would be a convenient time for me to call you back?",
+                "collects": "timeline",
+                "expected_input_type": "datetime"
             },
             {
                 "name": "Confirm Callback",
@@ -416,7 +519,11 @@
                 "display_position": {
                     "x": 3300,
                     "y": 1305
-                }
+                },
+                "intent_triggers": [
+                    "provide_timeline"
+                ],
+                "response": "Noted. I'll call you back around {{timeline}}. Thank you and have a great day."
             },
             {
                 "name": "Polite Goodbye",
@@ -440,7 +547,11 @@
                 "display_position": {
                     "x": 3811.406030364601,
                     "y": 1043.8420229287215
-                }
+                },
+                "intent_triggers": [
+                    "callback_confirmed"
+                ],
+                "response": "Thank you for your time. Goodbye."
             },
             {
                 "name": "Seller Flow Start",
@@ -464,7 +575,16 @@
                 "display_position": {
                     "x": 2200,
                     "y": 765
-                }
+                },
+                "intent_triggers": [
+                    "seller_interest"
+                ],
+                "response": "I can help with that. Which location is the property in, and what price range are you expecting?",
+                "collects": [
+                    "location",
+                    "budget"
+                ],
+                "expected_input_type": "any"
             },
             {
                 "name": "Seller Property Details",
@@ -483,12 +603,27 @@
                             "prompt": "user finished details"
                         },
                         "destination_node_id": "node-1735969972303"
+                    },
+                    {
+                        "condition": "unclear property type",
+                        "id": "edge-fallback-property-type",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "user is unsure about the property type or configuration"
+                        },
+                        "destination_node_id": "fallback_property_type"
                     }
                 ],
                 "display_position": {
                     "x": 2610.338582667696,
                     "y": 663.6094379479788
-                }
+                },
+                "intent_triggers": [
+                    "seller_requirements_ready"
+                ],
+                "response": "Please share the property type, configuration, age, and amenities. I'll have an expert contact you.",
+                "collects": "property_type",
+                "expected_input_type": "any"
             },
             {
                 "name": "Re-engage User",
@@ -521,7 +656,11 @@
                 "display_position": {
                     "x": 1820.0307848364757,
                     "y": 986.8457189564976
-                }
+                },
+                "intent_triggers": [
+                    "availability_retry"
+                ],
+                "response": "I'm sorry for the timing. This is about a previous property inquiry and it will just take two minutes. Is that okay?"
             },
             {
                 "name": "End Conversation",
@@ -534,7 +673,11 @@
                 "display_position": {
                     "x": 5620.0976113152055,
                     "y": 160.16876762669963
-                }
+                },
+                "intent_triggers": [
+                    "conversation_complete"
+                ],
+                "response": "Thank you for your time. Have a great day."
             },
             {
                 "name": "Immediate End Call",
@@ -547,7 +690,144 @@
                 "display_position": {
                     "x": 4400,
                     "y": 1080
-                }
+                },
+                "intent_triggers": [
+                    "deny_site_visit",
+                    "call_end"
+                ],
+                "response": "Thank you for your time. Goodbye."
+            },
+            {
+                "id": "fallback_intent",
+                "name": "Fallback Intent",
+                "type": "fallback",
+                "intent_triggers": [
+                    "unclear_intent"
+                ],
+                "response": "No problem. Are you looking to buy, rent, or invest in a property?",
+                "collects": null,
+                "expected_input_type": "any",
+                "edges": [
+                    {
+                        "condition": "resume intent question",
+                        "id": "edge-fallback-intent-return",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "return to the main intent question"
+                        },
+                        "destination_node_id": "node-1735264921453"
+                    }
+                ]
+            },
+            {
+                "id": "fallback_location",
+                "name": "Fallback Location",
+                "type": "fallback",
+                "intent_triggers": [
+                    "unclear_location"
+                ],
+                "response": "No problem. Which city or area are you interested in?",
+                "collects": null,
+                "expected_input_type": "location",
+                "edges": [
+                    {
+                        "condition": "resume location question",
+                        "id": "edge-fallback-location-return",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "return to the location and budget question"
+                        },
+                        "destination_node_id": "node-1735267546732"
+                    }
+                ]
+            },
+            {
+                "id": "fallback_budget",
+                "name": "Fallback Budget",
+                "type": "fallback",
+                "intent_triggers": [
+                    "unclear_budget"
+                ],
+                "response": "That's fine. Could you share an approximate budget range?",
+                "collects": null,
+                "expected_input_type": "budget",
+                "edges": [
+                    {
+                        "condition": "resume budget question",
+                        "id": "edge-fallback-budget-return",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "return to the location and budget question"
+                        },
+                        "destination_node_id": "node-1735267546732"
+                    }
+                ]
+            },
+            {
+                "id": "fallback_property_type",
+                "name": "Fallback Property Type",
+                "type": "fallback",
+                "intent_triggers": [
+                    "unclear_property_type"
+                ],
+                "response": "That's okay. What kind of property is it, like an apartment, villa, or plot?",
+                "collects": null,
+                "expected_input_type": "any",
+                "edges": [
+                    {
+                        "condition": "resume property type question",
+                        "id": "edge-fallback-property-type-return",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "return to the seller property details question"
+                        },
+                        "destination_node_id": "node-1767420514711"
+                    }
+                ]
+            },
+            {
+                "id": "fallback_visit_datetime",
+                "name": "Fallback Visit Datetime",
+                "type": "fallback",
+                "intent_triggers": [
+                    "unclear_visit_datetime"
+                ],
+                "response": "No issue. What date and time would work best for your site visit?",
+                "collects": null,
+                "expected_input_type": "datetime",
+                "edges": [
+                    {
+                        "condition": "resume visit time question",
+                        "id": "edge-fallback-visit-datetime-return",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "return to the site visit availability question"
+                        },
+                        "destination_node_id": "node-1735265015507"
+                    }
+                ]
+            },
+            {
+                "id": "fallback_callback_time",
+                "name": "Fallback Callback Time",
+                "type": "fallback",
+                "intent_triggers": [
+                    "unclear_callback_time"
+                ],
+                "response": "That's alright. When would be a convenient time for a callback?",
+                "collects": null,
+                "expected_input_type": "datetime",
+                "edges": [
+                    {
+                        "condition": "resume callback time question",
+                        "id": "edge-fallback-callback-time-return",
+                        "transition_condition": {
+                            "type": "prompt",
+                            "prompt": "return to the callback scheduling question"
+                        },
+                        "destination_node_id": "node-1736492391269"
+                    }
+                ]
             }
         ],
         "components": [
@@ -630,5 +910,6 @@
         },
         "is_published": false,
         "flex_mode": true
-    }
+    },
+    "_comment": "Every node must have a non-null response and at least one intent_triggers entry. Contextual fallback nodes must reconnect to the original question path."
 }
