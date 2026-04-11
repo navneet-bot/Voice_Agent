@@ -18,6 +18,7 @@ from typing import Optional, Any
 from groq import AsyncGroq, APIError, APITimeoutError, RateLimitError
 
 import llm.config as cfg
+from llm.language_utils import get_language_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,7 @@ async def generate_response(
     conversation_history: Optional[list[dict]] = None,
     language: str = cfg.DEFAULT_LANGUAGE,
     state_manager: Optional[Any] = None,
+    allow_transition: bool = True,
 ) -> str:
     """
     Generate a conversational response from the LLM.
@@ -61,7 +63,13 @@ async def generate_response(
         language = cfg.DEFAULT_LANGUAGE
 
     # Build the message list: system prompt + history + new user message
-    messages = _build_messages(user_text, conversation_history or [], language, state_manager)
+    messages = _build_messages(
+        user_text,
+        conversation_history or [],
+        language,
+        state_manager,
+        allow_transition=allow_transition,
+    )
 
     # Call Groq API with retry logic
     for attempt in range(1, cfg.MAX_RETRIES + 1):
@@ -85,7 +93,7 @@ async def generate_response(
                 data = json.loads(raw_content)
                 edge_id = data.get("transition_edge_id")
                 
-                if state_manager and edge_id and str(edge_id).lower() != "null":
+                if allow_transition and state_manager and edge_id and str(edge_id).lower() != "null":
                     state_manager.transition_to(edge_id)
                     
                 clean_content = data.get("response_text", "")
@@ -128,10 +136,14 @@ def _build_messages(
     history: list[dict],
     language: str,
     state_manager: Optional[Any] = None,
+    allow_transition: bool = True,
 ) -> list[dict]:
     """Construct the full message list to send to the LLM."""
     if state_manager:
-        system_prompt = state_manager.get_system_prompt()
+        system_prompt = state_manager.get_system_prompt(
+            language=language,
+            allow_transition=allow_transition,
+        )
     else:
         system_prompt = _get_system_prompt(language)
         
@@ -158,20 +170,13 @@ def _get_system_prompt(language: str) -> str:
         else:
             _prompt_cache = "You are a professional, friendly AI voice agent for real-estate outbound calls."
 
-    lang_instructions = {
-        "en": "Respond in English only.",
-        "hi": "Respond in Hindi using standard Devanagari script.",
-        "mr": "Respond in Marathi using standard Devanagari script.",
-        "hinglish": "Respond in natural Hinglish using normal sentence casing. Keep common real-estate terms in English.",
-    }
-
     call_style = (
         "Keep every reply crisp for a live phone call: 1 or 2 short sentences, one question at a time, "
         "no bullet points, no repetition, and no restating the same sentence in different words. "
         "Keep a warm, steady, confident pace."
     )
 
-    return f"{_prompt_cache}\n\n{lang_instructions.get(language, lang_instructions['en'])}\n{call_style}"
+    return f"{_prompt_cache}\n\n{get_language_instruction(language)}\n{call_style}"
 
 
 def _postprocess_response(raw_text: str, history: list[dict]) -> str:
@@ -227,4 +232,3 @@ def _normalize_text(text: str) -> str:
     lowered = re.sub(r"[^\w\s]", "", lowered)
     lowered = re.sub(r"\s+", " ", lowered).strip()
     return lowered
-

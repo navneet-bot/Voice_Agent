@@ -16,6 +16,7 @@ sys.path.insert(0, project_root)
 
 # Import local audio utilities
 from audio.mic_utils import record_audio, play_audio, convert_to_wav_bytes
+from llm.language_utils import LanguageTracker, analyze_user_text
 
 # CONFIGURATION BLOCK
 INPUT_SAMPLE_RATE    = 16000    # Hz — microphone recording
@@ -30,6 +31,7 @@ BARGE_IN_RELEASE_S   = 0.12     # reset detector after a brief quiet gap
 BARGE_IN_CHUNK_SIZE  = 512
 BARGE_IN_RMS_MULTIPLIER = 8.0
 BARGE_IN_MIN_RMS     = 0.10
+CALL_CONNECTED_TRIGGER = "[System: The call has just been connected. No user has spoken yet. Speak only for the current conversation node and do not transition.]"
 
 
 def interruptible_play(speech_gen, start_time):
@@ -169,6 +171,8 @@ def run_conversation():
     print("─────────────────────────────────")
 
     conversation_history = []
+    current_language = "en"
+    language_tracker = LanguageTracker(initial_language=current_language)
     
     # Text buffers for multi-turn thought accumulation
     accumulated_text = ""
@@ -179,16 +183,18 @@ def run_conversation():
         print("[AI] Initializing greeting...")
         start_time_tts = perf_counter()
         response_text = asyncio.run(generate_response(
-            "[System: The call starting. Say a charismatic 'Hello, is this Prashant?' and wait. DO NOT transition yet.]", 
+            CALL_CONNECTED_TRIGGER,
             conversation_history, 
-            state_manager=state_manager
+            language=current_language,
+            state_manager=state_manager,
+            allow_transition=False,
         ))
         if response_text:
             print(f"[AI]   {response_text}")
             conversation_history.append({"role": "assistant", "content": response_text})
             
             # Start TTS for greeting
-            speech_gen = generate_speech_stream(response_text)
+            speech_gen = generate_speech_stream(response_text, current_language)
             if speech_gen:
                 interruptible_play(speech_gen, start_time_tts)
 
@@ -217,16 +223,28 @@ def run_conversation():
                 # Thought is complete
                 final_text = current_text
                 accumulated_text = "" # Reset buffer
+
+                user_analysis = analyze_user_text(final_text, fallback=current_language)
+                if not user_analysis.actionable:
+                    if VERBOSE:
+                        print(f"[STT] Ignored unclear transcription ({user_analysis.reason}): {final_text}")
+                    continue
+                final_text = user_analysis.cleaned_text
                 
                 print(f"[USER] {final_text}")
-                
-                # Append to history
-                conversation_history.append({"role": "user", "content": final_text})
+                current_language, _ = language_tracker.observe(final_text)
 
                 # STEP 3 — LLM
                 t1 = perf_counter()
-                response_text = asyncio.run(generate_response(final_text, conversation_history, state_manager=state_manager))
+                response_text = asyncio.run(generate_response(
+                    final_text,
+                    conversation_history,
+                    language=current_language,
+                    state_manager=state_manager,
+                ))
                 llm_time = perf_counter() - t1
+
+                conversation_history.append({"role": "user", "content": final_text})
                 
                 if not response_text:
                     continue
@@ -236,7 +254,7 @@ def run_conversation():
 
                 # STEP 4 — TTS
                 t2 = perf_counter()
-                speech_gen = generate_speech_stream(response_text)
+                speech_gen = generate_speech_stream(response_text, current_language)
                 
                 if speech_gen:
                     interruptible_play(speech_gen, t2)

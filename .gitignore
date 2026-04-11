@@ -172,9 +172,6 @@ models/
 voices/*.pt
 !voices/keep_this.pt
 
-# Ignore test scripts
-test_*.py
-
 # Project-specific
 work_log.md
 architecture.md.resolved

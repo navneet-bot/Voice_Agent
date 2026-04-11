@@ -3,7 +3,6 @@
 import asyncio
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-import io
 import logging
 import time
 import concurrent.futures
@@ -27,13 +26,14 @@ except ImportError:
     AudioRawFrame = None
 
 from llm.llm import generate_response
+from llm.language_utils import LanguageTracker, analyze_user_text
 from llm.state_manager import StateManager
 from llm.pipeline_logger import pipeline_logger
 from pipecat.frames.frames import StartFrame
 from stt import config as stt_cfg
 
-# Global state manager loaded directly from JSON specification
-state_manager = StateManager("Updated_Real_Estate_Agent.json")
+STATE_SCHEMA_PATH = "Updated_Real_Estate_Agent.json"
+CALL_CONNECTED_TRIGGER = "[System: The call has just been connected. No user has spoken yet. Speak only for the current conversation node and do not transition.]"
 
 try:
     from stt.stt import transcribe_audio
@@ -67,26 +67,29 @@ class RealEstateLLMProcessor(FrameProcessor):
         super().__init__()
         self.history: list[dict[str, str]] = []
         self.current_language = "en"
+        self.language_tracker = LanguageTracker(initial_language=self.current_language)
         self.last_user_text = ""
         self.last_user_at = 0.0
         self._booted = False
+        self.state_manager = StateManager(STATE_SCHEMA_PATH)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
         if isinstance(frame, StartFrame) and not self._booted:
             self._booted = True
-            state_manager.reset_state()
-            pipeline_logger.log_event("call_started", {"start_node": state_manager.start_node_id})
+            self.state_manager.reset_state()
+            pipeline_logger.log_event("call_started", {"start_node": self.state_manager.start_node_id})
             
             logger.info("Triggering initial greeting from StateManager...")
             reply = await generate_response(
-                user_text="[System: The call has just been connected. Introduce yourself immediately.]",
+                user_text=CALL_CONNECTED_TRIGGER,
                 conversation_history=self.history,
                 language=self.current_language,
-                state_manager=state_manager
+                state_manager=self.state_manager,
+                allow_transition=False,
             )
             if reply:
                 self.history.append({"role": "assistant", "content": reply})
-                pipeline_logger.log_event("agent_reply", {"content": reply, "node": state_manager.current_node_id})
+                pipeline_logger.log_event("agent_reply", {"content": reply, "node": self.state_manager.current_node_id})
                 await self.push_frame(AgentTextFrame(reply, language=self.current_language), direction)
                 
             await super().process_frame(frame, direction)
@@ -99,6 +102,12 @@ class RealEstateLLMProcessor(FrameProcessor):
         if not user_text:
             return
 
+        user_analysis = analyze_user_text(user_text, fallback=self.current_language)
+        if not user_analysis.actionable:
+            logger.info("Ignoring unclear transcript (%s): %s", user_analysis.reason, user_text)
+            return
+        user_text = user_analysis.cleaned_text
+
         now = time.monotonic()
         if _is_duplicate_text(user_text, self.last_user_text) and (now - self.last_user_at) < stt_cfg.DUPLICATE_TEXT_WINDOW_S:
             logger.info("Skipping duplicate user turn: %s", user_text)
@@ -106,23 +115,25 @@ class RealEstateLLMProcessor(FrameProcessor):
 
         self.last_user_text = user_text
         self.last_user_at = now
-        self.current_language = _detect_language_from_text(user_text, fallback=self.current_language)
+        self.current_language, _ = self.language_tracker.observe(user_text)
         logger.info("LLM received text (%s): %s", self.current_language, user_text)
         
-        pipeline_logger.log_event("user_reply", {"content": user_text, "node": state_manager.current_node_id})
+        pipeline_logger.log_event("user_reply", {"content": user_text, "node": self.state_manager.current_node_id})
 
         reply = await generate_response(
             user_text,
             self.history,
             self.current_language,
-            state_manager=state_manager
+            state_manager=self.state_manager
         )
+        self.history.append({"role": "user", "content": user_text})
         if not reply:
+            if len(self.history) > 8:
+                self.history = self.history[-8:]
             return
 
-        pipeline_logger.log_event("agent_reply", {"content": reply, "node": state_manager.current_node_id})
+        pipeline_logger.log_event("agent_reply", {"content": reply, "node": self.state_manager.current_node_id})
         
-        self.history.append({"role": "user", "content": user_text})
         self.history.append({"role": "assistant", "content": reply})
         if len(self.history) > 8:
             self.history = self.history[-8:]
@@ -272,23 +283,3 @@ def _is_duplicate_text(current: str, previous: str) -> bool:
     if current_norm in previous_norm or previous_norm in current_norm:
         return True
     return SequenceMatcher(None, current_norm, previous_norm).ratio() >= 0.88
-
-
-def _detect_language_from_text(text: str, fallback: str = "en") -> str:
-    if not text.strip():
-        return fallback
-
-    marathi_markers = ("आहे", "नाही", "माझ", "तुम्ह", "काय", "होय")
-    hindi_markers = ("है", "नहीं", "मुझे", "आप", "क्या", "जी")
-
-    if any("\u0900" <= ch <= "\u097F" for ch in text):
-        if any(marker in text for marker in marathi_markers):
-            return "mr"
-        if any(marker in text for marker in hindi_markers):
-            return "hi"
-        return "hi"
-
-    latin = text.casefold()
-    if any(word in latin for word in ("aap", "apka", "apki", "haan", "nahi", "acha", "achha", "kya", "kaise")):
-        return "hinglish"
-    return fallback if fallback in {"en", "hi", "mr", "hinglish"} else "en"
