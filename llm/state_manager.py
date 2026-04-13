@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import llm.config as cfg
+
 logger = logging.getLogger(__name__)
 
 SHORT_NOISE = {".", ",", "uh", "ah", "hmm", "hm", "um", "oh", "ohh", "this", "that"}
@@ -22,12 +24,70 @@ DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "Updated_Real_Est
 INVALID_LOCATION_VALUES = {"location", "place", "area", "there", "nek", "city", "property", "this"}
 INVALID_BUDGET_VALUES = {"budget", "price", "amount"}
 INVALID_PROPERTY_TYPE_VALUES = {"property", "home", "n property", "bhk"}
-LOCATION_NORMALIZATION = {
-    "banner": "Baner",
-    "wakud": "Wakad",
-    "hinjewdi": "Hinjewadi",
-    "kharady": "Kharadi"
+KNOWN_LOCATION_WHITELIST = {
+    "wakad", "baner", "hinjewadi", "kharadi", "pune", "mumbai",
+    "kothrud", "viman nagar", "hadapsar", "aundh", "pimpri",
+    "chinchwad", "bavdhan", "pashan", "sus", "lavale",
+    "magarpatta", "kondhwa", "undri", "katraj", "sinhagad road",
+    "deccan", "shivajinagar",
 }
+INVALID_TIMELINE_VALUES = {
+    "yesterday", "last week", "last month", "last year",
+    "ago", "previous", "past",
+}
+LOCATION_NORMALIZATION = {
+    # Baner variants
+    "banner": "Baner",
+    "banar": "Baner",
+    "baner": "Baner",
+    "banr": "Baner",
+    # Wakad variants
+    "wakud": "Wakad",
+    "wakad": "Wakad",
+    "waked": "Wakad",
+    "vakad": "Wakad",
+    # Hinjewadi variants
+    "hinjewdi": "Hinjewadi",
+    "hinjwadi": "Hinjewadi",
+    "hinjewadi": "Hinjewadi",
+    # Kharadi variants
+    "kharady": "Kharadi",
+    "karate": "Kharadi",
+    "kharadi": "Kharadi",
+    "karadi": "Kharadi",
+    "kharad": "Kharadi",
+}
+HINDI_LOCATION_TRANSLITERATION = {
+    "वाकड़": "Wakad",
+    "वाकड": "Wakad",
+    "बानेर": "Baner",
+    "बानर": "Baner",
+    "बनर": "Baner",
+    "बॅनर": "Baner",
+    "हिंजवडी": "Hinjewadi",
+    "हिंजेवाडी": "Hinjewadi",
+    "हिंजवाडी": "Hinjewadi",
+    "खराडी": "Kharadi",
+    "खरादी": "Kharadi",
+    "खारडी": "Kharadi",
+}
+VISIT_SCHEDULING_NODES = {"node-1736323961832", "node-1735265015507"}
+CALLBACK_SCHEDULING_NODE_ID = "node-1736492391269"
+# Edges with these condition keywords auto-advance without user input
+SKIP_EDGE_MARKERS = {"skip", "skip response"}
+# Nodes that should auto-advance through skip edges after delivering response
+AUTO_ADVANCE_NODES = {
+    "node-1736492925252",  # Confirm and End
+    "node-1736567518748",  # Confirm Callback
+    "node-1736492485610",  # Polite Goodbye
+}
+FALLBACK_ESCALATION = {
+    "fallback_location": "You can choose Wakad, Baner, Hinjewadi or Kharadi.",
+    "fallback_budget": "Typical budgets range from 20 lakh to 1.5 crore. What range works for you?",
+    "fallback_visit_datetime": "Would Saturday or Sunday this week work for you?",
+    "fallback_callback_time": "Would morning or evening be more convenient?",
+}
+MAX_FALLBACK_ATTEMPTS = 2
 LOCATION_SUGGESTION_PHRASES = (
     "suggest",
     "recommend",
@@ -46,9 +106,116 @@ UNCERTAIN_PHRASES = (
     "unsure",
 )
 
+# ── Behavioral refinement configuration ──────────────────────────────────────
+BRIDGE_ENABLED           = True
+VAGUE_DETECTION_ENABLED  = True
+HOSTILE_DETECTION_ENABLED = True
+
+# Bridge words are ONLY used for unclear / fallback / noise situations.
+# Normal flow responses are returned verbatim from the JSON schema.
+FALLBACK_BRIDGE_PHRASES = {
+    "unclear":                "Sorry, I didn't catch that.",
+    "unclear_intent":         "Got it, just to clarify —",
+    "unclear_location":       "Got it, just to clarify —",
+    "unclear_budget":         "Got it, just to clarify —",
+    "unclear_property_type":  "Got it, just to clarify —",
+    "unclear_visit_datetime": "Sorry, I didn't catch that.",
+    "unclear_callback_time":  "Sorry, I didn't catch that.",
+}
+
+CLARIFICATION_TEMPLATES = {
+    "provide_location": "Did you mean you're looking in a specific city?",
+    "provide_budget":   "Did you mean a particular budget range?",
+    "provide_intent":   "Did you mean you're looking to buy or rent?",
+    "unclear":          "Could you say that again in a different way?",
+}
+
+GUIDANCE_RESPONSES = {
+    "budget":   "No problem — are you thinking more budget-friendly, mid-range, or premium?",
+    "location": "Sure — are you open to areas near IT hubs, or do you prefer quieter residential zones?",
+}
+
+DEESCALATION_RESPONSES = [
+    "Understood. Let me focus on what's most useful for you.",
+    "Fair enough. I'll keep this brief and practical.",
+    "Noted. What would be most helpful right now?",
+]
+
+FILLER_STARTERS = {"uh", "um", "ah", "like", "so", "er", "hmm"}
+
+VAGUE_TOKENS = {
+    "budget":   ["flexible", "not sure", "reasonable", "affordable", "depends",
+                 "whatever", "not too much", "moderate", "medium"],
+    "location": ["anywhere", "not sure", "somewhere", "any area", "near",
+                 "doesn't matter", "flexible", "good area"],
+}
+
+HOSTILE_TOKENS = [
+    "stupid", "idiot", "useless", "waste", "shut up", "stop",
+    "terrible", "worst", "hate", "awful", "rubbish", "garbage",
+    "don't want", "leave me", "go away", "not helpful",
+    "fuck", "shit", "bitch", "ass", "damn", "screw you",
+    "die", "kill", "bloody", "bastard", "crap",
+]
+
 
 def _log(tag: str, message: str) -> None:
     logger.info("[%s] %s", tag, message)
+
+
+# ── Behavioral refinement helpers ────────────────────────────────────────────
+
+def _normalise_stt(text: str) -> str:
+    """
+    Clean common STT artefacts before intent extraction.
+    Operates on words only — no regex for performance.
+    Steps (in order):
+      1. Collapse immediate word repetitions: "I I want" → "I want"
+      2. Strip leading filler words: "uh", "um", "ah", "like", "so", "you know"
+      3. Collapse multiple spaces
+    Never removes content words. Never translates or corrects spelling.
+    """
+    words = text.strip().split()
+
+    # Step 1 — deduplicate adjacent identical words (case-insensitive)
+    deduped = []
+    for word in words:
+        if not deduped or word.lower() != deduped[-1].lower():
+            deduped.append(word)
+
+    # Step 2 — strip leading fillers (one pass only — preserve content)
+    while deduped and deduped[0].lower().strip(".,") in FILLER_STARTERS:
+        deduped.pop(0)
+
+    return " ".join(deduped).strip()
+
+
+def _is_vague_answer(text: str, field: str) -> bool:
+    """
+    Return True if user gave a vague non-answer for a specific field.
+    Used to offer guided defaults instead of repeating the same question.
+    """
+    t = text.lower()
+    return any(v in t for v in VAGUE_TOKENS.get(field, []))
+
+
+def _get_guidance_response(field: str) -> str:
+    """Return a static guidance response for a vague slot answer."""
+    return GUIDANCE_RESPONSES.get(field, "Could you give me a rough idea to help narrow it down?")
+
+
+def _get_bridge(intent: str) -> str:
+    """Return a short bridge phrase for unclear/fallback intents only. Empty string otherwise."""
+    return FALLBACK_BRIDGE_PHRASES.get(intent, "")
+
+
+def _is_hostile(text: str) -> bool:
+    """
+    Detect clearly hostile or dismissive input.
+    Lightweight keyword check — no ML, no API call.
+    """
+    t = text.lower()
+    return any(token in t for token in HOSTILE_TOKENS)
 
 
 def _load_default_flow() -> dict[str, Any]:
@@ -191,6 +358,14 @@ class StateManager:
         self.conversation_data: Dict[str, Any] = {}
         self.visited_nodes: set[str] = set()
         self._last_user_text = ""
+        # Behavioral refinement state
+        self._last_node_id: Optional[str] = None
+        self._deescalation_index: int = 0
+        self._has_apologised: bool = False
+        # Session termination flag (Issue 5)
+        self._session_ended: bool = False
+        # Fallback escalation counters (Issue 6)
+        self._fallback_counts: dict[str, int] = {}
         self.load_schema()
 
     def load_schema(self) -> None:
@@ -218,6 +393,12 @@ class StateManager:
         self.conversation_data = {}
         self.visited_nodes = {self.start_node_id} if self.start_node_id else set()
         self._last_user_text = ""
+        # Behavioral refinement state reset
+        self._last_node_id = None
+        self._deescalation_index = 0
+        self._has_apologised = False
+        self._session_ended = False
+        self._fallback_counts = {}
 
     def get_current_node(self) -> Optional[dict[str, Any]]:
         return self.nodes.get(self.current_node_id)
@@ -256,6 +437,9 @@ class StateManager:
         return _is_actionable(text)
 
     def process_noise_turn(self, user_text: str) -> str:
+        if self._session_ended:
+            _log("SESSION ENDED", "Ignoring further input")
+            return ""
         self._last_user_text = user_text or ""
         _log("STT", f"\"{user_text}\"")
 
@@ -269,6 +453,9 @@ class StateManager:
         return response
 
     def next_step(self, user_text: str = "", allow_transition: bool = True) -> str:
+        if self._session_ended:
+            _log("SESSION ENDED", "Ignoring further input")
+            return ""
         node = self.get_current_node()
         if not node:
             return ""
@@ -279,8 +466,18 @@ class StateManager:
         return response
 
     def process_turn(self, user_text: str, intent_data: Optional[dict[str, Any]]) -> str:
+        if self._session_ended:
+            _log("SESSION ENDED", "Ignoring further input")
+            return ""
+
         self._last_user_text = user_text or ""
         _log("STT", f"\"{user_text}\"")
+
+        # ── Refinement 1: STT normalisation ──
+        original_text = user_text or ""
+        user_text = _normalise_stt(original_text)
+        if user_text != original_text:
+            _log("STT CLEAN", f'"{original_text}" → "{user_text}"')
 
         current_node = self.get_current_node()
         if not current_node:
@@ -288,7 +485,16 @@ class StateManager:
 
         if current_node.get("type") == "end":
             _log("END NODE REACHED", "Conversation terminated gracefully.")
+            self._session_ended = True
             raise KeyboardInterrupt
+
+        # ── Refinement 4: hostile input detection ──
+        if HOSTILE_DETECTION_ENABLED and _is_hostile(user_text):
+            _log("TONE", "Hostile input detected — applying de-escalation response")
+            response = DEESCALATION_RESPONSES[self._deescalation_index]
+            self._deescalation_index = (self._deescalation_index + 1) % len(DEESCALATION_RESPONSES)
+            self._last_node_id = self.current_node_id
+            return response
 
         if intent_data is None:
             return self.process_noise_turn(user_text)
@@ -308,7 +514,19 @@ class StateManager:
             entities = {"confirmation": entities.get("confirmation")}
 
         _log("INTENT", self._format_intent_log(intent, entities))
-        self._merge_entities(entities)
+        self._merge_entities(entities, intent=intent)
+
+        # ── Refinement 2: vague answer detection ──
+        if VAGUE_DETECTION_ENABLED:
+            collect_slots = self._collect_slots(current_node)
+            for slot in collect_slots:
+                if self.conversation_data.get(slot):
+                    continue  # slot already filled — don't offer guidance for it
+                if _is_vague_answer(user_text, slot):
+                    response = _get_guidance_response(slot)
+                    _log("VAGUE", f"Vague answer for '{slot}' — offering guidance")
+                    self._last_node_id = self.current_node_id
+                    return response
 
         # ── Phase 2: node resolution ──
         supplemental = ""  # optional LLM informational reply
@@ -316,11 +534,13 @@ class StateManager:
 
         if intent in {"confirm", "deny"}:
             _log("STATE", "Confirmation handled via edge — not intent index")
-            next_node = self._handle_confirmation(current_node, intent)
+            next_node, bypass_guard = self._handle_confirmation(current_node, intent)
         else:
             next_node = self._resolve_by_intent(current_node, intent)
+            bypass_guard = False
 
-        next_node = self._apply_forward_guard(next_node or current_node)
+        if not bypass_guard:
+            next_node = self._apply_forward_guard(next_node or current_node)
 
         # Detect whether the state actually moved
         if next_node["id"] == current_node["id"]:
@@ -329,6 +549,12 @@ class StateManager:
         self.current_node_id = next_node["id"]
         if next_node.get("type") != "fallback":
             self.visited_nodes.add(next_node["id"])
+
+        # ── Issue 6: fallback escalation ──
+        if next_node.get("type") == "fallback":
+            node_id = next_node["id"]
+            self._fallback_counts[node_id] = self._fallback_counts.get(node_id, 0) + 1
+            _log("FALLBACK COUNT", f"{node_id} = {self._fallback_counts[node_id]}")
 
         # ── Phase 3: informational LLM fallback (only when no node matched) ──
         if stayed_on_current and _is_informational_query(user_text, raw_intent):
@@ -343,13 +569,72 @@ class StateManager:
             next_node, self.conversation_data, self._last_user_text
         )
 
+        # ── Issue 6: substitute escalation response if fallback exceeded ──
+        if (next_node.get("type") == "fallback"
+                and self._fallback_counts.get(next_node["id"], 0) > MAX_FALLBACK_ATTEMPTS):
+            escalation = FALLBACK_ESCALATION.get(next_node["id"])
+            if escalation:
+                json_response = escalation
+                _log("FALLBACK ESCALATE", f'{next_node["id"]} → "{escalation}"')
+
+        # ── Refinement 5: flow continuity — same node as last turn ──
+        # Suppress when deny, hostile, or fallback escalation — it sounds wrong
+        is_fallback_escalated = (
+            next_node.get("type") == "fallback"
+            and self._fallback_counts.get(next_node["id"], 0) > MAX_FALLBACK_ATTEMPTS
+        )
+        if (self._last_node_id == self.current_node_id
+                and not supplemental
+                and intent != "deny"
+                and not is_fallback_escalated):
+            json_response = f"Just to confirm — {json_response}"
+            _log("REPEAT NODE", 'Prepending "Just to confirm —" — same node as last turn')
+
         # ── Phase 5: combine supplemental + JSON ──
         if supplemental:
             final_response = f"{supplemental} {json_response}"
             _log("RESPONSE", f'[FALLBACK + JSON] "{final_response}"')
         else:
             final_response = json_response
+
+            # ── Refinement 3: bridge phrase injection ──
+            # Bridges are ONLY added for unclear / fallback situations.
+            # Normal-flow responses are returned exactly as the JSON schema
+            # defines them — no filler words, no extra latency.
+            is_fallback_node = next_node.get("type") == "fallback"
+            is_unclear_intent = intent.startswith("unclear")
+            if BRIDGE_ENABLED and (is_fallback_node or is_unclear_intent):
+                bridge = _get_bridge(intent)
+                if bridge:
+                    final_response = f"{bridge} {final_response}"
+                    _log("BRIDGE", f'Added bridge: "{bridge}"')
+
             _log("RESPONSE", f'[JSON] "{final_response}"')
+
+        # ── Issue 4: truncate response for TTS latency ──
+        final_response = _truncate_response(final_response)
+
+        # ── Issue 5: check if we just arrived at an end node ──
+        if next_node.get("type") == "end":
+            _log("END NODE REACHED", "Conversation terminated gracefully.")
+            self._session_ended = True
+            self._last_node_id = self.current_node_id
+            return final_response.strip()
+
+        # ── Auto-advance through skip edges to reach end nodes ──
+        if next_node["id"] in AUTO_ADVANCE_NODES:
+            terminal = self._auto_advance_skip_edges(next_node)
+            if terminal and terminal["id"] != next_node["id"]:
+                self.current_node_id = terminal["id"]
+                self.visited_nodes.add(terminal["id"])
+                if terminal.get("type") == "end":
+                    _log("END NODE REACHED", f"Auto-advanced through skip edges → {terminal['id']}")
+                    self._session_ended = True
+                    self._last_node_id = self.current_node_id
+                    return final_response.strip()
+
+        # ── Track last node for Refinement 5 ──
+        self._last_node_id = self.current_node_id
 
         return final_response.strip()
 
@@ -394,17 +679,26 @@ class StateManager:
         _log("STATE", f"Intent '{intent}' is not reachable from {current_node['id']} — staying on current node")
         return current_node
 
-    def _handle_confirmation(self, current_node: dict[str, Any], intent: str) -> dict[str, Any]:
+    def _handle_confirmation(self, current_node: dict[str, Any], intent: str) -> tuple[dict[str, Any], bool]:
+        """Returns (next_node, bypass_forward_guard)."""
         edge = self._select_confirmation_edge(current_node, intent)
+
+        # ── Issue 1: deny on visit-scheduling node → route to callback ──
+        if not edge and intent == "deny" and current_node["id"] in VISIT_SCHEDULING_NODES:
+            callback_node = self.nodes.get(CALLBACK_SCHEDULING_NODE_ID)
+            if callback_node:
+                _log("DENY REROUTE", "→ Callback Scheduling (deny on visit scheduling node)")
+                return callback_node, True  # bypass forward guard
+
         if not edge:
-            return current_node
+            return current_node, False
         destination_id = edge.get("destination_node_id")
         destination = self.nodes.get(destination_id)
         if not destination:
-            return current_node
+            return current_node, False
         next_node = self._advance_from_node(destination)
         _log("STATE", f"→ {next_node['id']}")
-        return next_node
+        return next_node, False
 
     def _select_confirmation_edge(self, node: dict[str, Any], intent: str) -> Optional[dict[str, Any]]:
         edges = node.get("edges", [])
@@ -501,13 +795,23 @@ class StateManager:
             return current or next_node
         return next_node
 
-    def _merge_entities(self, entities: dict[str, Any]) -> None:
+    def _merge_entities(self, entities: dict[str, Any], intent: str = "") -> None:
         for key in ENTITY_KEYS:
             value = entities.get(key)
             if value in (None, ""):
                 continue
-            if key in self.conversation_data and self.conversation_data.get(key):
-                continue
+            existing = self.conversation_data.get(key)
+            if existing:
+                # Allow overwrite when user explicitly provides via provide_* intent
+                is_explicit_provide = intent.startswith("provide_")
+                # Allow overwrite when existing value is a known-invalid timeline
+                is_stale_timeline = (
+                    key == "timeline"
+                    and any(inv in str(existing).lower() for inv in INVALID_TIMELINE_VALUES)
+                )
+                if not is_explicit_provide and not is_stale_timeline:
+                    continue
+                _log("ENTITY OVERWRITE", f"{key}: \"{existing}\" → \"{value}\"")
             cleaned = self._clean_entity_value(key, value)
             if cleaned is None:
                 _log("ENTITY SKIPPED", f'{key}="{value}"')
@@ -650,6 +954,12 @@ class StateManager:
             return None
 
         if key == "location":
+            # ── Issue 2: Hindi script transliteration ──
+            if text in HINDI_LOCATION_TRANSLITERATION:
+                transliterated = HINDI_LOCATION_TRANSLITERATION[text]
+                _log("TRANSLITERATED LOCATION", f"{text} -> {transliterated}")
+                text = transliterated
+            # ── Issue 3: phonetic STT normalization ──
             lowered = text.lower()
             if lowered in LOCATION_NORMALIZATION:
                 normalized = LOCATION_NORMALIZATION[lowered]
@@ -661,11 +971,31 @@ class StateManager:
         if key == "property_type":
             normalized = self._normalize_property_type(text)
             return normalized if normalized and self._is_valid_property_type(normalized) else None
+        if key == "timeline":
+            normalized = self._normalize_timeline(text)
+            if normalized != text:
+                _log("NORMALIZED TIMELINE", f"{text} -> {normalized}")
+            return normalized if self._is_valid_timeline(normalized) else None
         return text
 
     def _is_valid_location(self, value: str) -> bool:
         lowered = value.strip().lower()
-        return len(lowered) > 2 and any(char.isalpha() for char in lowered) and lowered not in INVALID_LOCATION_VALUES
+        if len(lowered) <= 2 or not any(char.isalpha() for char in lowered):
+            return False
+        if lowered in INVALID_LOCATION_VALUES:
+            return False
+        # Accept if it matches the known location whitelist or normalization maps
+        if lowered in KNOWN_LOCATION_WHITELIST:
+            return True
+        if lowered in LOCATION_NORMALIZATION:
+            return True
+        # Reject multi-word strings that don't match any known location
+        words = lowered.split()
+        if len(words) > 2:
+            _log("LOCATION REJECTED", f"Multi-word non-location: \"{value}\"")
+            return False
+        # Accept single/double word values that pass basic checks
+        return True
 
     def _is_valid_budget(self, value: str) -> bool:
         lowered = value.strip().lower()
@@ -677,6 +1007,33 @@ class StateManager:
         if normalized.lower() == "apartment":
             return "flat"
         return normalized
+
+    def _normalize_timeline(self, value: str) -> str:
+        lowered = value.strip().lower()
+        
+        if lowered == "yesterday":
+            return "tomorrow"
+            
+        if "last" in lowered:
+            return re.sub(r"\blast\b", "next", value, flags=re.IGNORECASE)
+            
+        if "previous" in lowered:
+            return re.sub(r"\bprevious\b", "next", value, flags=re.IGNORECASE)
+            
+        if "ago" in lowered:
+            return re.sub(r"\bago\b", "from now", value, flags=re.IGNORECASE)
+            
+        if "past" in lowered:
+            return re.sub(r"\bpast\b", "upcoming", value, flags=re.IGNORECASE)
+            
+        return value
+
+    def _is_valid_timeline(self, value: str) -> bool:
+        lowered = value.strip().lower()
+        if any(inv in lowered for inv in INVALID_TIMELINE_VALUES):
+            _log("TIMELINE REJECTED", f"Past or invalid timeline: \"{value}\"")
+            return False
+        return True
 
     def _is_valid_property_type(self, value: str) -> bool:
         lowered = value.strip().lower()
@@ -693,6 +1050,29 @@ class StateManager:
             re.search(pattern, lowered) for pattern in allowed_patterns
         )
 
+    def _auto_advance_skip_edges(self, node: dict[str, Any]) -> dict[str, Any]:
+        """Walk through skip edges to reach terminal nodes after response delivery."""
+        current = node
+        seen: set[str] = {current["id"]}
+        while True:
+            edges = current.get("edges", [])
+            if not edges:
+                return current
+            # Check if the only edge is a skip edge
+            if len(edges) == 1:
+                condition = (edges[0].get("condition", "") or "").lower().strip()
+                if condition in SKIP_EDGE_MARKERS:
+                    dest_id = edges[0].get("destination_node_id")
+                    dest = self.nodes.get(dest_id) if dest_id else None
+                    if not dest or dest["id"] in seen:
+                        return current
+                    _log("SKIP EDGE", f"{current['id']} → {dest['id']}")
+                    seen.add(dest["id"])
+                    self.visited_nodes.add(dest["id"])
+                    current = dest
+                    continue
+            return current
+
     def _format_intent_log(self, intent: str, entities: dict[str, Any]) -> str:
         pairs = [f"{key}: {value}" for key, value in entities.items() if value not in (None, "")]
         if pairs:
@@ -702,3 +1082,46 @@ class StateManager:
     def _log_response(self, node: dict[str, Any], response: str) -> None:
         """Used only by non-process_turn callers (noise, greeting, next_step)."""
         _log("RESPONSE", f'[JSON] "{response}"')
+
+
+# ---------------------------------------------------------------------------
+# Issue 4 — Response truncation for TTS latency
+# ---------------------------------------------------------------------------
+
+def _truncate_response(
+    text: str,
+    max_words: int = cfg.MAX_RESPONSE_WORDS,
+    max_sentences: int = cfg.MAX_RESPONSE_SENTENCES,
+) -> str:
+    """
+    Enforce word and sentence limits on the final response text
+    to keep TTS output short and reduce TTFB.
+
+    Rules:
+      1. Split on sentence-ending punctuation (. ! ?).
+      2. Keep at most `max_sentences`.
+      3. If total word count exceeds `max_words`, truncate to that limit.
+      4. Rejoin sentences with newline for natural TTS pause.
+    """
+    if not text or not text.strip():
+        return text
+
+    # Split into sentences
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    # Limit sentence count
+    sentences = sentences[:max_sentences]
+
+    # Rejoin and check word count
+    joined = "\n".join(sentences)
+    words = joined.split()
+    if len(words) > max_words:
+        truncated = " ".join(words[:max_words])
+        # Ensure it ends with punctuation
+        if not truncated.rstrip().endswith((".", "!", "?")):
+            truncated = truncated.rstrip().rstrip(".,;:") + "."
+        _log("TRUNCATE", f"Response trimmed from {len(words)} to {max_words} words")
+        return truncated
+
+    return joined

@@ -260,6 +260,11 @@ def run_conversation():
                     interruptible_play(speech_gen, t2)
                     time.sleep(POST_RESPONSE_PAUSE_S)
 
+                # Check if the conversation has reached a terminal node
+                if getattr(state_manager, '_session_ended', False):
+                    print("\n[AI] Session ended gracefully.")
+                    raise KeyboardInterrupt
+
             except Exception as e:
                 print(f"[ERROR] {e}")
                 continue

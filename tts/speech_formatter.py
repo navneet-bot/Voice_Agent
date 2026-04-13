@@ -20,6 +20,15 @@ def optimize_for_tts(text: str) -> str:
 
     # 1. EXPAND ABBREVIATIONS
     # Ensure technical terms are pronounced fully and correctly by the neural engine.
+    # ── Numeric-prefix BHK expansion (must run BEFORE the generic BHK rule) ──
+    _bhk_digits = {
+        "1": "one", "2": "two", "3": "three", "4": "four", "5": "five",
+    }
+    def _expand_bhk(m):
+        digit = m.group(1)
+        return f"{_bhk_digits.get(digit, digit)} B H K"
+    text = re.sub(r'\b([1-5])\s*BHK\b', _expand_bhk, text, flags=re.IGNORECASE)
+
     expansions = {
         r'\bsq\.?ft\.?\b': 'square feet',
         r'\bsq\.?\s?feet\b': 'square feet',

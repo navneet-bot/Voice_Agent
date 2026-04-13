@@ -14,6 +14,8 @@ import warnings
 import edge_tts
 import numpy as np
 
+from tts.config import EDGE_SPEECH_RATE
+
 logger = logging.getLogger(__name__)
 
 # The user requested a charismatic Indian female voice that can speak English/Hindi
@@ -28,6 +30,15 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
         yield b""
         return
 
+    # ── Text normalisation for faster-paced speech ──────────────────────
+    # Expand abbreviations and clean up text so the neural voice stays
+    # clear even at an elevated speaking rate.
+    try:
+        from tts.speech_formatter import optimize_for_tts
+        text = optimize_for_tts(text)
+    except Exception:
+        logger.debug("speech_formatter unavailable, using raw text")
+
     # Edge-TTS streams mp3 chunks usually. We must decode them to raw PCM16 for Pipecat/sounddevice.
     # We will use miniaudio to decode the mp3 payloads in memory instantly.
     try:
@@ -38,8 +49,11 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
         return
 
     try:
-        # Run asynchronously and collect stream blocks
-        communicate = edge_tts.Communicate(text, DEFAULT_VOICE)
+        # Run asynchronously and collect stream blocks.
+        # The `rate` parameter controls speaking pace as a percentage offset
+        # from neutral (e.g. "+8%" = 8 % faster).  The value is pulled from
+        # tts/config.py so it stays constant across the entire call session.
+        communicate = edge_tts.Communicate(text, DEFAULT_VOICE, rate=EDGE_SPEECH_RATE)
         
         # Helper to run async Edge-TTS stream in an isolated sync loop
         async def _collect_mp3():
