@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any, Optional
 
 from groq import APIError, APITimeoutError, Groq, RateLimitError
@@ -175,6 +176,18 @@ def extract_intent(user_text: str) -> dict[str, Any]:
 # Informational LLM fallback — called ONLY when no JSON node matches intent
 # ---------------------------------------------------------------------------
 
+def _load_prompt_rules() -> str:
+    """Load behavioral rules from prompt.txt once at module init."""
+    prompt_path = Path(__file__).resolve().parent / "prompt.txt"
+    try:
+        return prompt_path.read_text(encoding="utf-8").strip()
+    except Exception as exc:
+        logger.warning("Could not load prompt.txt: %s", exc)
+        return ""
+
+
+_PROMPT_RULES: str = _load_prompt_rules()
+
 _INFORMATIONAL_SYSTEM = (
     "You are Neha, a real estate assistant on a phone call. "
     "Answer the user's question in 1–2 sentences, maximum 25 words. "
@@ -183,6 +196,8 @@ _INFORMATIONAL_SYSTEM = (
     "Do NOT collect information like location, budget, or property type. "
     "Plain text only. No JSON. No markdown."
 )
+if _PROMPT_RULES:
+    _INFORMATIONAL_SYSTEM += "\n\n" + _PROMPT_RULES
 
 _STATIC_FALLBACK = (
     "That's a great question. Let me continue with a few details to help you better."
