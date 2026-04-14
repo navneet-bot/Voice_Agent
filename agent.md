@@ -1,49 +1,44 @@
-# AI Voice Agent - Developer & Agent Context
+# Cosmic Chameleon: AI Voice Agent Platform
 
-This document provides essential context for AI agents and contributors working on the **Modular AI Voice Agent** project. Use this as a reference for architecture, design principles, and coding standards.
+This document serves as a master guide for setting up and understanding the AI Voice Agent SaaS platform on any machine.
 
-## 🚀 Project Overview
+## 🚀 Quick Start
+1. **Requirements**: Install dependencies from the root directory.
+   ```bash
+   pip install -r requirements.txt
+   ```
+2. **Environment**: Create a `.env` file in the root with your API keys.
+   ```env
+   GROQ_API_KEY=your_key_here
+   ```
+3. **Launch Server**: Start the FastAPI backend.
+   ```bash
+   python server.py
+   ```
+4. **Access Dashboard**: Open `http://localhost:3000` in your browser.
 
-A high-performance, CPU-optimized modular voice agent pipeline designed for real-time conversation over telephony (VoIP/SIP) and WebSockets (LiveKit).
+## 🛠 Tech Stack
+- **Orchestration**: Pipecat-AI (Pipeline-based audio processing)
+- **STT**: Faster-Whisper (Local low-latency transcription)
+- **LLM**: Groq (Llama-3-70b-8192 for reasoning)
+- **TTS**: Edge-TTS (Charismatic `en-IN-NeerjaNeural` voice)
+- **Backend**: FastAPI (Async API and WebSocket bridge)
+- **Frontend**: Vanilla JS Dashboard (Premium SaaS UI with Live Monitoring)
 
-**The Pipeline Flow:**
-`Audio Stream (Telephony)` → `Speech-to-Text (STT)` → `Large Language Model (LLM)` → `Text-to-Speech (TTS)` → `Audio Stream`
+## 📁 Key File Structure
+- `server.py`: The heart of the platform. Handles APIs, WebSockets, and Campaign launches.
+- `voice_agent_platform_v2.html`: High-fidelity dashboard for Admins and Clients.
+- `agent_runner.py`: Executes automated campaigns with simulated telephony features.
+- `llm/state_manager.py`: Manages conversation nodes, intents, and business logic.
+- `flows/runtime.py`: Pipecat processors for the live audio bridge.
+- `db/`: Persistence layer (JSON databases for agents, leads, and results).
 
-## 🏗️ Architecture & Modules
+## 🌟 Demo Features
+- **Live Talk**: Direct browser-to-agent voice interaction via WebSocket.
+- **Live Tracker**: Real-time transcription monitor for active campaigns.
+- **Virtual Numbers**: Mocked number purchase flow for client demonstrations.
+- **Auto-Sync**: Background processes for lead qualification and result persistence.
 
-The project is strictly modular. Each component is isolated and communicates via clean, byte-oriented interfaces.
-
-| Module | Technology | Status | Role |
-| :--- | :--- | :--- | :--- |
-| **`stt/`** | `faster-whisper` | ✅ Implemented | Transcribes raw audio bytes. Optimized for CPU (`int8`). |
-| **`tts/`** | `Kokoro-82M` | ✅ Implemented | Synthesizes text to audio bytes (24kHz Mono). |
-| **`llm/`** | Groq (`llama-3.1-8b`) | ✅ Implemented | Conversational logic (Neha Persona) in `llm/llm.py`. |
-| **`telephony/`** | FastAPI WebSockets | ✅ Implemented | Scalable VoBiz bridge in `telephony/vobiz.py`. |
-| **`flows/`** | `pipecat-ai` | ✅ Implemented | Orchestration in `flows/conversation.py`. |
-
-## 🛠️ Tech Stack
-
-- **Language**: Python 3.12+ (managed via `.venv`)
-- **STT Engine**: `faster-whisper` (CTranslate2 backend)
-- **TTS Engine**: `Kokoro-82M` (HuggingFace CPU-optimized)
-- **Audio Format**: 16kHz STT input, 24kHz TTS output, Mono, PCM/WAV
-- **Orchestration**: Pipecat + FastAPI
-
-## 📌 Coding Standards & Principles
-
-### 1. Configuration-Driven Development
-All constants must live in their respective module's `config.py`. 
-- Global AI Key: `.env` (GROQ_API_KEY)
-
-### 2. Pipecat Orchestration
-The system uses the `FrameProcessor` pattern. To add new logic, subclass `FrameProcessor` in `flows/conversation.py`.
-
-### 3. Scalability (20+ Calls)
-The FastAPI server spawns isolated Pipecat `PipelineTask` runners in separate `asyncio` loops. Ensure all I/O stays non-blocking. Use `asyncio.to_thread` for STT/TTS inference.
-
-## 🤖 Instructions for next Agent/Teammate
-
-1. **Local Test**: Run `python chat_test.py` to verify LLM charisma.
-2. **Tunneling**: Run `ngrok http 8000`. If `ngrok` fails with a version error, use the absolute path or `localtunnel`.
-3. **Server Start**: `python -m uvicorn telephony.vobiz:app --host 0.0.0.0 --port 8000`.
-4. **Handoff**: Read `handoff_report.md` for full project status.
+## 📝 Handover Notes
+- **Audio Resampling**: The dashboard now includes a 16kHz resampler and jitter buffer for stable voice quality.
+- **Git Sync**: Always `git pull` before starting work to stay synced with the latest SaaS enhancements.
