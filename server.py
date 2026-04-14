@@ -267,25 +267,43 @@ async def websocket_endpoint(websocket: WebSocket):
     pipeline = Pipeline([source, stt, llm, tts, sink])
     runner = PipelineRunner()
     task = PipelineTask(pipeline)
-
     runner_task = asyncio.create_task(runner.run(task))
+
+    print(f"Live Voice: Pipeline started. Task ID: {id(task)}")
 
     try:
         while True:
             # Browser sends 16kHz PCM16 mono audio bytes
             data = await websocket.receive_bytes()
+            if not data:
+                continue
+            
+            # Diagnostic: check audio energy
+            # pcm = np.frombuffer(data, dtype=np.int16)
+            # if np.abs(pcm).max() > 500: print(f"Audio detected: {len(data)} bytes")
+
             # Push into STT
             await source.push_frame(
                 AudioRawFrame(audio=data, sample_rate=16000, num_channels=1), 
                 FrameDirection.DOWNSTREAM
             )
     except WebSocketDisconnect:
-        print("Live Voice: Browser disconnected")
+        print("Live Voice: Browser disconnected explicitly")
     except Exception as e:
-        print(f"Live Voice Error: {e}")
+        print(f"Live Voice Error in loop: {e}")
     finally:
-        await source.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
-        await runner_task
+        print("Live Voice: Cleaning up pipeline...")
+        try:
+            await source.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+            # Give the pipeline a moment to finish processing remaining frames
+            await asyncio.sleep(0.5)
+            runner_task.cancel()
+            await runner_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f"Cleanup error: {e}")
+        print("Live Voice: Closed.")
 
 if __name__ == "__main__":
     import uvicorn

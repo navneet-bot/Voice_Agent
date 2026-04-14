@@ -62,17 +62,22 @@ async def run_campaign(campaign_id: str, agent_id: str):
     # Initialize Live Monitor State
     LIVE_STATE_FILE = os.path.join(DB_DIR, "live_state.json")
     def update_live_state(lead_id, name, status, snippet="", transcripts=[]):
-        state = read_json(LIVE_STATE_FILE)
-        if not isinstance(state, dict): state = {}
-        state[lead_id] = {
-            "campaignId": campaign_id,
-            "name": name,
-            "status": status,
-            "snippet": snippet,
-            "transcripts": transcripts,
-            "lastUpdate": datetime.now().isoformat()
-        }
-        write_json(LIVE_STATE_FILE, state)
+        for _ in range(3): # Retry on lock
+            try:
+                state = read_json(LIVE_STATE_FILE)
+                if not isinstance(state, dict): state = {}
+                state[lead_id] = {
+                    "campaignId": campaign_id,
+                    "name": name,
+                    "status": status,
+                    "snippet": snippet,
+                    "transcripts": transcripts,
+                    "lastUpdate": datetime.now().isoformat()
+                }
+                write_json(LIVE_STATE_FILE, state)
+                break
+            except Exception:
+                time.sleep(0.1)
 
     for lead in campaign_leads:
         lead_uid = f"{campaign_id}_{lead['phone']}"

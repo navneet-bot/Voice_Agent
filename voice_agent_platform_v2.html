@@ -1499,11 +1499,13 @@
       btn.textContent = "Connecting...";
       btn.disabled = true;
 
-      // 1. Setup Audio Context & Resampling helper
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      // Ensure AudioContext is resumed (browser requirement)
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+
       const targetSampleRate = 16000;
 
-      // 2. Setup WebSocket
+      // Setup WebSocket
       liveSocket = new WebSocket('ws://' + window.location.host + '/api/voice-live');
       liveSocket.binaryType = 'arraybuffer';
 
@@ -1517,43 +1519,47 @@
         pulse.style.display = 'block';
         pulse.classList.add('pulse-anim');
 
-        // Capture Mic with Resampling
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Capture Mic
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
         const source = audioCtx.createMediaStreamSource(micStream);
-        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
+        // Use a simpler but more reliable ScriptProcessor for basic resampling
+        const processor = audioCtx.createScriptProcessor(2048, 1, 1);
         source.connect(processor);
-        processor.connect(audioCtx.destination);
+        processor.connect(audioCtx.destination); // For loopback monitoring if needed, but we pull data
 
-        const resampleBuffer = [];
         const ratio = audioCtx.sampleRate / targetSampleRate;
+        let lastSample = 0;
 
         processor.onaudioprocess = (e) => {
           if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
             const input = e.inputBuffer.getChannelData(0);
+            // Resample to 16kHz
+            const outputLength = Math.floor(input.length / ratio);
+            const output = new Int16Array(outputLength);
 
-            // Basic linear resampling to 16kHz
-            for (let i = 0; i < input.length; i += ratio) {
-              const sample = input[Math.floor(i)];
-              const pcm = Math.max(-1, Math.min(1, sample)) * 0x7FFF;
-              resampleBuffer.push(pcm);
+            for (let i = 0; i < outputLength; i++) {
+              const idx = Math.floor(i * ratio);
+              const sample = input[idx];
+              output[i] = Math.max(-32768, Math.min(32767, sample * 32767));
             }
-
-            if (resampleBuffer.length >= 1600) { // Send 100ms chunks
-              const pcmArray = new Int16Array(resampleBuffer);
-              liveSocket.send(pcmArray.buffer);
-              resampleBuffer.length = 0;
-            }
+            liveSocket.send(output.buffer);
           }
         };
       };
 
-      // Playback Queue for Incoming Audio chunks (Jitter Buffer)
       let nextStartTime = 0;
       liveSocket.onmessage = async (e) => {
+        if (!audioCtx) return;
         const pcmData = new Int16Array(e.data);
         const floatData = new Float32Array(pcmData.length);
-        for (let i = 0; i < pcmData.length; i++) floatData[i] = pcmData[i] / 0x7FFF;
+        for (let i = 0; i < pcmData.length; i++) floatData[i] = pcmData[i] / 32768;
 
         const buffer = audioCtx.createBuffer(1, floatData.length, 24000);
         buffer.getChannelData(0).set(floatData);
@@ -1563,17 +1569,20 @@
         source.connect(audioCtx.destination);
 
         const currentTime = audioCtx.currentTime;
-        if (nextStartTime < currentTime) nextStartTime = currentTime + 0.05;
+        if (nextStartTime < currentTime) nextStartTime = currentTime + 0.1; // Minimal buffer for smoothness
 
         source.start(nextStartTime);
         nextStartTime += buffer.duration;
       };
 
-      liveSocket.onerror = () => showToast("Voice server error.");
+      liveSocket.onerror = (err) => {
+        console.error("WS Error:", err);
+        showToast("Voice server error.");
+      };
       liveSocket.onclose = () => stopLiveVoice();
 
     } catch (e) {
-      console.error(e);
+      console.error("Live Talk Init Error:", e);
       showToast("Mic access denied or server error.");
       closeModal();
     }
