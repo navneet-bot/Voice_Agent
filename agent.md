@@ -33,6 +33,7 @@ The agent is **Neha**, a warm and charismatic Real Estate Lead Qualifier.
 ## 🚀 Setup on New Machine
 1. `pip install -r requirements.txt`
 2. Ensure `.env` has `GROQ_API_KEY`.
-3. Run `python server.py` and open `localhost:3000`.
+3. **Run Diagnostics**: Run `python verify_pipeline.py`. If it says "ALL SYSTEMS GO", we are ready.
+4. Run `python server.py` and open `localhost:3000`.
 
-**Note**: The goal is to WOW the client with a demo that looks and feels like a finished product (Retell AI style), even if the telephony part is simulated in the background.
+**Note**: I have already implemented the robust audio bridge and monitoring logic. If the local machine has performance issues, the next AI should use `verify_pipeline.py` to check for network/CPU bottlenecks.
