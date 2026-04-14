@@ -1,0 +1,68 @@
+[
+    {
+        "campaignId": "test_camp_1776106167",
+        "leads": [
+            {
+                "name": "Test User 1",
+                "phone": "+91 00000 00001"
+            },
+            {
+                "name": "Test User 2",
+                "phone": "+91 00000 00002"
+            }
+        ],
+        "createdAt": "2026-04-14T00:19:29.431864"
+    },
+    {
+        "campaignId": "test_camp_1776106279",
+        "leads": [
+            {
+                "name": "Test User 1",
+                "phone": "+91 00000 00001"
+            },
+            {
+                "name": "Test User 2",
+                "phone": "+91 00000 00002"
+            }
+        ],
+        "createdAt": "2026-04-14T00:21:21.577483"
+    },
+    {
+        "campaignId": "test_camp_1776106663",
+        "leads": [
+            {
+                "name": "Test User 1",
+                "phone": "+91 00000 00001"
+            },
+            {
+                "name": "Test User 2",
+                "phone": "+91 00000 00002"
+            }
+        ],
+        "createdAt": "2026-04-14T00:27:45.146383"
+    },
+    {
+        "campaignId": "test_camp_1776106994",
+        "leads": [
+            {
+                "name": "Test User 1",
+                "phone": "+91 00000 00001"
+            },
+            {
+                "name": "Test User 2",
+                "phone": "+91 00000 00002"
+            }
+        ],
+        "createdAt": "2026-04-14T00:33:16.818466"
+    },
+    {
+        "campaignId": "test_1776108388415",
+        "leads": [
+            {
+                "name": "Test User",
+                "phone": "+91 00000 12345"
+            }
+        ],
+        "createdAt": "2026-04-14T00:56:28.429921"
+    }
+]

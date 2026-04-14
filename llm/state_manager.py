@@ -1,7 +1,10 @@
 from __future__ import annotations
+import copy
 
 import json
 import logging
+import uuid
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -212,6 +215,53 @@ class StateManager:
                 self.tools[tool_id] = tool
         self.reset_state()
         logger.info("Loaded %d nodes. Start node: %s", len(self.nodes), self.start_node_id)
+
+    @classmethod
+    def template_new_agent(cls, name: str, script: str, voice_id: str, data_fields: list[str]) -> dict[str, Any]:
+        """Creates a new agent JSON schema based on a generic template and admin inputs."""
+        # Use a simplified version of the standard flow with Neha as default persona if name is matching
+        template = {
+            "agent_name": name or "Neha — Real Estate Specialist",
+            "voice_id": voice_id or "en-IN-NeerjaNeural",
+            "conversation_flow_id": f"flow_{uuid.uuid4().hex[:8]}",
+            "global_prompt": script,
+            "conversationFlow": {
+                "global_prompt": script,
+                "start_node_id": "root_greeting",
+                "nodes": [
+                    {
+                        "id": "root_greeting",
+                        "name": "Initial Greeting",
+                        "type": "conversation",
+                        "instruction": {"type": "prompt", "text": "Greet the user warmly as Neha and confirm identity."},
+                        "response": "Hello, this is Neha from the Real Estate AI team. Am I speaking with you?",
+                        "intent_triggers": ["call_connected"],
+                        "edges": [
+                            {"id": "to_discovery", "condition": "user responds", "destination_node_id": "discovery"}
+                        ]
+                    },
+                    {
+                        "id": "discovery",
+                        "name": "Information Discovery",
+                        "type": "conversation",
+                        "instruction": {"type": "prompt", "text": "Qualify lead interest and collect data fields."},
+                        "response": "I'm calling about some premium property options. Would you have a moment?",
+                        "collects": data_fields,
+                        "edges": [
+                            {"id": "to_end", "condition": "conversation finished", "destination_node_id": "end_node"}
+                        ]
+                    },
+                    {
+                        "id": "end_node",
+                        "name": "Conclusion",
+                        "type": "end",
+                        "instruction": {"type": "prompt", "text": "End the call politely."},
+                        "response": "Thank you for your time. Have a great day!"
+                    }
+                ]
+            }
+        }
+        return template
 
     def reset_state(self) -> None:
         self.current_node_id = self.start_node_id

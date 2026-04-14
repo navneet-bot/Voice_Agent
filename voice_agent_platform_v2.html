@@ -1,0 +1,1467 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+    --color-background-primary: #ffffff;
+    --color-background-secondary: #f9fafb;
+    --color-background-tertiary: #f3f4f6;
+    --color-text-primary: #111827;
+    --color-text-secondary: #4b5563;
+    --color-text-tertiary: #9ca3af;
+    --color-border-primary: #e5e7eb;
+    --color-border-secondary: #d1d5db;
+    --color-border-tertiary: #f3f4f6;
+    --color-primary: #6366f1;
+    --color-primary-hover: #4f46e5;
+    --color-accent: #7c3aed;
+    --border-radius-md: 8px;
+    --border-radius-lg: 12px;
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--color-background-tertiary);
+    color: var(--color-text-primary);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .screen {
+    display: none;
+    min-height: 100vh;
+  }
+
+  .screen.active {
+    display: block;
+  }
+
+  .nav {
+    background: var(--color-background-primary);
+    border-bottom: 0.5px solid var(--color-border-tertiary);
+    padding: 0 24px;
+    height: 52px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .nav-brand {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .nav-brand span {
+    color: var(--color-primary);
+  }
+
+  .nav-meta {
+    font-size: 12px;
+    color: var(--color-text-tertiary);
+    margin-left: 10px;
+    font-weight: 400;
+  }
+
+  .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .badge {
+    font-size: 11px;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-weight: 500;
+  }
+
+  .badge-admin {
+    background: #EEEDFE;
+    color: #534AB7;
+  }
+
+  .badge-client {
+    background: #E1F5EE;
+    color: #0F6E56;
+  }
+
+  .badge-agent {
+    background: #E6F1FB;
+    color: #185FA5;
+  }
+
+  .btn-sm {
+    font-size: 13px;
+    padding: 5px 14px;
+    border: 0.5px solid var(--color-border-secondary);
+    border-radius: var(--border-radius-md);
+    background: transparent;
+    color: var(--color-text-primary);
+    cursor: pointer;
+  }
+
+  .btn-sm:hover {
+    background: var(--color-background-secondary);
+  }
+
+  .layout {
+    display: flex;
+    min-height: calc(100vh - 52px);
+  }
+
+  .sidebar {
+    width: 216px;
+    background: var(--color-background-primary);
+    border-right: 0.5px solid var(--color-border-tertiary);
+    padding: 16px 0;
+    flex-shrink: 0;
+  }
+
+  .sidebar-section {
+    padding: 0 10px;
+    margin-bottom: 20px;
+  }
+
+  .sidebar-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--color-text-tertiary);
+    padding: 0 8px;
+    margin-bottom: 5px;
+  }
+
+  .sidebar-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-md);
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    margin-bottom: 1px;
+  }
+
+  .sidebar-item:hover {
+    background: var(--color-background-secondary);
+    color: var(--color-text-primary);
+  }
+
+  .sidebar-item.active {
+    background: #f0f1ff;
+    color: var(--color-primary);
+    font-weight: 600;
+    box-shadow: inset 3px 0 0 var(--color-primary);
+    border-radius: 0 4px 4px 0;
+  }
+
+  .main {
+    flex: 1;
+    padding: 24px;
+    overflow: auto;
+  }
+
+  .page-header {
+    margin-bottom: 22px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+
+  .page-header-left h1 {
+    font-size: 20px;
+    font-weight: 500;
+  }
+
+  .page-header-left p {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    margin-top: 2px;
+  }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+    margin-bottom: 22px;
+  }
+
+  .metrics-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .metric-card {
+    background: var(--color-background-secondary);
+    border-radius: var(--border-radius-md);
+    padding: 14px 16px;
+  }
+
+  .metric-label {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    margin-bottom: 5px;
+  }
+
+  .metric-value {
+    font-size: 24px;
+    font-weight: 500;
+  }
+
+  .metric-sub {
+    font-size: 11px;
+    color: var(--color-text-tertiary);
+    margin-top: 3px;
+  }
+
+  .up {
+    color: #3B6D11;
+  }
+
+  .down {
+    color: #A32D2D;
+  }
+
+  .card {
+    background: var(--color-background-primary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-lg);
+    overflow: hidden;
+    margin-bottom: 18px;
+  }
+
+  .card-header {
+    padding: 14px 18px;
+    border-bottom: 0.5px solid var(--color-border-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-title {
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+
+  th {
+    padding: 9px 18px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    border-bottom: 0.5px solid var(--color-border-tertiary);
+    background: var(--color-background-secondary);
+  }
+
+  td {
+    padding: 11px 18px;
+    border-bottom: 0.5px solid var(--color-border-tertiary);
+    color: var(--color-text-primary);
+  }
+
+  tr:last-child td {
+    border-bottom: none;
+  }
+
+  tr:hover td {
+    background: var(--color-background-secondary);
+  }
+
+  .status {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-weight: 500;
+  }
+
+  .s-active {
+    background: #EAF3DE;
+    color: #3B6D11;
+  }
+
+  .s-paused {
+    background: #FAEEDA;
+    color: #854F0B;
+  }
+
+  .s-done {
+    background: #E6F1FB;
+    color: #185FA5;
+  }
+
+  .s-draft {
+    background: var(--color-background-secondary);
+    color: var(--color-text-secondary);
+    border: 0.5px solid var(--color-border-tertiary);
+  }
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+
+  .btn-primary {
+    padding: 8px 16px;
+    background: var(--color-primary);
+    color: #fff;
+    border: none;
+    border-radius: var(--border-radius-md);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.2s ease;
+  }
+
+  .btn-primary:hover {
+    background: var(--color-primary-hover);
+  }
+
+  .btn-outline {
+    padding: 6px 14px;
+    border: 0.5px solid var(--color-border-secondary);
+    border-radius: var(--border-radius-md);
+    background: transparent;
+    color: var(--color-text-primary);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .btn-outline:hover {
+    background: var(--color-background-secondary);
+  }
+
+  .avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 500;
+    flex-shrink: 0;
+  }
+
+  .av-purple {
+    background: #EEEDFE;
+    color: #534AB7;
+  }
+
+  .av-teal {
+    background: #E1F5EE;
+    color: #0F6E56;
+  }
+
+  .av-amber {
+    background: #FAEEDA;
+    color: #854F0B;
+  }
+
+  .av-blue {
+    background: #E6F1FB;
+    color: #185FA5;
+  }
+
+  .inline-flex {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+  }
+
+  .field {
+    margin-bottom: 14px;
+  }
+
+  .field label {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  .field input,
+  .field select,
+  .field textarea {
+    width: 100%;
+    padding: 8px 11px;
+    font-size: 13px;
+    border: 0.5px solid var(--color-border-secondary);
+    border-radius: var(--border-radius-md);
+    background: var(--color-background-secondary);
+    color: var(--color-text-primary);
+  }
+
+  .field textarea {
+    resize: vertical;
+    height: 72px;
+  }
+
+  .progress-bar {
+    height: 5px;
+    background: var(--color-background-secondary);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .progress-fill {
+    height: 100%;
+    background: var(--color-primary);
+    border-radius: 3px;
+  }
+
+  .agent-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: #E6F1FB;
+    color: #185FA5;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .mapping-row {
+    display: grid;
+    grid-template-columns: 1fr 20px 1fr;
+    gap: 8px;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .col-src {
+    padding: 6px 10px;
+    background: #E6F1FB;
+    color: #185FA5;
+    border-radius: var(--border-radius-md);
+    font-size: 12px;
+  }
+
+  .col-dst {
+    padding: 6px 10px;
+    background: #EAF3DE;
+    color: #3B6D11;
+    border-radius: var(--border-radius-md);
+    font-size: 12px;
+  }
+
+  .arr {
+    text-align: center;
+    color: var(--color-text-tertiary);
+    font-size: 13px;
+  }
+
+  .upload-zone {
+    border: 1.5px dashed var(--color-border-secondary);
+    border-radius: var(--border-radius-lg);
+    padding: 36px;
+    text-align: center;
+    background: var(--color-background-secondary);
+    cursor: pointer;
+  }
+
+  .upload-zone:hover {
+    border-color: #7F77DD;
+    background: #EEEDFE;
+  }
+
+  .client-plan-tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    background: #EEEDFE;
+    color: #534AB7;
+    font-weight: 500;
+  }
+
+  .login-wrap {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .login-card {
+    background: var(--color-background-primary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-lg);
+    padding: 38px;
+    width: 370px;
+  }
+
+  .role-pill {
+    flex: 1;
+    text-align: center;
+    padding: 8px;
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-md);
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--color-text-secondary);
+  }
+
+  .role-pill:hover {
+    background: var(--color-background-secondary);
+  }
+
+  .role-pill.selected {
+    border-color: #7F77DD;
+    background: #EEEDFE;
+    color: #534AB7;
+    font-weight: 500;
+  }
+
+  .section-divider {
+    height: 0.5px;
+    background: var(--color-border-tertiary);
+    margin: 16px 0;
+  }
+
+  .agent-card {
+    background: var(--color-background-primary);
+    border: 0.5px solid var(--color-border-tertiary);
+    border-radius: var(--border-radius-lg);
+    padding: 16px 18px;
+    margin-bottom: 12px;
+  }
+
+  .agent-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .agent-name {
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .agent-meta {
+    font-size: 12px;
+    color: var(--color-text-secondary);
+    margin-top: 2px;
+  }
+
+  .assigned-clients {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+
+  .client-tag {
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    background: var(--color-background-secondary);
+    color: var(--color-text-secondary);
+    border: 0.5px solid var(--color-border-tertiary);
+  }
+</style>
+
+<div id="screen-login" class="screen active">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div style="font-size:22px;font-weight:500;margin-bottom:4px;">Cosmic <span style="color:#7F77DD">Chameleon</span>
+      </div>
+      <div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:26px;">Voice Agent Platform — Sign in
+      </div>
+      <div class="field"><label>Email</label><input type="email" id="login-email" value="admin@cosmicchameleon.in" />
+      </div>
+      <div class="field"><label>Password</label><input type="password" value="••••••••" /></div>
+      <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:8px;">Login as:</div>
+      <div style="display:flex;gap:8px;margin-bottom:20px;">
+        <div class="role-pill selected" onclick="selectRole('admin',this)">Admin</div>
+        <div class="role-pill" onclick="selectRole('client',this)">Client — Realty Pro</div>
+        <div class="role-pill" onclick="selectRole('client2',this)">Client — FinServ</div>
+      </div>
+      <button class="btn-primary" style="width:100%;padding:10px;" onclick="doLogin()">Sign In</button>
+    </div>
+  </div>
+</div>
+
+<div id="screen-admin" class="screen">
+  <div class="nav">
+    <div style="display:flex;align-items:center;gap:0">
+      <div class="nav-brand">Cosmic <span>Chameleon</span><span class="nav-meta">Voice Agent Platform</span></div>
+    </div>
+    <div class="nav-right">
+      <span class="badge badge-admin">Admin</span>
+      <button class="btn-sm" onclick="showScreen('screen-login')">Sign Out</button>
+    </div>
+  </div>
+  <div class="layout">
+    <div class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">Overview</div>
+        <div class="sidebar-item active" onclick="aTab('overview',this)">▤ Dashboard</div>
+        <div class="sidebar-item" onclick="aTab('clients',this)">◉ Clients</div>
+        <div class="sidebar-item" onclick="aTab('campaigns',this)">◈ All Campaigns</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Agents</div>
+        <div class="sidebar-item" onclick="aTab('agents',this)">◎ Agent Workflows</div>
+        <div class="sidebar-item" onclick="aTab('assign',this)">⇌ Assign to Clients</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">Settings</div>
+        <div class="sidebar-item" onclick="aTab('settings',this)">◇ Platform Settings</div>
+      </div>
+    </div>
+    <div class="main" id="admin-main"></div>
+  </div>
+</div>
+
+<div id="screen-client" class="screen">
+  <div class="nav">
+    <div style="display:flex;align-items:center;">
+      <div class="nav-brand">Cosmic <span>Chameleon</span><span class="nav-meta">CRM Portal</span></div>
+    </div>
+    <div class="nav-right">
+      <span id="client-name-badge" style="font-size:13px;color:var(--color-text-secondary)">Realty Pro Inc.</span>
+      <span id="client-agent-badge" class="agent-chip">Neha — Real Estate Specialist</span>
+      <span class="badge badge-client">Client</span>
+      <button class="btn-sm" onclick="showScreen('screen-login')">Sign Out</button>
+    </div>
+  </div>
+  <div class="layout">
+    <div class="sidebar">
+      <div class="sidebar-section">
+        <div class="sidebar-label">My Workspace</div>
+        <div class="sidebar-item active" onclick="cTab('overview',this)">▤ Overview</div>
+        <div class="sidebar-item" onclick="cTab('campaigns',this)">◈ Campaigns</div>
+        <div class="sidebar-item" onclick="cTab('upload',this)">↑ Upload Sheet</div>
+        <div class="sidebar-item" onclick="cTab('results',this)">≡ Call Results</div>
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-label">My Agent</div>
+        <div class="sidebar-item" onclick="cTab('myagent',this)">◎ Agent Details</div>
+      </div>
+    </div>
+    <div class="main" id="client-main"></div>
+  </div>
+</div>
+
+<div id="modal-wrap"></div>
+
+<script>
+  const API_BASE_URL = 'http://localhost:3000/api';
+  let currentRole = 'admin';
+  let clientProfile = {
+    realty: { name: 'Realty Pro Inc.', agent: 'Neha — Real Estate Specialist', plan: 'Growth — ₹50K/mo', color: 'av-purple' },
+    finserv: { name: 'FinServ Co', agent: 'Arjun — Insurance Renewal Agent', plan: 'Scale — ₹1L/mo', color: 'av-teal' }
+  };
+  let activeClient = 'realty';
+
+  function selectRole(role, el) {
+    currentRole = role;
+    document.querySelectorAll('.role-pill').forEach(p => p.classList.remove('selected'));
+    el.classList.add('selected');
+    const emails = { admin: 'admin@cosmicchameleon.in', client: 'ops@realtypro.in', client2: 'mktg@finserv.co' };
+    document.getElementById('login-email').value = emails[role];
+    activeClient = role === 'client2' ? 'finserv' : 'realty';
+  }
+
+  async function doLogin() {
+    if (currentRole === 'admin') {
+      showScreen('screen-admin');
+      renderAdminOverview();
+    } else {
+      const p = clientProfile[activeClient];
+      document.getElementById('client-name-badge').textContent = p.name;
+
+      // Fetch actual assignment from backend
+      try {
+        const res = await fetch(`${API_BASE_URL}/assignments/${activeClient}`);
+        const data = await res.json();
+        if (data.agent) {
+          p.agent = data.agent.name;
+        }
+      } catch (e) { }
+
+      document.getElementById('client-agent-badge').textContent = p.agent;
+      showScreen('screen-client');
+      renderClientOverview();
+    }
+  }
+
+  function showScreen(id) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById(id).classList.add('active');
+  }
+
+  function aTab(tab, el) {
+    document.querySelectorAll('#screen-admin .sidebar-item').forEach(i => i.classList.remove('active'));
+    el.classList.add('active');
+    const fns = { overview: renderAdminOverview, clients: renderAdminClients, campaigns: renderAdminCampaigns, agents: renderAgentWorkflows, assign: renderAgentAssign, settings: renderSettings };
+    if (fns[tab]) fns[tab]();
+  }
+
+  function cTab(tab, el) {
+    document.querySelectorAll('#screen-client .sidebar-item').forEach(i => i.classList.remove('active'));
+    el.classList.add('active');
+    const fns = { overview: renderClientOverview, campaigns: renderClientCampaigns, upload: renderUpload, results: renderResults, myagent: renderMyAgent };
+    if (fns[tab]) fns[tab]();
+  }
+
+  async function renderAdminOverview() {
+    // Initial static UI
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>Platform Overview</h1><p>All clients, agents, and campaign activity</p></div></div>
+    <div class="metrics">
+      <div class="metric-card"><div class="metric-label">Total Clients</div><div id="m-clients" class="metric-value">...</div><div class="metric-sub up">+2 this month</div></div>
+      <div class="metric-card"><div class="metric-label">Active Agent Workflows</div><div id="m-agents" class="metric-value">...</div><div class="metric-sub">Across all clients</div></div>
+      <div class="metric-card"><div class="metric-label">Calls Made (MTD)</div><div id="m-calls" class="metric-value">...</div><div class="metric-sub up">+18% vs last month</div></div>
+      <div class="metric-card"><div class="metric-label">Avg Connect Rate</div><div id="m-rate" class="metric-value">...</div><div class="metric-sub down">-2% vs last month</div></div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Active Campaigns</span></div>
+        <table>
+          <thead><tr><th>Client</th><th>Agent</th><th>Campaign</th><th>Progress</th><th>Status</th></tr></thead>
+          <tbody id="active-campaigns-list">
+            <tr><td colspan="5" style="text-align:center;padding:20px;">Loading active campaigns...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Client–Agent Map</span></div>
+        <table>
+          <thead><tr><th>Client</th><th>Plan</th><th>Assigned Agent</th></tr></thead>
+          <tbody>
+            <tr><td><div class="inline-flex"><div class="avatar av-purple">RP</div>Realty Pro</div></td><td><span class="client-plan-tag">Growth</span></td><td><span class="agent-chip">Priya</span></td></tr>
+            <tr><td><div class="inline-flex"><div class="avatar av-teal">FS</div>FinServ Co</div></td><td><span class="client-plan-tag">Scale</span></td><td><span class="agent-chip">Arjun</span></td></tr>
+            <tr><td><div class="inline-flex"><div class="avatar av-amber">ED</div>EduTech</div></td><td><span class="client-plan-tag">Starter</span></td><td><span class="agent-chip">Riya</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    `;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/dashboard`);
+      const data = await res.json();
+      document.getElementById('m-clients').textContent = data.totalClients;
+      document.getElementById('m-agents').textContent = data.activeAgents;
+      document.getElementById('m-calls').textContent = data.calls.toLocaleString();
+      document.getElementById('m-rate').textContent = data.connectRate + '%';
+
+      // Mock populating the table with some status
+      document.getElementById('active-campaigns-list').innerHTML = `
+        <tr><td><div class="inline-flex"><div class="avatar av-purple">RP</div>Realty Pro</div></td><td><span class="agent-chip" style="font-size:10px">Neha</span></td><td>Q2 Leads</td><td><div class="progress-bar"><div class="progress-fill" style="width:72%"></div></div></td><td><span class="status s-active"><span class="dot"></span>Active</span></td></tr>
+        <tr><td><div class="inline-flex"><div class="avatar av-teal">FS</div>FinServ Co</div></td><td><span class="agent-chip" style="font-size:10px">Arjun</span></td><td>Renewal Drive</td><td><div class="progress-bar"><div class="progress-fill" style="width:45%;background:#1D9E75"></div></div></td><td><span class="status s-active"><span class="dot"></span>Active</span></td></tr>
+      `;
+    } catch (e) {
+      showToast("Error connecting to backend API.");
+    }
+  }
+
+  function renderAdminClients() {
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header">
+      <div class="page-header-left"><h1>Clients</h1><p>Manage client accounts, plans, and agent assignments</p></div>
+      <button class="btn-primary" onclick="showAddClientModal()">+ Add Client</button>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Client</th><th>Unique ID</th><th>Login Email</th><th>Plan</th><th>Assigned Agent</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          <tr><td><div class="inline-flex"><div class="avatar av-purple">RP</div>Realty Pro Inc.</div></td><td><code style="font-size:11px;background:var(--color-background-secondary);padding:2px 6px;border-radius:4px">CC-001</code></td><td style="color:var(--color-text-secondary)">ops@realtypro.in</td><td><span class="client-plan-tag">Growth — ₹50K/mo</span></td><td><span class="agent-chip">Neha</span></td><td><span class="status s-active"><span class="dot"></span>Active</span></td><td><button class="btn-outline" style="font-size:12px;padding:4px 10px" onclick="showAddClientModal()">Edit</button></td></tr>
+          <tr><td><div class="inline-flex"><div class="avatar av-teal">FS</div>FinServ Co</div></td><td><code style="font-size:11px;background:var(--color-background-secondary);padding:2px 6px;border-radius:4px">CC-002</code></td><td style="color:var(--color-text-secondary)">mktg@finserv.co</td><td><span class="client-plan-tag">Scale — ₹1L/mo</span></td><td><span class="agent-chip">Arjun</span></td><td><span class="status s-active"><span class="dot"></span>Active</span></td><td><button class="btn-outline" style="font-size:12px;padding:4px 10px" onclick="showAddClientModal()">Edit</button></td></tr>
+          <tr><td><div class="inline-flex"><div class="avatar av-amber">ED</div>EduTech</div></td><td><code style="font-size:11px;background:var(--color-background-secondary);padding:2px 6px;border-radius:4px">CC-003</code></td><td style="color:var(--color-text-secondary)">hello@edutech.io</td><td><span class="client-plan-tag">Starter — ₹25K/mo</span></td><td><span class="agent-chip">Riya</span></td><td><span class="status s-paused"><span class="dot"></span>Paused</span></td><td><button class="btn-outline" style="font-size:12px;padding:4px 10px" onclick="showAddClientModal()">Edit</button></td></tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+  }
+
+  function renderAdminCampaigns() {
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>All Campaigns</h1><p>Every campaign across all clients</p></div></div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Client</th><th>Agent</th><th>Campaign</th><th>Sheet</th><th>Total</th><th>Called</th><th>Connected</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Realty Pro</td><td><span class="agent-chip">Priya</span></td><td>Q2 Leads</td><td>q2_leads.xlsx</td><td>500</td><td>360</td><td>138</td><td><span class="status s-active"><span class="dot"></span>Active</span></td></tr>
+          <tr><td>Realty Pro</td><td><span class="agent-chip">Priya</span></td><td>Old Leads Reactivation</td><td>reactivate.xlsx</td><td>200</td><td>50</td><td>18</td><td><span class="status s-paused"><span class="dot"></span>Paused</span></td></tr>
+          <tr><td>FinServ Co</td><td><span class="agent-chip">Arjun</span></td><td>Renewal Drive</td><td>renewals_june.xlsx</td><td>800</td><td>360</td><td>145</td><td><span class="status s-active"><span class="dot"></span>Active</span></td></tr>
+          <tr><td>EduTech</td><td><span class="agent-chip">Riya</span></td><td>Free Trial Push</td><td>freemium_users.xlsx</td><td>300</td><td>300</td><td>104</td><td><span class="status s-done"><span class="dot"></span>Done</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+  }
+
+  async function renderAgentWorkflows() {
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header">
+      <div class="page-header-left"><h1>Agent Workflows</h1><p>Create and manage reusable voice agent configurations</p></div>
+      <button class="btn-primary" onclick="showNewAgentModal()">+ New Agent</button>
+    </div>
+    <div id="agents-list">
+      <div style="text-align:center;padding:40px;color:var(--color-text-tertiary)">Loading agent workflows...</div>
+    </div>
+    `;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/agents`);
+      const agents = await res.json();
+
+      if (agents.length === 0) {
+        document.getElementById('agents-list').innerHTML = '<div style="text-align:center;padding:40px;color:var(--color-text-tertiary);background:var(--color-background-primary);border-radius:12px;border:1px dashed var(--color-border-primary)">No agents created yet. Click "+ New Agent" to start.</div>';
+        return;
+      }
+
+      document.getElementById('agents-list').innerHTML = agents.map(a => `
+        <div class="agent-card">
+          <div class="agent-card-header">
+            <div>
+              <div class="agent-name">${a.name}</div>
+              <div class="agent-meta">${a.language} · ${a.voice} · Max ${a.max_duration}s · ${a.provider}</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <span class="status s-active"><span class="dot"></span>Active</span>
+              <button class="btn-outline" style="font-size:12px;padding:4px 10px">Edit</button>
+            </div>
+          </div>
+          <div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${a.script}</div>
+          <div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:6px;">Data extracted per call:</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+            ${a.data_fields.map(f => `<span class="col-dst" style="font-size:11px">${f}</span>`).join('')}
+          </div>
+        </div>
+      `).join('');
+    } catch (e) {
+      showToast("Error loading agents.");
+    }
+  }
+
+  async function saveNewAgent() {
+    const data = {
+      name: document.getElementById('agent-name').value,
+      voice: document.getElementById('agent-voice').value,
+      language: document.getElementById('agent-lang').value,
+      max_duration: parseInt(document.getElementById('agent-duration').value),
+      provider: document.getElementById('agent-provider').value,
+      script: document.getElementById('agent-script').value,
+      data_fields: document.getElementById('agent-fields').value.split(',').map(s => s.trim())
+    };
+
+    if (!data.name || !data.script) {
+      alert("Name and Script are required.");
+      return;
+    }
+
+    try {
+      showToast("Saving agent...");
+      const res = await fetch(`${API_BASE_URL}/agents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+      if (res.ok) {
+        closeModal();
+        showToast("Agent workflow saved and deployed.");
+        renderAgentWorkflows();
+      }
+    } catch (e) {
+      showToast("Save failed. Backend unreachable.");
+    }
+  }
+
+  async function renderAgentAssign() {
+    let agents = [];
+    try {
+      const res = await fetch(`${API_BASE_URL}/agents`);
+      agents = await res.json();
+    } catch (e) { }
+
+    const clientRows = Object.keys(clientProfile).map(cid => {
+      const p = clientProfile[cid];
+      return `
+        <tr>
+          <td><div class="inline-flex"><div class="avatar ${p.color}">${p.name[0]}${p.name[1]}</div>${p.name}</div></td>
+          <td><code style="font-size:11px;background:var(--color-background-secondary);padding:2px 6px;border-radius:4px">${cid.toUpperCase()}</code></td>
+          <td id="current-agent-${cid}"><span class="agent-chip">${p.agent}</span></td>
+          <td>
+            <select id="select-agent-${cid}" style="font-size:12px;padding:5px 8px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:var(--color-background-secondary);color:var(--color-text-primary);">
+              <option value="">-- No Agent --</option>
+              ${agents.map(a => `<option value="${a.id}" ${p.agent === a.name ? 'selected' : ''}>${a.name}</option>`).join('')}
+            </select>
+          </td>
+          <td><button class="btn-primary" style="padding:5px 12px;font-size:12px" onclick="saveAssignment('${cid}')">Save</button></td>
+        </tr>
+      `;
+    }).join('');
+
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>Assign Agents to Clients</h1><p>Each client sees only their assigned agent's data when they log in</p></div></div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Client</th><th>Unique ID</th><th>Current Agent</th><th>Change Agent</th><th></th></tr></thead>
+        <tbody>${clientRows}</tbody>
+      </table>
+    </div>
+  `;
+  }
+
+  async function saveAssignment(clientId) {
+    const agentId = document.getElementById(`select-agent-${clientId}`).value;
+    const agentName = document.getElementById(`select-agent-${clientId}`).options[document.getElementById(`select-agent-${clientId}`).selectedIndex].text;
+
+    try {
+      showToast("Saving assignment...");
+      const res = await fetch(`${API_BASE_URL}/assignments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId, agentId })
+      });
+      if (res.ok) {
+        clientProfile[clientId].agent = agentName;
+        document.getElementById(`current-agent-${clientId}`).innerHTML = `<span class="agent-chip">${agentName}</span>`;
+        showToast(`Assignment saved for ${clientProfile[clientId].name}`);
+      }
+    } catch (e) {
+      showToast("Failed to save assignment.");
+    }
+  }
+
+  function renderSettings() {
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>Platform Settings</h1></div></div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">AI Engine (Local + Cloud)</span></div>
+      <div style="padding:18px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div class="field"><label>Orchestration</label><select><option>Pipecat-AI (Local)</option><option>Custom WebSocket</option></select></div>
+        <div class="field"><label>Groq API Key</label><input type="text" value="gsk_••••••••••••••••" /></div>
+        <div class="field"><label>TTS Engine</label><select><option>Edge-TTS Cloud (Fast)</option><option>Kokoro Local (CPU)</option></select></div>
+        <div class="field"><label>STT Model</label><select><option>Faster-Whisper (distil-medium)</option><option>Deepgram (Cloud)</option></select></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Retry & Scheduling</span></div>
+      <div style="padding:18px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div class="field"><label>Retry attempts (no answer)</label><input type="number" value="2" /></div>
+        <div class="field"><label>Retry gap (hours)</label><input type="number" value="4" /></div>
+        <div class="field"><label>Calling window start</label><input type="time" value="10:00" /></div>
+        <div class="field"><label>Calling window end</label><input type="time" value="19:00" /></div>
+      </div>
+      <div style="padding:0 18px 18px"><button class="btn-primary">Save Settings</button></div>
+    </div>
+  `;
+  }
+
+  function renderClientOverview() {
+    const p = clientProfile[activeClient];
+    const isFinserv = activeClient === 'finserv';
+    document.getElementById('client-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>Welcome, ${p.name}</h1><p>Your voice agent dashboard — powered by <strong style="font-weight:500">${p.agent}</strong></p></div></div>
+    <div class="metrics">
+      <div class="metric-card"><div class="metric-label">Active Campaigns</div><div class="metric-value">${isFinserv ? 1 : 2}</div></div>
+      <div class="metric-card"><div class="metric-label">Calls Made (MTD)</div><div class="metric-value">${isFinserv ? '360' : '410'}</div><div class="metric-sub up">This month</div></div>
+      <div class="metric-card"><div class="metric-label">Connected</div><div class="metric-value">${isFinserv ? '145' : '156'}</div><div class="metric-sub">${isFinserv ? '40.3%' : '38%'} connect rate</div></div>
+      <div class="metric-card"><div class="metric-label">Plan</div><div class="metric-value" style="font-size:15px;margin-top:4px">${isFinserv ? '₹1L/mo' : '₹50K/mo'}</div><div class="metric-sub">${isFinserv ? 'Scale' : 'Growth'}</div></div>
+    </div>
+    <div class="card" style="margin-bottom:24px;background:linear-gradient(135deg, var(--color-primary-soft), var(--color-background-secondary));border:1px solid var(--color-primary-light);">
+      <div style="padding:24px;display:flex;align-items:center;justify-content:space-between;">
+        <div style="display:flex;align-items:center;gap:16px;">
+          <div class="avatar av-purple" style="width:56px;height:56px;font-size:20px;">NH</div>
+          <div>
+            <h2 style="margin:0;font-size:18px;">Talk to your Agent Live</h2>
+            <p style="margin:4px 0 0;font-size:13px;color:var(--color-text-secondary);">Speak to Neha through your microphone to test logic and tone.</p>
+          </div>
+        </div>
+        <button class="btn-primary" style="padding:12px 24px;display:flex;align-items:center;gap:8px" onclick="showLiveTalkModal()">
+          <span style="font-size:18px">🎙</span> Start Conversation
+        </button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><span class="card-title">Recent Campaigns</span><div style="display:flex;gap:10px;"><button class="btn-outline" onclick="showTestCallModal()">☏ Place Test Call</button><button class="btn-primary" onclick="cTab('upload', document.querySelectorAll('#screen-client .sidebar-item')[2])">+ New Campaign</button></div></div>
+      <table>
+        <thead><tr><th>Campaign</th><th>Sheet</th><th>Progress</th><th>Connected</th><th>Status</th></tr></thead>
+        <tbody>
+          ${isFinserv ? `
+          <tr><td>Renewal Drive June</td><td>renewals_june.xlsx</td><td><div style="display:flex;align-items:center;gap:8px"><div class="progress-bar" style="flex:1;min-width:80px"><div class="progress-fill" style="width:45%;background:#1D9E75"></div></div><span style="font-size:11px;color:var(--color-text-secondary)">360/800</span></div></td><td>145</td><td><span class="status s-active"><span class="dot"></span>Active</span></td></tr>
+          ` : `
+          <tr><td>Q2 Leads Drive</td><td>q2_leads.xlsx</td><td><div style="display:flex;align-items:center;gap:8px"><div class="progress-bar" style="flex:1;min-width:80px"><div class="progress-fill" style="width:72%"></div></div><span style="font-size:11px;color:var(--color-text-secondary)">360/500</span></div></td><td>138</td><td><span class="status s-active"><span class="dot"></span>Active</span></td></tr>
+          <tr><td>Old Leads Reactivation</td><td>reactivate.xlsx</td><td><div style="display:flex;align-items:center;gap:8px"><div class="progress-bar" style="flex:1;min-width:80px"><div class="progress-fill" style="width:25%"></div></div><span style="font-size:11px;color:var(--color-text-secondary)">50/200</span></div></td><td>18</td><td><span class="status s-paused"><span class="dot"></span>Paused</span></td></tr>
+          `}
+        </tbody>
+      </table>
+    </div>
+  `;
+  }
+
+  function renderClientCampaigns() {
+    const isFinserv = activeClient === 'finserv';
+    document.getElementById('client-main').innerHTML = `
+    <div class="page-header">
+      <div class="page-header-left"><h1>Campaigns</h1><p>All your voice outreach runs</p></div>
+      <button class="btn-primary" onclick="cTab('upload', document.querySelectorAll('#screen-client .sidebar-item')[2])">+ New Campaign</button>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Campaign</th><th>Created</th><th>Total</th><th>Called</th><th>Connected</th><th>${isFinserv ? 'Renewal Confirmed' : 'Interested'}</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          ${isFinserv ? `
+          <tr><td><strong style="font-weight:500">Renewal Drive June</strong></td><td style="color:var(--color-text-secondary)">Jun 3, 2025</td><td>800</td><td>360</td><td>145</td><td>62</td><td><span class="status s-active"><span class="dot"></span>Active</span></td><td><button class="btn-outline" style="font-size:12px;padding:4px 10px" onclick="cTab('results', document.querySelectorAll('#screen-client .sidebar-item')[3])">Results</button></td></tr>
+          ` : `
+          <tr><td><strong style="font-weight:500">Q2 Leads Drive</strong></td><td style="color:var(--color-text-secondary)">Jun 1, 2025</td><td>500</td><td>360</td><td>138</td><td>42</td><td><span class="status s-active"><span class="dot"></span>Active</span></td><td><button class="btn-outline" style="font-size:12px;padding:4px 10px" onclick="cTab('results', document.querySelectorAll('#screen-client .sidebar-item')[3])">Results</button></td></tr>
+          <tr><td><strong style="font-weight:500">Old Leads Reactivation</strong></td><td style="color:var(--color-text-secondary)">May 18, 2025</td><td>200</td><td>50</td><td>18</td><td>5</td><td><span class="status s-paused"><span class="dot"></span>Paused</span></td><td><button class="btn-outline" style="font-size:12px;padding:4px 10px">Results</button></td></tr>
+          `}
+        </tbody>
+      </table>
+    </div>
+  `;
+  }
+
+  function renderUpload() {
+    document.getElementById('client-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>Upload Sheet & Launch Campaign</h1><p>Your agent will call each row automatically</p></div></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-header"><span class="card-title">Step 1 — Connect Google Sheet</span></div>
+      <div style="padding:16px 18px">
+        <div class="upload-zone" onclick="simulateUpload()">
+          <div style="font-size:24px;margin-bottom:10px">↑</div>
+          <div style="font-size:15px;font-weight:500;margin-bottom:4px">Paste Google Sheet URL or Upload .xlsx</div>
+          <div style="font-size:12px;color:var(--color-text-secondary)">Headers must be in row 1</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <input type="text" placeholder="https://docs.google.com/spreadsheets/d/..." style="flex:1;padding:8px 12px;font-size:13px;border:0.5px solid var(--color-border-secondary);border-radius:var(--border-radius-md);background:var(--color-background-secondary);color:var(--color-text-primary);" />
+          <button class="btn-primary" onclick="simulateUpload()">Connect Sheet</button>
+        </div>
+      </div>
+    </div>
+    <div class="card" id="mapping-card" style="display:none">
+      <div class="card-header"><span class="card-title">Step 2 — Column Mapping</span><span style="font-size:12px;color:var(--color-text-secondary)">Auto-detected from your sheet</span></div>
+      <div style="padding:14px 18px 6px;font-size:12px;color:var(--color-text-secondary)">Source columns your agent reads vs. output columns it writes back:</div>
+      <div style="padding:6px 18px 16px">
+        <div style="display:grid;grid-template-columns:1fr 20px 1fr;gap:8px;margin-bottom:4px">
+          <div style="font-size:10px;color:var(--color-text-tertiary)">Agent reads</div><div></div>
+          <div style="font-size:10px;color:var(--color-text-tertiary)">Agent writes</div>
+        </div>
+        <div class="mapping-row"><div class="col-src">Phone Number</div><div class="arr">→</div><div style="font-size:12px;color:var(--color-text-secondary)">Used for dialing</div></div>
+        <div class="mapping-row"><div class="col-src">Name</div><div class="arr">→</div><div style="font-size:12px;color:var(--color-text-secondary)">Used in greeting</div></div>
+        <div class="mapping-row"><div style="font-size:12px;color:var(--color-text-secondary)">Auto-created</div><div class="arr">←</div><div class="col-dst">Call Status</div></div>
+        <div class="mapping-row"><div style="font-size:12px;color:var(--color-text-secondary)">Auto-created</div><div class="arr">←</div><div class="col-dst">Interested</div></div>
+        <div class="mapping-row"><div style="font-size:12px;color:var(--color-text-secondary)">Auto-created</div><div class="arr">←</div><div class="col-dst">Budget Mentioned</div></div>
+        <div class="mapping-row"><div style="font-size:12px;color:var(--color-text-secondary)">Auto-created</div><div class="arr">←</div><div class="col-dst">Callback Requested</div></div>
+      </div>
+      <div style="padding:0 18px 18px">
+        <div class="field"><label>Campaign Name</label><input type="text" placeholder="e.g. Q3 Leads July 2025" /></div>
+        <div style="display:flex;gap:10px">
+          <button class="btn-primary" onclick="launchCampaign()">Launch Campaign</button>
+          <button class="btn-outline">Save as Draft</button>
+        </div>
+      </div>
+    </div>
+  `;
+  }
+
+  function renderMyAgent() {
+    const p = clientProfile[activeClient];
+    const isFinserv = activeClient === 'finserv';
+    document.getElementById('client-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>Your Assigned Agent</h1><p>Configured and managed by Cosmic Chameleon</p></div></div>
+    <div class="agent-card">
+      <div class="agent-card-header">
+        <div>
+          <div class="agent-name">${p.agent}</div>
+          <div class="agent-meta">${isFinserv ? 'English · ElevenLabs Male · Max 3 min · Vapi.ai' : 'Hindi + English · ElevenLabs Female · Max 2 min · Vapi.ai'}</div>
+        </div>
+        <span class="status s-active"><span class="dot"></span>Active</span>
+      </div>
+      <div class="section-divider"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:4px">
+        <div>
+          <div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:6px">Script objective</div>
+          <div style="font-size:13px;color:var(--color-text-primary)">${isFinserv ? 'Remind about upcoming renewal, confirm intent to renew, capture objections' : 'Qualify interest in property, collect budget and timeline, book callback'}</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--color-text-tertiary);margin-bottom:6px">Data collected per call</div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap">
+            ${isFinserv ? `<span class="col-dst" style="font-size:11px">Call Status</span><span class="col-dst" style="font-size:11px">Renewal Confirmed</span><span class="col-dst" style="font-size:11px">Objection Reason</span><span class="col-dst" style="font-size:11px">Callback Date</span>` : `<span class="col-dst" style="font-size:11px">Call Status</span><span class="col-dst" style="font-size:11px">Interested Y/N</span><span class="col-dst" style="font-size:11px">Budget</span><span class="col-dst" style="font-size:11px">Timeline</span><span class="col-dst" style="font-size:11px">Callback Requested</span>`}
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:14px;padding:12px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);font-size:12px;color:var(--color-text-secondary)">To request changes to your agent script, voice, or data fields — contact your Cosmic Chameleon account manager.</div>
+    </div>
+  `;
+  }
+
+  let activeCampaignPolling = null;
+
+  async function renderResults(campaignId = 'default') {
+    const isFinserv = activeClient === 'finserv';
+    document.getElementById('client-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>Call Results — ${isFinserv ? 'Renewal Drive June' : 'Live Campaign'}</h1><p>Live data written back to your sheet by ${clientProfile[activeClient].agent}</p></div><button class="btn-outline">↓ Export Sheet</button></div>
+    <div class="metrics metrics-3">
+      <div class="metric-card"><div class="metric-label">Total Contacts</div><div id="res-total" class="metric-value">0</div></div>
+      <div class="metric-card"><div class="metric-label">Called</div><div id="res-called" class="metric-value">0</div><div id="res-prog" class="metric-sub" style="color:#534AB7">0% done</div></div>
+      <div class="metric-card"><div class="metric-label">Connected</div><div id="res-conn" class="metric-value">0</div><div id="res-rate" class="metric-sub">0% connect rate</div></div>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Name</th><th>Phone</th><th>Called At</th><th>Duration</th><th>Status</th><th>${isFinserv ? 'Renewal Confirmed' : 'Interested'}</th><th>${isFinserv ? 'Objection' : 'Budget'}</th><th>Callback</th></tr></thead>
+        <tbody id="results-table-body">
+          <tr><td colspan="8" style="text-align:center;padding:20px;">Fetching live results...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    `;
+
+    const fetchResults = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/campaigns/${campaignId}/results`);
+        const leads = await res.json();
+
+        if (leads.length === 0) {
+          document.getElementById('results-table-body').innerHTML = '<tr><td colspan="8" style="text-align:center;padding:20px;">No leads found for this campaign.</td></tr>';
+          return;
+        }
+
+        const processed = leads.filter(l => l.processed);
+        const connected = processed.filter(l => l.status === 'Connected');
+
+        document.getElementById('res-total').textContent = leads.length;
+        document.getElementById('res-called').textContent = processed.length;
+        document.getElementById('res-prog').textContent = Math.round((processed.length / leads.length) * 100) + '% done';
+        document.getElementById('res-conn').textContent = connected.length;
+        document.getElementById('res-rate').textContent = (processed.length > 0 ? Math.round((connected.length / processed.length) * 100) : 0) + '% connect rate';
+
+        document.getElementById('results-table-body').innerHTML = leads.map(l => `
+          <tr>
+            <td>${l.name}</td>
+            <td>${l.phone}</td>
+            <td style="color:var(--color-text-secondary)">${l.calledAt || '—'}</td>
+            <td>${l.duration || '—'}</td>
+            <td><span class="status ${l.status === 'Connected' ? 's-done' : (l.status === 'No Answer' ? 's-paused' : 's-draft')}">${l.status}</span></td>
+            <td>${l.interested || '—'}</td>
+            <td>${l.budget || l.objection || '—'}</td>
+            <td>${l.callback || '—'}</td>
+          </tr>
+        `).join('');
+
+        if (processed.length === leads.length && leads.length > 0) {
+          clearInterval(activeCampaignPolling);
+          showToast("Campaign complete!");
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    };
+
+    fetchResults();
+    if (activeCampaignPolling) clearInterval(activeCampaignPolling);
+    activeCampaignPolling = setInterval(fetchResults, 3000);
+  }
+
+  function simulateUpload() {
+    document.getElementById('mapping-card').style.display = 'block';
+    document.getElementById('mapping-card').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  async function launchCampaign() {
+    const campaignId = 'camp_' + Date.now();
+    const mockLeads = [
+      { name: "Rahul Sharma", phone: "+91 98200 12345" },
+      { name: "Priya Mehta", phone: "+91 99870 54321" },
+      { name: "Suresh Nair", phone: "+91 91234 56789" },
+      { name: "Anita Desai", phone: "+91 88888 77777" },
+      { name: "Manoj Pillai", phone: "+91 77777 66666" }
+    ];
+
+    try {
+      showToast('Uploading leads...');
+      const uploadRes = await fetch(`${API_BASE_URL}/leads/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId, leads: mockLeads })
+      });
+
+      if (uploadRes.ok) {
+        showToast('Launching voice agents...');
+        await fetch(`${API_BASE_URL}/campaigns/start`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ campaignId })
+        });
+
+        setTimeout(() => {
+          cTab('results', document.querySelectorAll('#screen-client .sidebar-item')[3]);
+          renderResults(campaignId);
+        }, 1000);
+      }
+    } catch (e) {
+      showToast("Connection failed. Is the backend running?");
+    }
+  }
+  function showAddClientModal() {
+    document.getElementById('modal-wrap').innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15, 23, 42, 0.5);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:100;animation: fadeIn 0.2s ease-out;" onclick="if(event.target===this)closeModal()">
+      <div style="background:var(--color-background-primary);border-radius:var(--border-radius-lg);width:460px;border:1px solid var(--color-border-primary);overflow:hidden;box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
+        <div style="padding:20px 24px;border-bottom:1px solid var(--color-border-primary);display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:16px;font-weight:600">Add New Client</span>
+          <button onclick="closeModal()" style="background:none;border:none;cursor:pointer;font-size:18px;color:var(--color-text-tertiary)">×</button>
+        </div>
+        <div style="padding:24px">
+          <div class="field"><label>Company Name</label><input type="text" placeholder="e.g. Realty Pro Inc." /></div>
+          <div class="field"><label>Login Email</label><input type="email" placeholder="ops@client.com" /></div>
+          <div class="field"><label>Monthly Plan</label><select><option>Starter — ₹25K/mo</option><option>Growth — ₹50K/mo</option><option>Scale — ₹1L/mo</option></select></div>
+          <div class="field" style="grid-column:1/-1"><label>Assign Agent Workflow</label><select><option>Neha — Real Estate Specialist</option><option>Arjun — Insurance Renewal Agent</option></select></div>
+        </div>
+        <div style="padding:16px 24px;background:var(--color-background-secondary);border-top:1px solid var(--color-border-primary);display:flex;justify-content:flex-end;gap:12px;">
+          <button class="btn-outline" onclick="closeModal()">Cancel</button>
+          <button class="btn-primary" onclick="closeModal();showToast('Client created successfully.')">Create Client</button>
+        </div>
+      </div>
+    </div>
+  `;
+  }
+
+  function showNewAgentModal() {
+    document.getElementById('modal-wrap').innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15, 23, 42, 0.5);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:100;animation: fadeIn 0.2s ease-out;" onclick="if(event.target===this)closeModal()">
+      <div style="background:var(--color-background-primary);border-radius:var(--border-radius-lg);width:540px;border:1px solid var(--color-border-primary);overflow:hidden;box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);transform: scale(1);animation: slideUp 0.3s ease-out;">
+        <div style="background: linear-gradient(135deg, var(--color-primary), var(--color-accent)); height: 60px; position: relative;">
+          <div style="padding:18px 20px;display:flex;justify-content:space-between;align-items:center;color:white;">
+            <span style="font-size:16px;font-weight:600">New Agent Configuration</span>
+            <button onclick="closeModal()" style="background:rgba(255,255,255,0.2);border:none;cursor:pointer;font-size:18px;color:white;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;">×</button>
+          </div>
+        </div>
+        <div style="padding:24px;display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div class="field" style="grid-column:1/-1"><label>Agent Name</label><input type="text" id="agent-name" value="Neha — Real Estate Specialist" placeholder="e.g. Neha — Lead Qualifier" /></div>
+          <div class="field"><label>Voice Engine</label><select id="agent-voice"><option value="en-IN-NeerjaNeural" selected>Edge-TTS — Neerja (Charismatic)</option><option value="en-IN-PrabhatNeural">Edge-TTS — Prabhat (Steady)</option><option value="kokoro">Kokoro — Local (Fastest)</option></select></div>
+          <div class="field"><label>Language</label><select id="agent-lang"><option selected>Multi (English, Hinglish, Marathi)</option><option>English Only</option><option>Hindi Only</option></select></div>
+          <div class="field"><label>Max call duration (sec)</label><input type="number" id="agent-duration" value="300" /></div>
+          <div class="field"><label>Provider Pipeline</label><select id="agent-provider"><option selected>Pipecat-AI Execution</option><option>Vobiz SIP Integration</option></select></div>
+          <div class="field" style="grid-column:1/-1"><label>Conversation Script</label><textarea id="agent-script" style="height:120px;font-family: inherit;">You are Neha from the Real Estate AI team. Qualify property leads with a warm, charismatic tone. Detect language naturally (English, Hinglish, Marathi).</textarea></div>
+          <div class="field" style="grid-column:1/-1"><label>Data fields to track</label><input type="text" id="agent-fields" value="Name, Location, Budget, Property Type, Interested" /></div>
+        </div>
+        <div style="padding:16px 24px;background:var(--color-background-secondary);border-top:1px solid var(--color-border-primary);display:flex;justify-content:flex-end;gap:12px;">
+          <button class="btn-outline" onclick="closeModal()">Cancel</button>
+          <button class="btn-primary" onclick="saveNewAgent()">Save Agent & Deploy</button>
+        </div>
+      </div>
+    </div>
+    <style>
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    </style>
+  `;
+  }
+
+  function showTestCallModal() {
+    document.getElementById('modal-wrap').innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15, 23, 42, 0.5);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:100;animation: fadeIn 0.2s ease-out;" onclick="if(event.target===this)closeModal()">
+      <div style="background:var(--color-background-primary);border-radius:var(--border-radius-lg);width:400px;border:1px solid var(--color-border-primary);overflow:hidden;box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
+        <div style="padding:18px 20px;border-bottom:1px solid var(--color-border-primary);display:flex;justify-content:space-between;align-items:center;"><span style="font-size:15px;font-weight:600">Place Test Call</span><button onclick="closeModal()" style="background:none;border:none;cursor:pointer;font-size:18px;color:var(--color-text-tertiary)">×</button></div>
+        <div style="padding:20px">
+          <div style="font-size:13px;color:var(--color-text-secondary);margin-bottom:16px;">The agent will call this number immediately to test the configured script and voice.</div>
+          <div class="field"><label>Phone Number</label><input type="text" id="test-phone" placeholder="+91 98765 43210" value="+91 00000 12345" /></div>
+          <div id="test-call-status" style="margin-top:12px;font-size:12px;color:var(--color-primary);display:none;">
+            <span class="dot" style="background:var(--color-primary)"></span> <span id="test-status-text">Dialing...</span>
+          </div>
+        </div>
+        <div style="padding:14px 20px;border-top:0.5px solid var(--color-border-tertiary);display:flex;justify-content:flex-end;gap:10px;">
+          <button class="btn-outline" onclick="closeModal()">Cancel</button>
+          <button class="btn-primary" onclick="launchTestCall()">Start Call</button>
+        </div>
+      </div>
+    </div>
+  `;
+  }
+
+  async function launchTestCall() {
+    const phone = document.getElementById('test-phone').value;
+    document.getElementById('test-call-status').style.display = 'block';
+
+    try {
+      showToast("Initiating test call...");
+      const campaignId = 'test_' + Date.now();
+
+      // 1. Upload the single lead
+      await fetch(`${API_BASE_URL}/leads/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId, leads: [{ name: "Test User", phone }] })
+      });
+
+      // 2. Start the campaign
+      await fetch(`${API_BASE_URL}/campaigns/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId })
+      });
+
+      document.getElementById('test-status-text').textContent = "Agent is speaking...";
+
+      setTimeout(() => {
+        closeModal();
+        cTab('results', document.querySelectorAll('#screen-client .sidebar-item')[3]);
+        renderResults(campaignId);
+      }, 2000);
+
+    } catch (e) {
+      showToast("Call failed. Check backend.");
+    }
+  }
+
+  let liveSocket = null;
+  let audioCtx = null;
+  let micStream = null;
+
+  function showLiveTalkModal() {
+    document.getElementById('modal-wrap').innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15, 23, 42, 0.7);backdrop-filter:blur(8px);display:flex;align-items:center;justify-content:center;z-index:100;animation: fadeIn 0.2s ease-out;">
+      <div style="background:var(--color-background-primary);border-radius:var(--border-radius-lg);width:450px;border:1px solid var(--color-border-primary);overflow:hidden;box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);">
+        <div style="padding:24px 30px;text-align:center;">
+          <div style="width:80px;height:80px;background:var(--color-primary-soft);border-radius:50%;margin:0 auto 20px;display:flex;align-items:center;justify-content:center;position:relative;">
+            <div id="live-pulse" style="position:absolute;inset:0;border-radius:50%;background:var(--color-primary);opacity:0.2;display:none;"></div>
+            <span style="font-size:32px">🎙</span>
+          </div>
+          <h2 id="live-title" style="margin:0;font-size:20px">Connect Neha</h2>
+          <p id="live-desc" style="color:var(--color-text-secondary);font-size:14px;margin:10px 0 24px;">Ready to speak with your AI agent?</p>
+          
+          <div id="live-controls" style="display:flex;flex-direction:column;gap:12px;">
+            <button id="btn-toggle-live" class="btn-primary" style="padding:14px;width:100%" onclick="startLiveVoice()">Connect & Start Talking</button>
+            <button class="btn-outline" style="padding:12px;width:100%" onclick="stopLiveVoice(); closeModal();">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  }
+
+  async function startLiveVoice() {
+    const btn = document.getElementById('btn-toggle-live');
+    const title = document.getElementById('live-title');
+    const desc = document.getElementById('live-desc');
+    const pulse = document.getElementById('live-pulse');
+
+    try {
+      btn.textContent = "Connecting...";
+      btn.disabled = true;
+
+      // 1. Get Mic Access & Setup Audio
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 } });
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+
+      // 2. Setup WebSocket
+      liveSocket = new WebSocket('ws://' + window.location.host + '/api/voice-live');
+      liveSocket.binaryType = 'arraybuffer';
+
+      liveSocket.onopen = () => {
+        title.textContent = "Connected to Neha";
+        desc.textContent = "I'm listening. Speak now!";
+        btn.textContent = "End Conversation";
+        btn.disabled = false;
+        btn.onclick = stopLiveVoice;
+        btn.style.background = "#EF4444";
+        pulse.style.display = 'block';
+        pulse.classList.add('pulse-anim');
+
+        // Start processing mic
+        const source = audioCtx.createMediaStreamSource(micStream);
+        const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+        source.connect(processor);
+        processor.connect(audioCtx.destination);
+
+        processor.onaudioprocess = (e) => {
+          if (liveSocket.readyState === WebSocket.OPEN) {
+            const input = e.inputBuffer.getChannelData(0);
+            // Convert float32 to pcm16
+            const pcm = new Int16Array(input.length);
+            for (let i = 0; i < input.length; i++) {
+              pcm[i] = Math.max(-1, Math.min(1, input[i])) * 0x7FFF;
+            }
+            liveSocket.send(pcm.buffer);
+          }
+        };
+      };
+
+      liveSocket.onmessage = async (e) => {
+        // AI response audio (24kHz PCM16)
+        const pcmData = new Int16Array(e.data);
+        const floatData = new Float32Array(pcmData.length);
+        for (let i = 0; i < pcmData.length; i++) {
+          floatData[i] = pcmData[i] / 0x7FFF;
+        }
+
+        const buffer = audioCtx.createBuffer(1, floatData.length, 24000);
+        buffer.getChannelData(0).set(floatData);
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioCtx.destination);
+        source.start();
+      };
+
+      liveSocket.onerror = () => showToast("Voice server error.");
+      liveSocket.onclose = () => stopLiveVoice();
+
+    } catch (e) {
+      console.error(e);
+      showToast("Mic access denied or server error.");
+      closeModal();
+    }
+  }
+
+  function stopLiveVoice() {
+    if (liveSocket) { liveSocket.close(); liveSocket = null; }
+    if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
+    if (audioCtx) { audioCtx.close(); audioCtx = null; }
+
+    showToast("Conversation ended.");
+    const btn = document.getElementById('btn-toggle-live');
+    if (btn) {
+      btn.textContent = "Connect & Start Talking";
+      btn.onclick = startLiveVoice;
+      btn.style.background = "";
+    }
+    const pulse = document.getElementById('live-pulse');
+    if (pulse) pulse.style.display = 'none';
+  }
+
+  function closeModal() { document.getElementById('modal-wrap').innerHTML = ''; }
+
+  function showToast(msg) {
+    const t = document.createElement('div');
+    t.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#111827;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:999;box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);display:flex;align-items:center;gap:10px;animation: slideIn 0.3s ease-out;';
+    t.innerHTML = `<span style="color:#10b981">✓</span> ${msg}`;
+    document.body.appendChild(t);
+    setTimeout(() => {
+      t.style.opacity = '0';
+      t.style.transition = 'opacity 0.2s ease';
+      setTimeout(() => t.remove(), 200);
+    }, 3000);
+  }
+
+  renderAdminOverview();
+</script>
