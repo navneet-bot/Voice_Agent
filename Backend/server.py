@@ -7,7 +7,19 @@ import json
 import os
 import uuid
 from datetime import datetime
+import logging
 from typing import List, Dict, Any, Optional
+
+# --- Logging Configuration ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s',
+    handlers=[
+        logging.FileHandler("voice_agent.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("server")
 
 # Import local modules
 from llm.state_manager import StateManager
@@ -17,7 +29,7 @@ import base64
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
-from pipecat.frames.frames import AudioRawFrame, EndFrame, TextFrame
+from pipecat.frames.frames import AudioRawFrame, EndFrame, TextFrame, StartFrame, Frame
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 from fastapi import WebSocket, WebSocketDisconnect
 from flows.runtime import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
@@ -90,7 +102,7 @@ def write_json(path, data):
 # Routes
 @app.get("/")
 async def get_index():
-    return FileResponse("voice_agent_platform_v2.html")
+    return FileResponse("../Frontend/index.html")
 
 @app.get("/api/dashboard")
 async def get_dashboard():
@@ -222,6 +234,12 @@ async def get_live_state(campaign_id: str):
     # Return list of active/last calls for this campaign
     return [v for k, v in state.items() if v.get("campaignId") == campaign_id]
 
+@app.get("/api/campaigns/all/live")
+async def get_all_live_state():
+    state = read_json(LIVE_STATE_FILE)
+    if not isinstance(state, dict): return []
+    return list(state.values())
+
 @app.get("/api/telephony/numbers")
 async def list_numbers():
     return [
@@ -235,9 +253,43 @@ async def buy_number():
 
 # --- Live Voice Support (Phase 8) ---
 
+# --- Live Voice Support (Phase 8) ---
+
 class VoiceLiveSource(FrameProcessor):
-    async def process_frame(self, frame, direction):
+    def __init__(self):
+        super().__init__()
+        self._started = False
+        self._queue = asyncio.Queue()
+        self._process_task = None
+
+    async def _process_queue(self):
+        logger.info("VoiceLiveSource: Waiting for StartFrame before processing queue...")
+        while not self._started:
+            await asyncio.sleep(0.05)
+        logger.info("VoiceLiveSource: Queue processing active.")
+        while True:
+            try:
+                frame = await self._queue.get()
+                await self.push_frame(frame, FrameDirection.DOWNSTREAM)
+                self._queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in queue processing: {e}")
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        if isinstance(frame, StartFrame):
+            self._started = True
+            logger.info("[PIPELINE] Source -> Received StartFrame from runner.")
+            if not self._process_task:
+                self._process_task = asyncio.create_task(self._process_queue())
+        else:
+            logger.info("[PIPELINE] Source -> Passing control frame: %s", type(frame).__name__)
         await self.push_frame(frame, direction)
+
+    def queue_audio(self, data: bytes):
+        frame = AudioRawFrame(audio=data, sample_rate=16000, num_channels=1)
+        self._queue.put_nowait(frame)
 
 class VoiceLiveSink(FrameProcessor):
     def __init__(self, websocket: WebSocket):
@@ -248,19 +300,35 @@ class VoiceLiveSink(FrameProcessor):
         if isinstance(frame, AudioRawFrame):
             # Send raw binary audio to browser for performance
             try:
+                logger.info("[PIPELINE] Sink -> Sending audio bytes to WebSocket")
                 await self.ws.send_bytes(frame.audio)
             except:
                 pass
+        else:
+            logger.info("[PIPELINE] Sink -> Passing control frame: %s", type(frame).__name__)
         await self.push_frame(frame, direction)
 
 @app.websocket("/api/voice-live")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    print("Live Voice: Browser connected")
+    
+    # Try to grab agentId from query params, otherwise use the last assigned agent
+    agent_id = websocket.query_params.get("agentId", "default")
+    logger.info("Live Voice: Browser connected. Agent ID: %s", agent_id)
+
+    # Determine schema path (using default if specified ID doesn't exist)
+    schema_path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
+    if not os.path.exists(schema_path):
+        schema_path = "Updated_Real_Estate_Agent.json"
+    
+    logger.info("Live Voice: Using schema from %s", schema_path)
 
     source = VoiceLiveSource()
     stt = RealEstateSTTProcessor()
     llm = RealEstateLLMProcessor()
+    # Pass the specialized schema to the LLM processor
+    llm.state_manager = StateManager(schema_path)
+    
     tts = RealEstateTTSProcessor()
     sink = VoiceLiveSink(websocket)
 
@@ -269,7 +337,7 @@ async def websocket_endpoint(websocket: WebSocket):
     task = PipelineTask(pipeline)
     runner_task = asyncio.create_task(runner.run(task))
 
-    print(f"Live Voice: Pipeline started. Task ID: {id(task)}")
+    logger.info("Live Voice: Pipeline runner started.")
 
     try:
         while True:
@@ -278,32 +346,26 @@ async def websocket_endpoint(websocket: WebSocket):
             if not data:
                 continue
             
-            # Diagnostic: check audio energy
-            # pcm = np.frombuffer(data, dtype=np.int16)
-            # if np.abs(pcm).max() > 500: print(f"Audio detected: {len(data)} bytes")
+            # Safely queue audio into the source
+            source.queue_audio(data)
 
-            # Push into STT
-            await source.push_frame(
-                AudioRawFrame(audio=data, sample_rate=16000, num_channels=1), 
-                FrameDirection.DOWNSTREAM
-            )
     except WebSocketDisconnect:
-        print("Live Voice: Browser disconnected explicitly")
+        logger.info("Live Voice: Browser disconnected explicitly")
     except Exception as e:
-        print(f"Live Voice Error in loop: {e}")
+        logger.error(f"Live Voice Error in loop: {e}")
     finally:
-        print("Live Voice: Cleaning up pipeline...")
+        logger.info("Live Voice: Cleaning up pipeline...")
         try:
+            if source._process_task:
+                source._process_task.cancel()
             await source.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             # Give the pipeline a moment to finish processing remaining frames
             await asyncio.sleep(0.5)
             runner_task.cancel()
             await runner_task
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            print(f"Cleanup error: {e}")
-        print("Live Voice: Closed.")
+        except (asyncio.CancelledError, Exception) as e:
+            logger.debug(f"Cleanup info: {e}")
+        logger.info("Live Voice: Closed.")
 
 if __name__ == "__main__":
     import uvicorn

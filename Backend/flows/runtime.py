@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 import logging
+import os
 import time
 import concurrent.futures
 
@@ -32,7 +33,9 @@ from llm.pipeline_logger import pipeline_logger
 from pipecat.frames.frames import StartFrame
 from stt import config as stt_cfg
 
-STATE_SCHEMA_PATH = "Updated_Real_Estate_Agent.json"
+# Root-relative path for the agent schema
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+STATE_SCHEMA_PATH = os.path.join(_ROOT, "Updated_Real_Estate_Agent.json")
 CALL_CONNECTED_TRIGGER = "[System: The call has just been connected. No user has spoken yet. Speak only for the current conversation node and do not transition.]"
 
 try:
@@ -50,7 +53,6 @@ except ImportError:
 
     def generate_speech_stream(text: str, preferred_language: str | None = None):
         return iter([])
-
 
 logger = logging.getLogger(__name__)
 
@@ -79,23 +81,31 @@ class RealEstateLLMProcessor(FrameProcessor):
             self.state_manager.reset_state()
             pipeline_logger.log_event("call_started", {"start_node": self.state_manager.start_node_id})
             
-            logger.info("Triggering initial greeting from StateManager...")
-            reply = await generate_response(
-                user_text=CALL_CONNECTED_TRIGGER,
-                conversation_history=self.history,
-                language=self.current_language,
-                state_manager=self.state_manager,
-                allow_transition=False,
-            )
+            logger.info("[PIPELINE] LLM -> Received StartFrame. Triggering initial greeting...")
+            try:
+                reply = await generate_response(
+                    user_text=CALL_CONNECTED_TRIGGER,
+                    conversation_history=self.history,
+                    language=self.current_language,
+                    state_manager=self.state_manager,
+                    allow_transition=False,
+                )
+                logger.info("[PIPELINE] LLM -> Greeting generated: %s", reply)
+            except Exception as e:
+                logger.error("[PIPELINE] LLM -> Greeting Failed: %s", e)
+                reply = "Hello, how can I help you today?"
+
             if reply:
                 self.history.append({"role": "assistant", "content": reply})
                 pipeline_logger.log_event("agent_reply", {"content": reply, "node": self.state_manager.current_node_id})
                 await self.push_frame(AgentTextFrame(reply, language=self.current_language), direction)
-                
-            await super().process_frame(frame, direction)
+            
+            await self.push_frame(frame, direction)
             return
+
         if not isinstance(frame, TextFrame):
-            await super().process_frame(frame, direction)
+            logger.info("[PIPELINE] LLM -> Passing control frame: %s", type(frame).__name__)
+            await self.push_frame(frame, direction)
             return
 
         user_text = frame.text.strip()
@@ -155,7 +165,8 @@ class RealEstateSTTProcessor(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
         if not isinstance(frame, AudioRawFrame):
-            await super().process_frame(frame, direction)
+            logger.info("[PIPELINE] STT -> Passing control frame: %s", type(frame).__name__)
+            await self.push_frame(frame, direction)
             return
 
         pcm16 = _ensure_pcm16(frame.audio, frame.sample_rate, stt_cfg.TARGET_SAMPLE_RATE)
@@ -203,7 +214,8 @@ class RealEstateTTSProcessor(FrameProcessor):
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
         if not isinstance(frame, TextFrame):
-            await super().process_frame(frame, direction)
+            logger.info("[PIPELINE] TTS -> Passing control frame: %s", type(frame).__name__)
+            await self.push_frame(frame, direction)
             return
 
         text = frame.text.strip()
@@ -214,7 +226,7 @@ class RealEstateTTSProcessor(FrameProcessor):
             return
 
         preferred_language = getattr(frame, "language", None)
-        logger.info("TTS synthesizing (%s): %s", preferred_language or "auto", text)
+        logger.info("[PIPELINE] TTS -> Synthesizing: %s", text)
         
         speech_gen = generate_speech_stream(text, preferred_language)
         if not speech_gen:
@@ -228,6 +240,7 @@ class RealEstateTTSProcessor(FrameProcessor):
                     try:
                         chunk_bytes = await asyncio.get_running_loop().run_in_executor(_executor, next, speech_gen)
                         if chunk_bytes:
+                            logger.info("[PIPELINE] TTS -> Sending audio chunk to Sink")
                             await self.push_frame(
                                 AudioRawFrame(audio=chunk_bytes, sample_rate=24000, num_channels=1),
                                 direction,
@@ -235,7 +248,7 @@ class RealEstateTTSProcessor(FrameProcessor):
                     except StopIteration:
                         break
         except Exception as exc:
-            logger.error("Error converting TTS audio: %s", exc)
+            logger.error("[PIPELINE] TTS -> Error: %s", exc)
 
 
 def _ms_to_bytes(duration_ms: int, sample_rate: int) -> int:

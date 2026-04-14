@@ -6,7 +6,7 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      - ./db:/app/db
+      - ./Backend/db:/app/Backend/db
     environment:
       - GROQ_API_KEY=${GROQ_API_KEY}
       # Add other keys as needed

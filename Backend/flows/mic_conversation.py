@@ -159,16 +159,17 @@ def run_conversation():
 
     try:
         from llm.state_manager import StateManager
-        state_manager = StateManager("Updated_Real_Estate_Agent.json")
+        schema_path = os.path.join(project_root, "Updated_Real_Estate_Agent.json")
+        state_manager = StateManager(schema_path)
     except ImportError:
         print("[ERROR] Failed to import state_manager")
         sys.exit(1)
 
     # Startup Header
-    print("─────────────────────────────────")
+    print("---------------------------------")
     print(" AI Voice Agent — Mic Mode")
     print(" Press Ctrl+C to end conversation")
-    print("─────────────────────────────────")
+    print("---------------------------------")
 
     conversation_history = []
     current_language = "en"

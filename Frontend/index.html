@@ -1102,6 +1102,107 @@
   `;
   }
 
+  async function renderAdminNumbers() {
+    const res = await fetch(`${API_BASE_URL}/telephony/numbers`);
+    const numbers = await res.json();
+
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>Telephony: Purchase Numbers</h1><p>Buy Indian regional numbers and assign them to clients</p></div><button class="btn-primary" onclick="buyNumber()">+ Buy New Number</button></div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Phone Number</th><th>Region</th><th>Currently Assigned To</th><th>Status</th></tr></thead>
+        <tbody>
+          ${numbers.map(n => `
+            <tr>
+              <td><strong style="font-weight:500">${n.phone}</strong></td>
+              <td style="color:var(--color-text-secondary)">${n.region}</td>
+              <td><span class="client-plan-tag" style="background:var(--color-background-secondary);color:var(--color-text-primary)">${n.assigned}</span></td>
+              <td><span class="status s-active"><span class="dot"></span>Live</span></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+    `;
+  }
+
+  async function buyNumber() {
+    showToast("Processing number purchase...");
+    const res = await fetch(`${API_BASE_URL}/telephony/buy`, { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(`Success! ${data.phone} is now yours.`);
+      renderAdminNumbers();
+    }
+  }
+
+  let monitorPolling = null;
+
+  function renderAdminMonitor(filterCampaignId = null) {
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header"><div class="page-header-left"><h1>↯ Live Call Tracker</h1><p>Real-time transcription and state monitoring across all active campaigns</p></div></div>
+    <div id="monitor-list" style="display:grid;grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));gap:16px;">
+      <div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--color-text-tertiary)">Waiting for active calls...</div>
+    </div>
+    `;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/campaigns/all/live`); // Special endpoint for all live calls
+        let calls = await res.json();
+        if (filterCampaignId) calls = calls.filter(c => c.campaignId === filterCampaignId);
+
+        if (calls.length === 0) {
+           document.getElementById('monitor-list').innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:var(--color-text-tertiary)">Waiting for active calls...</div>`;
+           return;
+        }
+
+        document.getElementById('monitor-list').innerHTML = calls.map(c => `
+          <div class="card" style="margin-bottom:0;display:flex;flex-direction:column;height:400px">
+            <div class="card-header" style="background:var(--color-background-secondary)">
+              <div style="display:flex;align-items:center;gap:10px">
+                <div class="avatar av-purple" style="width:32px;height:32px">${c.name[0]}</div>
+                <div>
+                  <div style="font-size:13px;font-weight:600">${c.name}</div>
+                  <div style="font-size:11px;color:var(--color-text-tertiary)">${c.campaignId}</div>
+                </div>
+              </div>
+              <span class="status ${c.status === 'Talking' ? 's-active' : (c.status === 'Ringing' ? 's-paused' : 's-done')}">
+                <span class="dot" style="animation: pulse-anim 1s infinite"></span>${c.status}
+              </span>
+            </div>
+            <div style="flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;background:#FAFBFF" id="chat-${c.campaignId}-${c.name.replace(/\s+/g, '')}">
+              ${c.transcripts.map(t => `
+                <div style="align-self: ${t.role === 'assistant' ? 'flex-start' : 'flex-end'}; max-width: 80%;">
+                  <div style="font-size:10px;color:var(--color-text-tertiary);margin-bottom:2px;text-align: ${t.role === 'assistant' ? 'left' : 'right'}">${t.role === 'assistant' ? 'Neha' : 'User'}</div>
+                  <div style="padding:8px 12px;border-radius:12px;font-size:12px;line-height:1.4;${t.role === 'assistant' ? 'background:#fff;border:0.5px solid var(--color-border-primary);border-top-left-radius:2px;' : 'background:var(--color-primary);color:#fff;border-top-right-radius:2px;'}">
+                    ${t.content}
+                  </div>
+                </div>
+              `).join('')}
+              ${c.status === 'Talking' ? `<div style="font-size:11px;color:var(--color-text-tertiary);font-style:italic">Neha is typing...</div>` : ''}
+            </div>
+            <div style="padding:10px;border-top:0.5px solid var(--color-border-tertiary);background:#fff;font-size:11px;display:flex;justify-content:space-between">
+              <span>Last event: ${new Date(c.lastUpdate).toLocaleTimeString()}</span>
+              <span style="color:var(--color-primary)">Live Monitoring ON</span>
+            </div>
+          </div>
+        `).join('');
+
+        // Scroll to bottom for all boxes
+        calls.forEach(c => {
+          const el = document.getElementById(`chat-${c.campaignId}-${c.name.replace(/\s+/g, '')}`);
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+
+      } catch (e) { console.error("Monitor poll error:", e); }
+    };
+
+    if (monitorPolling) clearInterval(monitorPolling);
+    poll();
+    monitorPolling = setInterval(poll, 2000);
+  }
+
   function renderClientOverview() {
     const p = clientProfile[activeClient];
     const isFinserv = activeClient === 'finserv';
@@ -1535,18 +1636,24 @@
         processor.connect(audioCtx.destination); // For loopback monitoring if needed, but we pull data
 
         const ratio = audioCtx.sampleRate / targetSampleRate;
-        let lastSample = 0;
 
         processor.onaudioprocess = (e) => {
           if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
             const input = e.inputBuffer.getChannelData(0);
-            // Resample to 16kHz
+            
+            // Linear Resampler for high-fidelity 16kHz
             const outputLength = Math.floor(input.length / ratio);
             const output = new Int16Array(outputLength);
 
             for (let i = 0; i < outputLength; i++) {
-              const idx = Math.floor(i * ratio);
-              const sample = input[idx];
+              const sourceIdx = i * ratio;
+              const index = Math.floor(sourceIdx);
+              const fraction = sourceIdx - index;
+              
+              const s1 = input[index];
+              const s2 = (index + 1 < input.length) ? input[index + 1] : s1;
+              
+              const sample = s1 + (s2 - s1) * fraction;
               output[i] = Math.max(-32768, Math.min(32767, sample * 32767));
             }
             liveSocket.send(output.buffer);
@@ -1555,6 +1662,8 @@
       };
 
       let nextStartTime = 0;
+      const JITTER_BUFFER_MS = 150; // Increased jitter buffer for stability
+
       liveSocket.onmessage = async (e) => {
         if (!audioCtx) return;
         const pcmData = new Int16Array(e.data);
@@ -1569,7 +1678,11 @@
         source.connect(audioCtx.destination);
 
         const currentTime = audioCtx.currentTime;
-        if (nextStartTime < currentTime) nextStartTime = currentTime + 0.1; // Minimal buffer for smoothness
+        
+        // Jitter Buffer Scheduling logic
+        if (nextStartTime < currentTime) {
+          nextStartTime = currentTime + (JITTER_BUFFER_MS / 1000);
+        }
 
         source.start(nextStartTime);
         nextStartTime += buffer.duration;

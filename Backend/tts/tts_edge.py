@@ -40,22 +40,18 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
         logger.debug("speech_formatter unavailable, using raw text")
 
     # Edge-TTS streams mp3 chunks usually. We must decode them to raw PCM16 for Pipecat/sounddevice.
-    # We will use miniaudio to decode the mp3 payloads in memory instantly.
+    # We will use soundfile (libsndfile) to decode the mp3 payloads in memory.
     try:
-        import miniaudio
+        import soundfile as sf
     except ImportError:
-        logger.error("miniaudio not installed. Please `pip install miniaudio` for Edge TTS streaming.")
+        logger.error("soundfile not installed. Please `pip install soundfile`.")
         yield b""
         return
 
     try:
         # Run asynchronously and collect stream blocks.
-        # The `rate` parameter controls speaking pace as a percentage offset
-        # from neutral (e.g. "+8%" = 8 % faster).  The value is pulled from
-        # tts/config.py so it stays constant across the entire call session.
         communicate = edge_tts.Communicate(text, DEFAULT_VOICE, rate=EDGE_SPEECH_RATE)
         
-        # Helper to run async Edge-TTS stream in an isolated sync loop
         async def _collect_mp3():
             audio_buffer = bytearray()
             async for chunk in communicate.stream():
@@ -67,8 +63,6 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                # We are presumably inside an executor thread 
-                # (via run_in_executor in flows/runtime) so we need a new loop or just to run it
                 new_loop = asyncio.new_event_loop()
                 mp3_bytes = new_loop.run_until_complete(_collect_mp3())
                 new_loop.close()
@@ -81,11 +75,15 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
             yield b""
             return
 
-        # Convert the MP3 bytes payload directly into 24kHz PCM16 using miniaudio
-        decoded_audio = miniaudio.decode(mp3_bytes, sample_rate=24000, nchannels=1)
+        # Decode MP3 to PCM using soundfile (which supports MP3 since v1.1.0)
+        with io.BytesIO(mp3_bytes) as mp3_file:
+            # We explicitly specify the format to help soundfile
+            data, samplerate = sf.read(mp3_file)
         
-        # Extract native byte stream
-        pcm_bytes = bytes(decoded_audio.samples)
+        # soundfile returns float arrays. Convert to PCM16.
+        # Ensure we target 24000Hz if the output wasn't already (though Edge usually is)
+        pcm16 = (data * 32767).astype(np.int16)
+        pcm_bytes = pcm16.tobytes()
 
         # Yield in sensible chunks (e.g. 4096 bytes) for streaming
         chunk_size = 4096
