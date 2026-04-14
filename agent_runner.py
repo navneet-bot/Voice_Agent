@@ -57,24 +57,47 @@ async def run_campaign(campaign_id: str, agent_id: str):
     # Load agent schema
     agent_path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
     if not os.path.exists(agent_path):
-        # Fallback to default if not found (for safety)
         agent_path = "Updated_Real_Estate_Agent.json"
 
+    # Initialize Live Monitor State
+    LIVE_STATE_FILE = os.path.join(DB_DIR, "live_state.json")
+    def update_live_state(lead_id, name, status, snippet="", transcripts=[]):
+        state = read_json(LIVE_STATE_FILE)
+        if not isinstance(state, dict): state = {}
+        state[lead_id] = {
+            "campaignId": campaign_id,
+            "name": name,
+            "status": status,
+            "snippet": snippet,
+            "transcripts": transcripts,
+            "lastUpdate": datetime.now().isoformat()
+        }
+        write_json(LIVE_STATE_FILE, state)
+
     for lead in campaign_leads:
+        lead_uid = f"{campaign_id}_{lead['phone']}"
         print(f"Starting call for {lead['name']} ({lead['phone']})...")
+        update_live_state(lead_uid, lead['name'], "Ringing...")
+        
         state_manager = StateManager(agent_path)
+        transcripts = []
         
         # 1. Initial Greeting
         response = await generate_response("[System: The call has just been connected.]", [], state_manager=state_manager, allow_transition=False)
+        transcripts.append({"role": "assistant", "content": response})
+        update_live_state(lead_uid, lead['name'], "Talking", response, transcripts)
         
         turns = 0
         while not state_manager.is_terminal_node() and turns < 10:
             user_text = await simulate_human_response(response, lead['name'])
-            print(f"User: {user_text}")
+            transcripts.append({"role": "user", "content": user_text})
+            update_live_state(lead_uid, lead['name'], "Talking", user_text, transcripts)
             
             response = await generate_response(user_text, [], state_manager=state_manager)
-            print(f"AI  : {response}")
+            transcripts.append({"role": "assistant", "content": response})
+            update_live_state(lead_uid, lead['name'], "Talking", response, transcripts)
             turns += 1
+            await asyncio.sleep(1.5) # Simulate natural pauses
 
         # 2. Record results
         campaigns = read_json(CAMPAIGNS_FILE)
@@ -89,11 +112,13 @@ async def run_campaign(campaign_id: str, agent_id: str):
                 "interested": "Yes" if state_manager.conversation_data.get("location") else "No",
                 "budget": state_manager.conversation_data.get("budget", "—"),
                 "callback": state_manager.conversation_data.get("timeline", "—"),
+                "transcription": transcripts,
                 "processed": True
             }
             campaign["results"].append(result)
             write_json(CAMPAIGNS_FILE, campaigns)
         
+        update_live_state(lead_uid, lead['name'], "Completed", "Call ended", transcripts)
         await asyncio.sleep(1) # Gap between calls
 
     # Mark campaign as done

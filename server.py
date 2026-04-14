@@ -211,6 +211,28 @@ async def update_assignment(data: AssignmentUpdate):
     write_json(ASSIGNMENTS_FILE, assignments)
     return {"status": "success"}
 
+# --- Telephony Monitoring & Simulation (Phase 10) ---
+
+LIVE_STATE_FILE = os.path.join(DB_DIR, "live_state.json")
+
+@app.get("/api/campaigns/{campaign_id}/live")
+async def get_live_state(campaign_id: str):
+    state = read_json(LIVE_STATE_FILE)
+    if not isinstance(state, dict): return []
+    # Return list of active/last calls for this campaign
+    return [v for k, v in state.items() if v.get("campaignId") == campaign_id]
+
+@app.get("/api/telephony/numbers")
+async def list_numbers():
+    return [
+        {"phone": "+91 9122 334455", "region": "Mumbai, IN", "assigned": "Realty Pro Inc."},
+        {"phone": "+91 9155 667788", "region": "Bangalore, IN", "assigned": "FinServ Co"}
+    ]
+
+@app.post("/api/telephony/buy")
+async def buy_number():
+    return {"status": "success", "phone": "+91 9122 " + str(uuid.uuid4().int)[:6]} # Mock purchase
+
 # --- Live Voice Support (Phase 8) ---
 
 class VoiceLiveSource(FrameProcessor):

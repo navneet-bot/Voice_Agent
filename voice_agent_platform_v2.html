@@ -624,6 +624,11 @@
         <div class="sidebar-item" onclick="aTab('campaigns',this)">◈ All Campaigns</div>
       </div>
       <div class="sidebar-section">
+        <div class="sidebar-label">Telephony</div>
+        <div class="sidebar-item" onclick="aTab('numbers',this)">☎ Purchase Numbers</div>
+        <div class="sidebar-item" onclick="aTab('monitor',this)">↯ Live Call Tracker</div>
+      </div>
+      <div class="sidebar-section">
         <div class="sidebar-label">Agents</div>
         <div class="sidebar-item" onclick="aTab('agents',this)">◎ Agent Workflows</div>
         <div class="sidebar-item" onclick="aTab('assign',this)">⇌ Assign to Clients</div>
@@ -718,7 +723,7 @@
   function aTab(tab, el) {
     document.querySelectorAll('#screen-admin .sidebar-item').forEach(i => i.classList.remove('active'));
     el.classList.add('active');
-    const fns = { overview: renderAdminOverview, clients: renderAdminClients, campaigns: renderAdminCampaigns, agents: renderAgentWorkflows, assign: renderAgentAssign, settings: renderSettings };
+    const fns = { overview: renderAdminOverview, clients: renderAdminClients, campaigns: renderAdminCampaigns, agents: renderAgentWorkflows, assign: renderAgentAssign, settings: renderSettings, numbers: renderAdminNumbers, monitor: renderAdminMonitor };
     if (fns[tab]) fns[tab]();
   }
 
@@ -798,6 +803,127 @@
       </table>
     </div>
   `;
+  }
+
+  function renderAdminNumbers() {
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header">
+      <div class="page-header-left"><h1>Telephony Numbers</h1><p>Purchase and manage virtual numbers for your clients</p></div>
+      <button class="btn-primary" onclick="showBuyNumberModal()">+ Purchase Number</button>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Phone Number</th><th>Region</th><th>Assigned To</th><th>Status</th><th>Billing</th></tr></thead>
+        <tbody>
+          <tr><td><strong>+91 9122 334455</strong></td><td>Mumbai, IN</td><td>Realty Pro Inc.</td><td><span class="status s-active"><span class="dot"></span>Live</span></td><td>₹1,500/mo</td></tr>
+          <tr><td><strong>+91 9155 667788</strong></td><td>Bangalore, IN</td><td>FinServ Co</td><td><span class="status s-active"><span class="dot"></span>Live</span></td><td>₹1,500/mo</td></tr>
+          <tr><td colspan="5" style="text-align:center;padding:40px;color:var(--color-text-tertiary)">Search more numbers to scale your outreach</td></tr>
+        </tbody>
+      </table>
+    </div>
+    `;
+  }
+
+  let liveMonitorInterval = null;
+  function renderAdminMonitor(targetCampaignId = null) {
+    document.getElementById('admin-main').innerHTML = `
+    <div class="page-header">
+      <div class="page-header-left"><h1>Live Call Tracker</h1><p>Real-time oversight of all AI voice interactions</p></div>
+    </div>
+    <div style="display:grid;grid-template-columns: 1fr 340px; gap: 20px;">
+      <div class="card">
+        <div class="card-header"><span class="card-title">Active Calls</span></div>
+        <div id="live-monitor-list" style="padding:0; min-height:400px;">
+          <div style="padding:20px; text-align:center; color:var(--color-text-tertiary)">
+            No active outgoing calls. Start a campaign to see live data.
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="card-title">Live Transcript</span></div>
+        <div id="live-monitor-transcript" style="padding:20px; font-size:13px; height:400px; overflow-y:auto; display:flex; flex-direction:column; gap:12px;">
+          <div style="text-align:center; margin-top:100px; color:var(--color-text-tertiary)">Select an active call to see transcript</div>
+        </div>
+      </div>
+    </div>
+    `;
+
+    if (liveMonitorInterval) clearInterval(liveMonitorInterval);
+
+    const poll = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/campaigns/${targetCampaignId || 'any'}/live`);
+        const calls = await res.json();
+
+        if (calls.length === 0) return;
+
+        const listHtml = `
+          <table style="width:100%; border-collapse:collapse;">
+            <thead style="background:var(--color-background-secondary); font-size:11px;">
+              <tr><th style="padding:10px 18px">Lead</th><th style="padding:10px 18px">Status</th><th style="padding:10px 18px">Last Snippet</th><th></th></tr>
+            </thead>
+            <tbody>
+              ${calls.map(c => `
+                <tr style="cursor:pointer" onclick="viewCallTranscript('${btoa(JSON.stringify(c.transcripts))}')">
+                  <td style="padding:12px 18px"><strong>${c.name}</strong></td>
+                  <td style="padding:12px 18px"><span class="status ${c.status === 'Talking' ? 's-active' : (c.status === 'Completed' ? 's-done' : 's-paused')}">${c.status}</span></td>
+                  <td style="padding:12px 18px; color:var(--color-text-secondary); max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">"${c.snippet}"</td>
+                  <td style="padding:12px 18px; text-align:right"><button class="btn-sm">View</button></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+        document.getElementById('live-monitor-list').innerHTML = listHtml;
+      } catch (e) { }
+    };
+
+    if (targetCampaignId) {
+      poll();
+      liveMonitorInterval = setInterval(poll, 2000);
+    }
+  }
+
+  function viewCallTranscript(base64Data) {
+    const transcripts = JSON.parse(atob(base64Data));
+    const container = document.getElementById('live-monitor-transcript');
+    container.innerHTML = transcripts.map(t => `
+      <div style="display:flex; flex-direction:column; align-items: ${t.role === 'assistant' ? 'flex-start' : 'flex-end'}">
+        <div style="font-size:10px; color:var(--color-text-tertiary); margin-bottom:2px;">${t.role === 'assistant' ? 'Neha' : 'User'}</div>
+        <div style="background: ${t.role === 'assistant' ? 'var(--color-background-secondary)' : 'var(--color-primary)'}; color: ${t.role === 'assistant' ? 'var(--color-text-primary)' : 'white'}; padding: 8px 12px; border-radius: 12px ${t.role === 'assistant' ? '12px 12px 0' : '12px 0 12px'}; max-width: 85%; line-height:1.4;">
+          ${t.content}
+        </div>
+      </div>
+    `).join('');
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function showBuyNumberModal() {
+    document.getElementById('modal-wrap').innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15, 23, 42, 0.5);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:100;animation: fadeIn 0.2s ease-out;">
+      <div style="background:var(--color-background-primary);border-radius:var(--border-radius-lg);width:450px;border:1px solid var(--color-border-primary);overflow:hidden;box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
+        <div style="padding:20px 24px;border-bottom:1px solid var(--color-border-primary);display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:16px;font-weight:600">Purchase Virtual Number</span>
+          <button onclick="closeModal()" style="background:none;border:none;cursor:pointer;font-size:18px;color:var(--color-text-tertiary)">×</button>
+        </div>
+        <div style="padding:24px">
+          <div style="margin-bottom:16px; font-size:13px; color:var(--color-text-secondary)">Select a region to find available local numbers for your AI agent.</div>
+          <div class="field"><label>Select Region</label><select><option>Mumbai (+91 22)</option><option>Delhi (+91 11)</option><option>Bangalore (+91 80)</option></select></div>
+          <div style="margin-top:20px;">
+            <div style="font-size:12px; font-weight:600; text-transform:uppercase; margin-bottom:10px; color:var(--color-text-tertiary)">Available Numbers</div>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+              <div style="padding:10px; border:1px solid var(--color-border-primary); border-radius:var(--border-radius-md); display:flex; justify-content:space-between; align-items:center;">
+                <span>+91 9122 454567</span><button class="btn-sm" style="background:var(--color-primary); color:white; border:none;" onclick="closeModal(); showToast('Number purchased successfully.')">Select</button>
+              </div>
+              <div style="padding:10px; border:1px solid var(--color-border-primary); border-radius:var(--border-radius-md); display:flex; justify-content:space-between; align-items:center;">
+                <span>+91 9122 888999</span><button class="btn-sm" style="background:var(--color-primary); color:white; border:none;" onclick="closeModal(); showToast('Number purchased successfully.')">Select</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    `;
   }
 
   function renderAdminCampaigns() {
@@ -1213,10 +1339,14 @@
           body: JSON.stringify({ campaignId })
         });
 
-        setTimeout(() => {
+        // Redirect to Monitor for Admin, Results for Client
+        if (currentRole === 'admin') {
+          aTab('monitor', document.querySelectorAll('#screen-admin .sidebar-item')[4]);
+          setTimeout(() => renderAdminMonitor(campaignId), 500);
+        } else {
           cTab('results', document.querySelectorAll('#screen-client .sidebar-item')[3]);
           renderResults(campaignId);
-        }, 1000);
+        }
       }
     } catch (e) {
       showToast("Connection failed. Is the backend running?");
@@ -1369,15 +1499,15 @@
       btn.textContent = "Connecting...";
       btn.disabled = true;
 
-      // 1. Get Mic Access & Setup Audio
-      micStream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 } });
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+      // 1. Setup Audio Context & Resampling helper
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const targetSampleRate = 16000;
 
       // 2. Setup WebSocket
       liveSocket = new WebSocket('ws://' + window.location.host + '/api/voice-live');
       liveSocket.binaryType = 'arraybuffer';
 
-      liveSocket.onopen = () => {
+      liveSocket.onopen = async () => {
         title.textContent = "Connected to Neha";
         desc.textContent = "I'm listening. Speak now!";
         btn.textContent = "End Conversation";
@@ -1387,40 +1517,56 @@
         pulse.style.display = 'block';
         pulse.classList.add('pulse-anim');
 
-        // Start processing mic
+        // Capture Mic with Resampling
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const source = audioCtx.createMediaStreamSource(micStream);
         const processor = audioCtx.createScriptProcessor(4096, 1, 1);
 
         source.connect(processor);
         processor.connect(audioCtx.destination);
 
+        const resampleBuffer = [];
+        const ratio = audioCtx.sampleRate / targetSampleRate;
+
         processor.onaudioprocess = (e) => {
-          if (liveSocket.readyState === WebSocket.OPEN) {
+          if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
             const input = e.inputBuffer.getChannelData(0);
-            // Convert float32 to pcm16
-            const pcm = new Int16Array(input.length);
-            for (let i = 0; i < input.length; i++) {
-              pcm[i] = Math.max(-1, Math.min(1, input[i])) * 0x7FFF;
+
+            // Basic linear resampling to 16kHz
+            for (let i = 0; i < input.length; i += ratio) {
+              const sample = input[Math.floor(i)];
+              const pcm = Math.max(-1, Math.min(1, sample)) * 0x7FFF;
+              resampleBuffer.push(pcm);
             }
-            liveSocket.send(pcm.buffer);
+
+            if (resampleBuffer.length >= 1600) { // Send 100ms chunks
+              const pcmArray = new Int16Array(resampleBuffer);
+              liveSocket.send(pcmArray.buffer);
+              resampleBuffer.length = 0;
+            }
           }
         };
       };
 
+      // Playback Queue for Incoming Audio chunks (Jitter Buffer)
+      let nextStartTime = 0;
       liveSocket.onmessage = async (e) => {
-        // AI response audio (24kHz PCM16)
         const pcmData = new Int16Array(e.data);
         const floatData = new Float32Array(pcmData.length);
-        for (let i = 0; i < pcmData.length; i++) {
-          floatData[i] = pcmData[i] / 0x7FFF;
-        }
+        for (let i = 0; i < pcmData.length; i++) floatData[i] = pcmData[i] / 0x7FFF;
 
         const buffer = audioCtx.createBuffer(1, floatData.length, 24000);
         buffer.getChannelData(0).set(floatData);
+
         const source = audioCtx.createBufferSource();
         source.buffer = buffer;
         source.connect(audioCtx.destination);
-        source.start();
+
+        const currentTime = audioCtx.currentTime;
+        if (nextStartTime < currentTime) nextStartTime = currentTime + 0.05;
+
+        source.start(nextStartTime);
+        nextStartTime += buffer.duration;
       };
 
       liveSocket.onerror = () => showToast("Voice server error.");
