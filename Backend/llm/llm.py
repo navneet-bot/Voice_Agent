@@ -28,6 +28,10 @@ KNOWN_INTENTS = [
     "confirm_identity",
     "confirm",
     "deny",
+    "deny_identity",
+    "deny_interest",
+    "deny_time",
+    "deny_visit_time",
     "provide_intent",
     "provide_location",
     "provide_budget",
@@ -67,7 +71,8 @@ Schema:
   }
 }
 
-KNOWN_INTENTS: confirm_identity, confirm, deny, provide_intent, provide_location,
+KNOWN_INTENTS: confirm_identity, confirm, deny, deny_identity, deny_interest,
+deny_time, deny_visit_time, provide_intent, provide_location,
 provide_budget, provide_property_type, provide_timeline, confirm_site_visit,
 deny_site_visit, provide_visit_datetime, ask_location_suggestion, ask_off_topic, unclear_intent,
 unclear_location, unclear_budget, unclear_property_type, unclear_visit_datetime,
@@ -76,7 +81,11 @@ unclear_callback_time, unclear
 Rules:
 - Choose the single most specific intent
 - Confirmation words (yes, yeah, yep, correct, right, ok, okay, sure, go ahead) -> intent: "confirm"
-- Denial words (no, not now, busy, later, nahi) -> intent: "deny"
+- Generic denial (no, nahi) without specific keywords -> intent: "deny"
+- "wrong number", "wrong person", "not Prashant", "this is not" -> intent: "deny_identity"
+- "not interested", "no requirement", "don't need property" -> intent: "deny_interest"
+- "busy", "call later", "not now", "in a meeting" -> intent: "deny_time"
+- "not this weekend", "busy this week", "can't this week" -> intent: "deny_visit_time"
 - Location suggestion questions like "suggest", "recommend", "which area", "best location",
   "good location", or "any options" -> intent: "ask_location_suggestion"
 - Do not label a suggestion question as "provide_location"
@@ -173,7 +182,7 @@ def extract_intent(user_text: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Informational LLM fallback — called ONLY when no JSON node matches intent
+# Phrase-constrained LLM response — called ONLY when no JSON node matches
 # ---------------------------------------------------------------------------
 
 def _load_prompt_rules() -> str:
@@ -188,48 +197,84 @@ def _load_prompt_rules() -> str:
 
 _PROMPT_RULES: str = _load_prompt_rules()
 
-_INFORMATIONAL_SYSTEM = (
-    "You are Neha, a real estate assistant on a phone call. "
-    "Answer the user's question in 1–2 sentences, maximum 25 words. "
-    "Be factual and neutral — do not pitch or persuade. "
-    "Do NOT ask any question — the system will ask the next question automatically. "
-    "Do NOT collect information like location, budget, or property type. "
-    "Plain text only. No JSON. No markdown."
-)
-if _PROMPT_RULES:
-    _INFORMATIONAL_SYSTEM += "\n\n" + _PROMPT_RULES
-
 _STATIC_FALLBACK = (
     "That's a great question. Let me continue with a few details to help you better."
 )
 
 
-def generate_informational_response(user_text: str, context: dict) -> str:
+def _build_phrase_constrained_system(phrase_bank: list[str]) -> str:
     """
-    Generate a short informational reply for off-topic or clarification questions.
+    Build a system prompt that constrains the LLM to compose responses
+    using ONLY phrases from the approved phrase bank.
+    """
+    bank_text = "\n".join(f"- {p}" for p in phrase_bank)
+    system = (
+        "You are Neha, a real estate assistant on a phone call.\n\n"
+        "## RESPONSE CONSTRUCTION RULES\n"
+        "You MUST construct your response using ONLY words, phrases, and sentences "
+        "from the PHRASE BANK below.\n"
+        "You may slightly modify grammar to make the response natural.\n"
+        "You must NOT introduce new claims, facts, or sales statements not present "
+        "in the PHRASE BANK.\n"
+        "You must NOT change the meaning of any business messaging.\n\n"
+        "## COMPOSITION RULES\n"
+        "- Maximum 2 sentences per response\n"
+        "- Maximum 25 words per sentence\n"
+        "- Do NOT ask any question — the system will ask the next question automatically\n"
+        "- Do NOT collect information like location, budget, or property type\n"
+        "- Plain text only. No JSON. No markdown.\n"
+        "- Professional, conversational tone\n"
+        "- Avoid unnecessary filler words\n\n"
+        f"## PHRASE BANK\n{bank_text}\n"
+    )
+    if _PROMPT_RULES:
+        system += "\n## ADDITIONAL RULES\n" + _PROMPT_RULES
+    return system
+
+
+def generate_phrase_constrained_response(user_text: str, context: dict) -> str:
+    """
+    Generate a short response for off-topic or clarification questions,
+    constrained to use phrases from the JSON conversation file's phrase bank.
+
     Called ONLY when _is_informational_query() returns True in state_manager.
 
     Constraints:
-    - Maximum 2 sentences, 25 words total
+    - Response composed from approved phrase bank entries
+    - Maximum 2 sentences, 25 words per sentence
     - Neutral, factual tone — not a sales pitch
     - Must NOT ask a new question (JSON node handles the next question)
     - Must NOT collect slot values (location, budget, etc.)
     - Plain text only — no JSON, no markdown
     - Falls back to _STATIC_FALLBACK on API failure — never raises
 
-    Settings: max_tokens=60, temperature=0.3
+    Settings: max_tokens=cfg.PHRASE_RESPONSE_MAX_TOKENS,
+              temperature=cfg.PHRASE_RESPONSE_TEMPERATURE
     """
+    from llm.state_manager import get_phrase_bank
+    phrase_bank = get_phrase_bank()
+
+    system_prompt = _build_phrase_constrained_system(phrase_bank)
+
     prompt = (
         f'User asked: "{user_text}"\n'
         f"Context: {context}\n"
-        "Provide a brief factual answer only."
+        "Compose a brief response using ONLY phrases from the PHRASE BANK. "
+        "Do not invent new statements."
     )
     messages = [
-        {"role": "system", "content": _INFORMATIONAL_SYSTEM},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
     ]
+
+    logger.info("[LLM REASONING] Generating phrase-constrained response for: \"%s\"", user_text)
+
     try:
-        raw = _call_groq_api(messages, max_tokens=60, temperature=0.3)
+        raw = _call_groq_api(
+            messages,
+            max_tokens=cfg.PHRASE_RESPONSE_MAX_TOKENS,
+            temperature=cfg.PHRASE_RESPONSE_TEMPERATURE,
+        )
     except Exception as exc:
         logger.error("[LLM FALLBACK] API error — using static fallback: %s", exc)
         return _STATIC_FALLBACK
@@ -239,7 +284,21 @@ def generate_informational_response(user_text: str, context: dict) -> str:
 
     # Strip trailing question marks — JSON node owns the next question
     reply = raw.strip().rstrip("?").rstrip()
-    return reply or _STATIC_FALLBACK
+    if not reply:
+        return _STATIC_FALLBACK
+
+    # Log phrase matching
+    from llm.state_manager import _match_phrases_used, _PHRASE_BANK
+    matched = _match_phrases_used(reply, _PHRASE_BANK)
+    if matched:
+        logger.info("[JSON PHRASES USED] %s", "; ".join(f'"{p}"' for p in matched[:5]))
+    logger.info("[FINAL RESPONSE] \"%s\"", reply)
+
+    return reply
+
+
+# Keep old name as alias for backward compatibility
+generate_informational_response = generate_phrase_constrained_response
 
 
 async def generate_response(

@@ -76,6 +76,19 @@ HINDI_LOCATION_TRANSLITERATION = {
 }
 VISIT_SCHEDULING_NODES = {"node-1736323961832", "node-1735265015507"}
 CALLBACK_SCHEDULING_NODE_ID = "node-1736492391269"
+
+# ── Context-aware deny routing ────────────────────────────────────────────────
+WRONG_PERSON_END_NODE_ID = "node-wrong-person-end"
+POLITE_END_NODE_ID = "node-1735969972303"       # End Conversation
+RESCHEDULE_VISIT_NODE_ID = "node_fallback_reschedule"
+
+# Node sets where each deny sub-type applies
+DENY_IDENTITY_NODES = {"node-1767592854176"}                        # Smart Greeting
+DENY_TIME_NODES = {"node-1735264873079", "node-1735970090937"}      # Availability Check, Re-engage
+DENY_INTEREST_NODES = {"node-1735264921453"}                        # Ask Intent
+DENY_VISIT_NODES = {"node-1736323961832", "node-1735265015507"}     # Share Property, Site Visit
+
+ALL_DENY_INTENTS = {"deny", "deny_identity", "deny_interest", "deny_time", "deny_visit_time"}
 # Edges with these condition keywords auto-advance without user input
 SKIP_EDGE_MARKERS = {"skip", "skip response"}
 # Nodes that should auto-advance through skip edges after delivering response
@@ -253,6 +266,88 @@ def _build_intent_index(nodes: list[dict[str, Any]]) -> dict[str, str]:
 _INTENT_INDEX: dict[str, str] = _build_intent_index(_FLOW.get("nodes", []))
 
 
+# ── Phrase Bank ───────────────────────────────────────────────────────────────
+
+def _build_phrase_bank(nodes: list[dict[str, Any]]) -> list[str]:
+    """
+    Extract all approved phrases from the JSON conversation file and
+    hardcoded constants.  Returns a deduplicated, ordered list of strings
+    that the LLM is allowed to draw from when composing responses.
+    """
+    phrases: list[str] = []
+
+    # 1. Node responses and missing-slot overrides
+    for node in nodes:
+        resp = node.get("response")
+        if isinstance(resp, str) and resp.strip():
+            phrases.append(resp.strip())
+        msr = node.get("missing_slot_responses")
+        if isinstance(msr, dict):
+            for v in msr.values():
+                if isinstance(v, str) and v.strip():
+                    phrases.append(v.strip())
+        instruction = node.get("instruction", {})
+        if isinstance(instruction, dict):
+            itext = instruction.get("text", "")
+            if isinstance(itext, str) and itext.strip():
+                phrases.append(itext.strip())
+
+    # 2. Hardcoded behavioural phrases
+    for v in FALLBACK_BRIDGE_PHRASES.values():
+        phrases.append(v)
+    for v in CLARIFICATION_TEMPLATES.values():
+        phrases.append(v)
+    for v in GUIDANCE_RESPONSES.values():
+        phrases.append(v)
+    for v in DEESCALATION_RESPONSES:
+        phrases.append(v)
+    for v in FALLBACK_ESCALATION.values():
+        phrases.append(v)
+
+    # 3. Standard acknowledgements
+    phrases.extend(["Got it.", "Understood.", "Okay.", "Sure.", "No problem.", "Makes sense."])
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for p in phrases:
+        if p not in seen:
+            seen.add(p)
+            unique.append(p)
+    return unique
+
+
+_PHRASE_BANK: list[str] = _build_phrase_bank(_FLOW.get("nodes", []))
+
+
+def get_phrase_bank() -> list[str]:
+    """Return the list of approved phrases from the JSON conversation file."""
+    return list(_PHRASE_BANK)
+
+
+def _match_phrases_used(response: str, bank: list[str]) -> list[str]:
+    """
+    Return which phrase bank entries appear (fully or partially) in the response.
+    Used for [JSON PHRASES USED] logging.
+    """
+    resp_lower = response.lower()
+    matched: list[str] = []
+    for phrase in bank:
+        # Check if a meaningful fragment (4+ words) of the phrase is in the response
+        words = phrase.split()
+        if len(words) <= 3:
+            if phrase.lower().rstrip(".!?,") in resp_lower:
+                matched.append(phrase)
+        else:
+            # Check sliding windows of 4 words from the phrase
+            for i in range(len(words) - 3):
+                fragment = " ".join(words[i:i + 4]).lower()
+                if fragment in resp_lower:
+                    matched.append(phrase)
+                    break
+    return matched
+
+
 def find_node_by_intent(intent: str) -> dict[str, Any] | None:
     """Return the node mapped to the given intent, if any."""
     node_id = _INTENT_INDEX.get(intent)
@@ -365,6 +460,8 @@ class StateManager:
         self._last_node_id: Optional[str] = None
         self._deescalation_index: int = 0
         self._has_apologised: bool = False
+        # Acknowledgement repetition tracking
+        self._last_ack: str = ""
         # Session termination flag (Issue 5)
         self._session_ended: bool = False
         # Fallback escalation counters (Issue 6)
@@ -447,6 +544,7 @@ class StateManager:
         self._last_node_id = None
         self._deescalation_index = 0
         self._has_apologised = False
+        self._last_ack = ""
         self._session_ended = False
         self._fallback_counts = {}
 
@@ -582,7 +680,7 @@ class StateManager:
         supplemental = ""  # optional LLM informational reply
         stayed_on_current = False
 
-        if intent in {"confirm", "deny"}:
+        if intent in {"confirm"} or intent in ALL_DENY_INTENTS:
             _log("STATE", "Confirmation handled via edge — not intent index")
             next_node, bypass_guard = self._handle_confirmation(current_node, intent)
         else:
@@ -606,10 +704,10 @@ class StateManager:
             self._fallback_counts[node_id] = self._fallback_counts.get(node_id, 0) + 1
             _log("FALLBACK COUNT", f"{node_id} = {self._fallback_counts[node_id]}")
 
-        # ── Phase 3: informational LLM fallback (only when no node matched) ──
+        # ── Phase 3: phrase-constrained LLM fallback (only when no node matched) ──
         if stayed_on_current and _is_informational_query(user_text, raw_intent):
-            from llm.llm import generate_informational_response
-            supplemental = generate_informational_response(
+            from llm.llm import generate_phrase_constrained_response
+            supplemental = generate_phrase_constrained_response(
                 user_text, self.conversation_data
             )
             _log("LLM FALLBACK", f'"{supplemental}"')
@@ -635,7 +733,7 @@ class StateManager:
         )
         if (self._last_node_id == self.current_node_id
                 and not supplemental
-                and intent != "deny"
+                and intent not in ALL_DENY_INTENTS
                 and not is_fallback_escalated):
             json_response = f"Just to confirm — {json_response}"
             _log("REPEAT NODE", 'Prepending "Just to confirm —" — same node as last turn')
@@ -661,8 +759,14 @@ class StateManager:
 
             _log("RESPONSE", f'[JSON] "{final_response}"')
 
+        # ── Structured logging: [JSON PHRASES USED] ──
+        matched = _match_phrases_used(final_response, _PHRASE_BANK)
+        if matched:
+            _log("JSON PHRASES USED", "; ".join(f'"{p}"' for p in matched[:5]))
+
         # ── Issue 4: truncate response for TTS latency ──
         final_response = _truncate_response(final_response)
+        _log("FINAL RESPONSE", f'"{final_response}"')
 
         # ── Issue 5: check if we just arrived at an end node ──
         if next_node.get("type") == "end":
@@ -731,14 +835,13 @@ class StateManager:
 
     def _handle_confirmation(self, current_node: dict[str, Any], intent: str) -> tuple[dict[str, Any], bool]:
         """Returns (next_node, bypass_forward_guard)."""
-        edge = self._select_confirmation_edge(current_node, intent)
+        # ── Context-aware deny routing (overrides edge matching) ──
+        if intent in ALL_DENY_INTENTS:
+            override = self._route_deny_subtype(current_node, intent)
+            if override:
+                return override, True  # bypass forward guard
 
-        # ── Issue 1: deny on visit-scheduling node → route to callback ──
-        if not edge and intent == "deny" and current_node["id"] in VISIT_SCHEDULING_NODES:
-            callback_node = self.nodes.get(CALLBACK_SCHEDULING_NODE_ID)
-            if callback_node:
-                _log("DENY REROUTE", "→ Callback Scheduling (deny on visit scheduling node)")
-                return callback_node, True  # bypass forward guard
+        edge = self._select_confirmation_edge(current_node, intent)
 
         if not edge:
             return current_node, False
@@ -749,6 +852,67 @@ class StateManager:
         next_node = self._advance_from_node(destination)
         _log("STATE", f"→ {next_node['id']}")
         return next_node, False
+
+    def _route_deny_subtype(
+        self, current_node: dict[str, Any], intent: str
+    ) -> Optional[dict[str, Any]]:
+        """
+        Route deny intent based on conversation context (current node).
+        Returns target node if a contextual override applies, None otherwise.
+
+        Deny sub-type is determined by:
+        1. The LLM-classified sub-type (deny_identity, deny_interest, etc.)
+        2. OR the current node context (which question was asked)
+        """
+        node_id = current_node["id"]
+
+        # Determine effective deny sub-type from LLM intent or node context
+        if intent == "deny":
+            # Generic deny → resolve from current node context
+            if node_id in DENY_IDENTITY_NODES:
+                intent = "deny_identity"
+            elif node_id in DENY_TIME_NODES:
+                intent = "deny_time"
+            elif node_id in DENY_INTEREST_NODES:
+                intent = "deny_interest"
+            elif node_id in DENY_VISIT_NODES:
+                intent = "deny_visit_time"
+            else:
+                return None  # no contextual override — fall through to edge matching
+
+        _log("DENY TYPE", f"{intent} at {node_id} ({current_node.get('name', '')})")
+
+        # deny_identity → wrong person end
+        if intent == "deny_identity":
+            target = self.nodes.get(WRONG_PERSON_END_NODE_ID)
+            if target:
+                _log("DENY ROUTE", f"deny_identity → {target['id']} (wrong person)")
+                return target
+
+        # deny_time → callback scheduling
+        if intent == "deny_time":
+            target = self.nodes.get(CALLBACK_SCHEDULING_NODE_ID)
+            if target:
+                _log("DENY ROUTE", f"deny_time → {target['id']} (busy/not available)")
+                return target
+
+        # deny_interest → polite end
+        if intent == "deny_interest":
+            target = self.nodes.get(POLITE_END_NODE_ID)
+            if target:
+                _log("DENY ROUTE", f"deny_interest → {target['id']} (not interested)")
+                return target
+
+        # deny_visit_time → offer alternate date
+        if intent == "deny_visit_time":
+            target = self.nodes.get(RESCHEDULE_VISIT_NODE_ID)
+            if not target:
+                target = self.nodes.get(CALLBACK_SCHEDULING_NODE_ID)
+            if target:
+                _log("DENY ROUTE", f"deny_visit_time → {target['id']} (offering alternate)")
+                return target
+
+        return None  # no contextual override
 
     def _select_confirmation_edge(self, node: dict[str, Any], intent: str) -> Optional[dict[str, Any]]:
         edges = node.get("edges", [])

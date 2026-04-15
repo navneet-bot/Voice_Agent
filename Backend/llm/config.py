@@ -37,7 +37,11 @@ MAX_RETRIES: int = 2           # Number of retries on transient failure
 # Runtime response shaping
 MAX_HISTORY_MESSAGES: int = 8
 MAX_RESPONSE_SENTENCES: int = 2
-MAX_RESPONSE_WORDS: int = 18
+MAX_RESPONSE_WORDS: int = 25
+
+# Phrase-constrained LLM response composition
+PHRASE_RESPONSE_MAX_TOKENS: int = 120
+PHRASE_RESPONSE_TEMPERATURE: float = 0.3
 
 # ── Supported Languages ────────────────────────────────────────────────────────
 # Matches the STT module's language support
