@@ -10,6 +10,13 @@ websockets
 pipecat-ai[local]
 spacy
 
+# HTTP client for Exotel and other provider REST APIs
+httpx
+
+# Twilio SDK — optional, only needed for real Twilio calls
+# Install with: pip install twilio
+# twilio
+
 # System dependency (install separately):
 # Ubuntu/Debian: sudo apt install ffmpeg
 # macOS:         brew install ffmpeg

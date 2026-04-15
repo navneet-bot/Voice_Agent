@@ -1,0 +1,489 @@
+2026-04-14 22:49:43,944 | INFO     | server:websocket_endpoint:309 - Live Voice: Browser connected
+2026-04-14 22:49:43,946 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 22:49:43,949 | INFO     | server:websocket_endpoint:322 - Live Voice: Pipeline runner started.
+2026-04-14 22:49:43,952 | INFO     | server:process_frame:283 - VoiceLiveSource: Received StartFrame from runner.
+2026-04-14 22:49:43,952 | INFO     | server:_process_queue:266 - VoiceLiveSource: Waiting for StartFrame before processing queue...
+2026-04-14 22:49:43,953 | INFO     | server:_process_queue:269 - VoiceLiveSource: Queue processing active.
+2026-04-14 22:50:27,282 | INFO     | server:websocket_endpoint:335 - Live Voice: Browser disconnected explicitly
+2026-04-14 22:50:27,282 | INFO     | server:websocket_endpoint:339 - Live Voice: Cleaning up pipeline...
+2026-04-14 22:52:36,334 | INFO     | server:websocket_endpoint:312 - Live Voice: Browser connected. Agent ID: default
+2026-04-14 22:52:36,335 | INFO     | server:websocket_endpoint:319 - Live Voice: Using schema from Updated_Real_Estate_Agent.json
+2026-04-14 22:52:36,336 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 22:52:36,337 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 22:52:36,339 | INFO     | server:websocket_endpoint:335 - Live Voice: Pipeline runner started.
+2026-04-14 22:52:36,342 | INFO     | server:process_frame:283 - VoiceLiveSource: Received StartFrame from runner.
+2026-04-14 22:52:36,343 | INFO     | server:_process_queue:266 - VoiceLiveSource: Waiting for StartFrame before processing queue...
+2026-04-14 22:52:36,343 | INFO     | server:_process_queue:269 - VoiceLiveSource: Queue processing active.
+2026-04-14 22:58:50,866 | INFO     | server:websocket_endpoint:348 - Live Voice: Browser disconnected explicitly
+2026-04-14 22:58:50,867 | INFO     | server:websocket_endpoint:352 - Live Voice: Cleaning up pipeline...
+2026-04-14 22:59:22,874 | INFO     | server:websocket_endpoint:312 - Live Voice: Browser connected. Agent ID: default
+2026-04-14 22:59:22,875 | INFO     | server:websocket_endpoint:319 - Live Voice: Using schema from Updated_Real_Estate_Agent.json
+2026-04-14 22:59:22,876 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 22:59:22,877 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 22:59:22,880 | INFO     | server:websocket_endpoint:335 - Live Voice: Pipeline runner started.
+2026-04-14 22:59:22,884 | INFO     | server:process_frame:283 - VoiceLiveSource: Received StartFrame from runner.
+2026-04-14 22:59:22,884 | INFO     | server:_process_queue:266 - VoiceLiveSource: Waiting for StartFrame before processing queue...
+2026-04-14 22:59:22,885 | INFO     | server:_process_queue:269 - VoiceLiveSource: Queue processing active.
+2026-04-14 23:16:33,954 | INFO     | server:websocket_endpoint:348 - Live Voice: Browser disconnected explicitly
+2026-04-14 23:16:33,954 | INFO     | server:websocket_endpoint:352 - Live Voice: Cleaning up pipeline...
+2026-04-14 23:16:37,531 | INFO     | server:websocket_endpoint:312 - Live Voice: Browser connected. Agent ID: default
+2026-04-14 23:16:37,531 | INFO     | server:websocket_endpoint:319 - Live Voice: Using schema from Updated_Real_Estate_Agent.json
+2026-04-14 23:16:37,545 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 23:16:37,546 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 23:16:37,549 | INFO     | server:websocket_endpoint:335 - Live Voice: Pipeline runner started.
+2026-04-14 23:16:37,551 | INFO     | server:process_frame:283 - VoiceLiveSource: Received StartFrame from runner.
+2026-04-14 23:16:37,552 | INFO     | server:_process_queue:266 - VoiceLiveSource: Waiting for StartFrame before processing queue...
+2026-04-14 23:16:37,552 | INFO     | server:_process_queue:269 - VoiceLiveSource: Queue processing active.
+2026-04-14 23:26:40,973 | INFO     | server:websocket_endpoint:312 - Live Voice: Browser connected. Agent ID: default
+2026-04-14 23:26:40,973 | INFO     | server:websocket_endpoint:319 - Live Voice: Using schema from Updated_Real_Estate_Agent.json
+2026-04-14 23:26:40,975 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 23:26:40,975 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 23:26:40,978 | INFO     | server:websocket_endpoint:335 - Live Voice: Pipeline runner started.
+2026-04-14 23:26:40,981 | INFO     | server:process_frame:283 - VoiceLiveSource: Received StartFrame from runner.
+2026-04-14 23:26:40,982 | INFO     | server:_process_queue:266 - VoiceLiveSource: Waiting for StartFrame before processing queue...
+2026-04-14 23:26:40,982 | INFO     | server:_process_queue:269 - VoiceLiveSource: Queue processing active.
+2026-04-14 23:28:58,020 | INFO     | server:websocket_endpoint:348 - Live Voice: Browser disconnected explicitly
+2026-04-14 23:28:58,021 | INFO     | server:websocket_endpoint:352 - Live Voice: Cleaning up pipeline...
+2026-04-14 23:38:46,980 | INFO     | server:websocket_endpoint:317 - Live Voice: Browser connected. Agent ID: default
+2026-04-14 23:38:46,981 | INFO     | server:websocket_endpoint:324 - Live Voice: Using schema from Updated_Real_Estate_Agent.json
+2026-04-14 23:38:46,982 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 23:38:46,983 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-14 23:38:46,985 | INFO     | server:websocket_endpoint:340 - Live Voice: Pipeline runner started.
+2026-04-14 23:38:46,987 | INFO     | server:process_frame:283 - [PIPELINE] Source -> Received StartFrame from runner.
+2026-04-14 23:38:46,988 | INFO     | server:_process_queue:266 - VoiceLiveSource: Waiting for StartFrame before processing queue...
+2026-04-14 23:38:46,988 | INFO     | server:_process_queue:269 - VoiceLiveSource: Queue processing active.
+2026-04-15 00:05:04,977 | INFO     | server:websocket_endpoint:316 - Live Voice: Browser connected. Agent ID: default
+2026-04-15 00:05:04,978 | INFO     | server:websocket_endpoint:323 - Live Voice: Using schema from Updated_Real_Estate_Agent.json
+2026-04-15 00:05:04,980 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:05:04,980 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:05:04,983 | INFO     | server:websocket_endpoint:339 - Live Voice: Pipeline runner started.
+2026-04-15 00:05:04,987 | INFO     | server:process_frame:282 - [PIPELINE] Source -> Received StartFrame and forwarded. Starting queue task.
+2026-04-15 00:05:04,987 | INFO     | server:_process_queue:266 - VoiceLiveSource: Queue processing started.
+2026-04-15 00:07:51,164 | INFO     | server:websocket_endpoint:352 - Live Voice: Browser disconnected explicitly
+2026-04-15 00:07:51,164 | INFO     | server:websocket_endpoint:356 - Live Voice: Cleaning up pipeline...
+2026-04-15 00:08:05,978 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:08:05,979 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?"
+2026-04-15 00:08:06,718 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:06,734 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.737s (attempt 1/2)
+2026-04-15 00:08:06,735 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, this is Rahul Sharma."
+2026-04-15 00:08:06,735 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm_identity
+2026-04-15 00:08:06,859 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Is this a good time for a quick two-minute call about a property option?"
+2026-04-15 00:08:09,074 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:09,076 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.710s (attempt 1/2)
+2026-04-15 00:08:09,076 | INFO     | llm.state_manager:_log:166 - [STT] "Yeah, I have a moment."
+2026-04-15 00:08:09,077 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:09,077 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:09,080 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Are you looking to buy, rent, or invest in a property?"
+2026-04-15 00:08:10,857 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:10,858 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.272s (attempt 1/2)
+2026-04-15 00:08:10,859 | INFO     | llm.state_manager:_log:166 - [STT] "I'm looking to buy a property."
+2026-04-15 00:08:10,859 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_intent  entities={intent_value: buy}
+2026-04-15 00:08:10,859 | INFO     | llm.state_manager:_log:166 - [ENTITY] intent_value = buy
+2026-04-15 00:08:10,863 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Which location are you considering, and what budget range should I keep in mind?"
+2026-04-15 00:08:12,679 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:12,680 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.301s (attempt 1/2)
+2026-04-15 00:08:12,681 | INFO     | llm.state_manager:_log:166 - [STT] "I'm interested in Kharadi within 80 lakhs budget."
+2026-04-15 00:08:12,681 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_location  entities={location: Kharadi, budget: 80 lakhs}
+2026-04-15 00:08:12,681 | INFO     | llm.state_manager:_log:166 - [NORMALIZED LOCATION] Kharadi -> Kharadi
+2026-04-15 00:08:12,681 | INFO     | llm.state_manager:_log:166 - [ENTITY] location = Kharadi
+2026-04-15 00:08:12,682 | INFO     | llm.state_manager:_log:166 - [ENTITY] budget = 80 lakhs
+2026-04-15 00:08:12,682 | INFO     | llm.state_manager:_log:166 - [SKIP] node-1735267546732 — location, budget already collected
+2026-04-15 00:08:12,685 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "I have a few options in Kharadi around 80 lakhs. Would you like to schedule a site visit this weekend?"
+2026-04-15 00:08:12,685 | INFO     | llm.state_manager:_log:166 - [TRUNCATE] Response trimmed from 20 to 18 words
+2026-04-15 00:08:14,573 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:14,575 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.367s (attempt 1/2)
+2026-04-15 00:08:14,576 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:14,576 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:14,576 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:14,580 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:16,314 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:16,315 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.217s (attempt 1/2)
+2026-04-15 00:08:16,316 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:16,316 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:16,317 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:16,317 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:16,317 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:18,022 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:18,024 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.189s (attempt 1/2)
+2026-04-15 00:08:18,024 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:18,025 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:18,025 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:18,025 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:18,025 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:20,139 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:20,140 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.594s (attempt 1/2)
+2026-04-15 00:08:20,141 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:20,141 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:20,141 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:20,141 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:20,141 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:21,931 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:21,932 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.275s (attempt 1/2)
+2026-04-15 00:08:21,933 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:21,933 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:21,933 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:21,933 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:21,934 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:23,726 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:23,727 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.276s (attempt 1/2)
+2026-04-15 00:08:23,727 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:23,727 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:23,727 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:23,728 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:23,728 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:26,248 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:08:26,248 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?"
+2026-04-15 00:08:27,182 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:27,183 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.897s (attempt 1/2)
+2026-04-15 00:08:27,184 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, this is Priya Mehta."
+2026-04-15 00:08:27,184 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm_identity
+2026-04-15 00:08:27,186 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Is this a good time for a quick two-minute call about a property option?"
+2026-04-15 00:08:29,088 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:29,089 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.386s (attempt 1/2)
+2026-04-15 00:08:29,090 | INFO     | llm.state_manager:_log:166 - [STT] "Yeah, I have a moment."
+2026-04-15 00:08:29,090 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:29,090 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:29,092 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Are you looking to buy, rent, or invest in a property?"
+2026-04-15 00:08:30,857 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:30,858 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.248s (attempt 1/2)
+2026-04-15 00:08:30,859 | INFO     | llm.state_manager:_log:166 - [STT] "I'm looking to buy a property."
+2026-04-15 00:08:30,859 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_intent  entities={intent_value: buy}
+2026-04-15 00:08:30,860 | INFO     | llm.state_manager:_log:166 - [ENTITY] intent_value = buy
+2026-04-15 00:08:30,862 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Which location are you considering, and what budget range should I keep in mind?"
+2026-04-15 00:08:32,636 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:32,637 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.261s (attempt 1/2)
+2026-04-15 00:08:32,638 | INFO     | llm.state_manager:_log:166 - [STT] "I'm interested in Baner within 80 lakhs budget."
+2026-04-15 00:08:32,638 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_location  entities={location: Baner, budget: 80 lakhs}
+2026-04-15 00:08:32,639 | INFO     | llm.state_manager:_log:166 - [NORMALIZED LOCATION] Baner -> Baner
+2026-04-15 00:08:32,639 | INFO     | llm.state_manager:_log:166 - [ENTITY] location = Baner
+2026-04-15 00:08:32,639 | INFO     | llm.state_manager:_log:166 - [ENTITY] budget = 80 lakhs
+2026-04-15 00:08:32,639 | INFO     | llm.state_manager:_log:166 - [SKIP] node-1735267546732 — location, budget already collected
+2026-04-15 00:08:32,642 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "I have a few options in Baner around 80 lakhs. Would you like to schedule a site visit this weekend?"
+2026-04-15 00:08:32,642 | INFO     | llm.state_manager:_log:166 - [TRUNCATE] Response trimmed from 20 to 18 words
+2026-04-15 00:08:34,438 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:34,439 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.267s (attempt 1/2)
+2026-04-15 00:08:34,440 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:34,440 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:34,441 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:34,443 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:36,143 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:36,144 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.185s (attempt 1/2)
+2026-04-15 00:08:36,145 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:36,145 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:36,145 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:36,145 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:36,145 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:37,831 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:37,833 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.172s (attempt 1/2)
+2026-04-15 00:08:37,833 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:37,834 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:37,834 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:37,834 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:37,834 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:39,614 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:39,616 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.262s (attempt 1/2)
+2026-04-15 00:08:39,616 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:39,617 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:39,617 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:39,617 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:39,617 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:41,969 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:41,971 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.835s (attempt 1/2)
+2026-04-15 00:08:41,971 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:41,972 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:41,972 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:41,972 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:41,972 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:43,650 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:43,652 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.171s (attempt 1/2)
+2026-04-15 00:08:43,652 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:08:43,653 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:43,653 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:43,653 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:08:43,653 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:08:46,183 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:08:46,184 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?"
+2026-04-15 00:08:46,401 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:46,402 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 0.198s (attempt 1/2)
+2026-04-15 00:08:46,403 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, this is Suresh Nair."
+2026-04-15 00:08:46,403 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm_identity
+2026-04-15 00:08:46,406 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Is this a good time for a quick two-minute call about a property option?"
+2026-04-15 00:08:47,972 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:08:47,973 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 3.000000 seconds
+2026-04-15 00:08:51,992 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:51,993 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.057s (attempt 1/2)
+2026-04-15 00:08:51,994 | INFO     | llm.state_manager:_log:166 - [STT] "Yeah, I have a moment."
+2026-04-15 00:08:51,994 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:08:51,994 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:08:51,997 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Are you looking to buy, rent, or invest in a property?"
+2026-04-15 00:08:53,546 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:08:53,547 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 3.000000 seconds
+2026-04-15 00:08:56,803 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:08:56,805 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 3.293s (attempt 1/2)
+2026-04-15 00:08:56,805 | INFO     | llm.state_manager:_log:166 - [STT] "I'm looking to buy a property."
+2026-04-15 00:08:56,806 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_intent  entities={intent_value: buy}
+2026-04-15 00:08:56,806 | INFO     | llm.state_manager:_log:166 - [ENTITY] intent_value = buy
+2026-04-15 00:08:56,809 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Which location are you considering, and what budget range should I keep in mind?"
+2026-04-15 00:08:56,945 | INFO     | server:websocket_endpoint:316 - Live Voice: Browser connected. Agent ID: default
+2026-04-15 00:08:56,945 | INFO     | server:websocket_endpoint:323 - Live Voice: Using schema from Updated_Real_Estate_Agent.json
+2026-04-15 00:08:56,946 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:08:56,947 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:08:56,950 | INFO     | server:websocket_endpoint:339 - Live Voice: Pipeline runner started.
+2026-04-15 00:08:56,952 | INFO     | server:process_frame:282 - [PIPELINE] Source -> Received StartFrame and forwarded. Starting queue task.
+2026-04-15 00:08:56,953 | INFO     | server:_process_queue:266 - VoiceLiveSource: Queue processing started.
+2026-04-15 00:08:58,351 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:08:58,352 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:09:01,717 | INFO     | server:websocket_endpoint:352 - Live Voice: Browser disconnected explicitly
+2026-04-15 00:09:01,718 | INFO     | server:websocket_endpoint:356 - Live Voice: Cleaning up pipeline...
+2026-04-15 00:09:02,536 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:02,537 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.219s (attempt 1/2)
+2026-04-15 00:09:02,538 | INFO     | llm.state_manager:_log:166 - [STT] "I'm interested in Hinjewadi within 80 lakhs budget."
+2026-04-15 00:09:02,538 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_location  entities={location: Hinjewadi, budget: 80 lakhs}
+2026-04-15 00:09:02,538 | INFO     | llm.state_manager:_log:166 - [NORMALIZED LOCATION] Hinjewadi -> Hinjewadi
+2026-04-15 00:09:02,539 | INFO     | llm.state_manager:_log:166 - [ENTITY] location = Hinjewadi
+2026-04-15 00:09:02,539 | INFO     | llm.state_manager:_log:166 - [ENTITY] budget = 80 lakhs
+2026-04-15 00:09:02,539 | INFO     | llm.state_manager:_log:166 - [SKIP] node-1735267546732 — location, budget already collected
+2026-04-15 00:09:02,543 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "I have a few options in Hinjewadi around 80 lakhs. Would you like to schedule a site visit this weekend?"
+2026-04-15 00:09:02,543 | INFO     | llm.state_manager:_log:166 - [TRUNCATE] Response trimmed from 20 to 18 words
+2026-04-15 00:09:04,087 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:04,088 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:09:08,365 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:08,367 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.316s (attempt 1/2)
+2026-04-15 00:09:08,367 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:09:08,367 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:09:08,368 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:09:08,370 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:09:09,915 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:09,915 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:09:14,105 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:14,106 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.225s (attempt 1/2)
+2026-04-15 00:09:14,107 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:09:14,107 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:09:14,107 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:09:14,107 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:09:14,108 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:09:15,652 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:15,653 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:09:19,946 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:19,947 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.325s (attempt 1/2)
+2026-04-15 00:09:19,947 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:09:19,948 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:09:19,948 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:09:19,948 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:09:19,948 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:09:21,490 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:21,490 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:09:25,789 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:25,790 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.333s (attempt 1/2)
+2026-04-15 00:09:25,791 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:09:25,791 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:09:25,791 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:09:25,791 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:09:25,791 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:09:27,329 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:27,330 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:09:31,632 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:31,633 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.338s (attempt 1/2)
+2026-04-15 00:09:31,634 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:09:31,634 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:09:31,634 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:09:31,635 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:09:31,635 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:09:33,184 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:33,185 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:09:37,558 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:37,559 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.407s (attempt 1/2)
+2026-04-15 00:09:37,559 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:09:37,560 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:09:37,560 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:09:37,560 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:09:37,560 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:09:40,084 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:09:40,084 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?"
+2026-04-15 00:09:40,135 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:40,136 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 3.000000 seconds
+2026-04-15 00:09:43,387 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:43,388 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 3.285s (attempt 1/2)
+2026-04-15 00:09:43,388 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, this is Anita Desai."
+2026-04-15 00:09:43,389 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm_identity
+2026-04-15 00:09:43,391 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Is this a good time for a quick two-minute call about a property option?"
+2026-04-15 00:09:44,937 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:44,938 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:09:49,411 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:49,412 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.510s (attempt 1/2)
+2026-04-15 00:09:49,413 | INFO     | llm.state_manager:_log:166 - [STT] "Yeah, I have a moment."
+2026-04-15 00:09:49,413 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:09:49,414 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:09:49,416 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Are you looking to buy, rent, or invest in a property?"
+2026-04-15 00:09:50,965 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:50,965 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 3.000000 seconds
+2026-04-15 00:09:54,636 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:09:54,637 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 3.706s (attempt 1/2)
+2026-04-15 00:09:54,638 | INFO     | llm.state_manager:_log:166 - [STT] "I'm looking to buy a property."
+2026-04-15 00:09:54,638 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_intent  entities={intent_value: buy}
+2026-04-15 00:09:54,638 | INFO     | llm.state_manager:_log:166 - [ENTITY] intent_value = buy
+2026-04-15 00:09:54,640 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Which location are you considering, and what budget range should I keep in mind?"
+2026-04-15 00:09:56,190 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:09:56,190 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:10:00,645 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:00,645 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.488s (attempt 1/2)
+2026-04-15 00:10:00,646 | INFO     | llm.state_manager:_log:166 - [STT] "I'm interested in Kharadi within 80 lakhs budget."
+2026-04-15 00:10:00,646 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_location  entities={location: Kharadi, budget: 80 lakhs}
+2026-04-15 00:10:00,646 | INFO     | llm.state_manager:_log:166 - [NORMALIZED LOCATION] Kharadi -> Kharadi
+2026-04-15 00:10:00,646 | INFO     | llm.state_manager:_log:166 - [ENTITY] location = Kharadi
+2026-04-15 00:10:00,647 | INFO     | llm.state_manager:_log:166 - [ENTITY] budget = 80 lakhs
+2026-04-15 00:10:00,647 | INFO     | llm.state_manager:_log:166 - [SKIP] node-1735267546732 — location, budget already collected
+2026-04-15 00:10:00,649 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "I have a few options in Kharadi around 80 lakhs. Would you like to schedule a site visit this weekend?"
+2026-04-15 00:10:00,649 | INFO     | llm.state_manager:_log:166 - [TRUNCATE] Response trimmed from 20 to 18 words
+2026-04-15 00:10:02,191 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:02,192 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:10:06,473 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:06,474 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.318s (attempt 1/2)
+2026-04-15 00:10:06,475 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:10:06,475 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:10:06,475 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:10:06,477 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:10:08,018 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:08,018 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:10:12,268 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:12,269 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.283s (attempt 1/2)
+2026-04-15 00:10:12,270 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:10:12,270 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:10:12,270 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:10:12,270 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:10:12,270 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:10:13,813 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:13,814 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:10:18,069 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:18,070 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.292s (attempt 1/2)
+2026-04-15 00:10:18,071 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:10:18,071 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:10:18,071 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:10:18,071 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:10:18,072 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:10:19,625 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:19,626 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:10:23,997 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:23,998 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.409s (attempt 1/2)
+2026-04-15 00:10:23,999 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:10:23,999 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:10:23,999 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:10:24,000 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:10:24,000 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:10:25,550 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:25,551 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:10:30,263 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:30,264 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.747s (attempt 1/2)
+2026-04-15 00:10:30,265 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:10:30,265 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:10:30,266 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:10:30,266 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:10:30,266 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:10:31,820 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:31,821 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 3.000000 seconds
+2026-04-15 00:10:35,107 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:35,108 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 3.322s (attempt 1/2)
+2026-04-15 00:10:35,109 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:10:35,109 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:10:35,109 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:10:35,109 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:10:35,109 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:10:37,633 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:10:37,634 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?"
+2026-04-15 00:10:37,690 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:37,690 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 3.000000 seconds
+2026-04-15 00:10:40,850 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:40,851 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 3.193s (attempt 1/2)
+2026-04-15 00:10:40,851 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, this is Manoj Pillai."
+2026-04-15 00:10:40,851 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm_identity
+2026-04-15 00:10:40,853 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Is this a good time for a quick two-minute call about a property option?"
+2026-04-15 00:10:42,403 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:42,404 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:10:46,637 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:46,638 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.268s (attempt 1/2)
+2026-04-15 00:10:46,639 | INFO     | llm.state_manager:_log:166 - [STT] "Yeah, I have a moment."
+2026-04-15 00:10:46,639 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:10:46,639 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:10:46,642 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Are you looking to buy, rent, or invest in a property?"
+2026-04-15 00:10:48,188 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:48,189 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:10:52,504 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:52,505 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.349s (attempt 1/2)
+2026-04-15 00:10:52,506 | INFO     | llm.state_manager:_log:166 - [STT] "I'm looking to buy a property."
+2026-04-15 00:10:52,506 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_intent  entities={intent_value: buy}
+2026-04-15 00:10:52,506 | INFO     | llm.state_manager:_log:166 - [ENTITY] intent_value = buy
+2026-04-15 00:10:52,508 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Which location are you considering, and what budget range should I keep in mind?"
+2026-04-15 00:10:54,053 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:54,053 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:10:58,335 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:10:58,336 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.315s (attempt 1/2)
+2026-04-15 00:10:58,336 | INFO     | llm.state_manager:_log:166 - [STT] "I'm interested in Baner within 80 lakhs budget."
+2026-04-15 00:10:58,337 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=provide_location  entities={location: Baner, budget: 80 lakhs}
+2026-04-15 00:10:58,337 | INFO     | llm.state_manager:_log:166 - [NORMALIZED LOCATION] Baner -> Baner
+2026-04-15 00:10:58,337 | INFO     | llm.state_manager:_log:166 - [ENTITY] location = Baner
+2026-04-15 00:10:58,337 | INFO     | llm.state_manager:_log:166 - [ENTITY] budget = 80 lakhs
+2026-04-15 00:10:58,337 | INFO     | llm.state_manager:_log:166 - [SKIP] node-1735267546732 — location, budget already collected
+2026-04-15 00:10:58,339 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "I have a few options in Baner around 80 lakhs. Would you like to schedule a site visit this weekend?"
+2026-04-15 00:10:58,339 | INFO     | llm.state_manager:_log:166 - [TRUNCATE] Response trimmed from 20 to 18 words
+2026-04-15 00:10:59,882 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:10:59,883 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:11:04,053 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:11:04,054 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.203s (attempt 1/2)
+2026-04-15 00:11:04,054 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:11:04,054 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:11:04,054 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:11:04,057 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:11:05,605 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:11:05,606 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:11:09,899 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:11:09,901 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.328s (attempt 1/2)
+2026-04-15 00:11:09,902 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:11:09,902 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:11:09,902 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:11:09,902 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:11:09,903 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:11:11,454 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:11:11,455 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:11:15,737 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:11:15,738 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.318s (attempt 1/2)
+2026-04-15 00:11:15,738 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:11:15,739 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:11:15,739 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:11:15,739 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:11:15,739 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:11:17,286 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:11:17,288 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:11:22,948 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:11:22,949 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 5.695s (attempt 1/2)
+2026-04-15 00:11:22,950 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:11:22,950 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:11:22,950 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:11:22,951 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:11:22,951 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:11:24,512 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:11:24,512 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 2.000000 seconds
+2026-04-15 00:11:27,756 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:11:27,757 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 3.288s (attempt 1/2)
+2026-04-15 00:11:27,758 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:11:27,758 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:11:27,758 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:11:27,758 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:11:27,758 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:11:29,297 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-04-15 00:11:29,298 | INFO     | groq._base_client:_sleep_for_retry:1091 - Retrying request to /openai/v1/chat/completions in 4.000000 seconds
+2026-04-15 00:11:34,120 | INFO     | httpx:_send_single_request:1025 - HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-04-15 00:11:34,121 | INFO     | llm.llm:_call_groq_api:112 - LLM request completed in 4.856s (attempt 1/2)
+2026-04-15 00:11:34,122 | INFO     | llm.state_manager:_log:166 - [STT] "Yes, I can visit this Sunday."
+2026-04-15 00:11:34,122 | INFO     | llm.state_manager:_log:166 - [INTENT] intent=confirm  entities={confirmation: yes}
+2026-04-15 00:11:34,122 | INFO     | llm.state_manager:_log:166 - [STATE] Confirmation handled via edge — not intent index
+2026-04-15 00:11:34,123 | INFO     | llm.state_manager:_log:166 - [REPEAT NODE] Prepending "Just to confirm —" — same node as last turn
+2026-04-15 00:11:34,124 | INFO     | llm.state_manager:_log:166 - [RESPONSE] [JSON] "Just to confirm — Sure, what date and time would suit you for the site visit?"
+2026-04-15 00:20:55,783 | INFO     | server:websocket_endpoint:318 - Live Voice: Browser connected. Agent ID: default
+2026-04-15 00:20:55,783 | INFO     | server:websocket_endpoint:325 - Live Voice: Using schema from Updated_Real_Estate_Agent.json
+2026-04-15 00:20:55,785 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:20:55,786 | INFO     | llm.state_manager:load_schema:392 - Loaded 24 nodes. Start node: node-1767592854176
+2026-04-15 00:20:55,787 | INFO     | server:websocket_endpoint:341 - Live Voice: Pipeline runner started.
+2026-04-15 00:20:55,790 | INFO     | server:process_frame:282 - [PIPELINE] Source -> Received StartFrame and forwarded. Starting queue task.
+2026-04-15 00:20:55,790 | INFO     | server:_process_queue:266 - VoiceLiveSource: Queue processing started.
+2026-04-15 00:31:33,804 | INFO     | server:websocket_endpoint:354 - Live Voice: Browser disconnected explicitly
+2026-04-15 00:31:33,805 | INFO     | server:websocket_endpoint:358 - Live Voice: Cleaning up pipeline...

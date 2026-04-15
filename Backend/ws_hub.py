@@ -1,0 +1,135 @@
+"""
+WebSocket Broadcast Hub — Real-time event distribution to dashboard clients.
+
+Replaces JSON file polling with push-based WebSocket events.
+All call state changes (ringing, talking, completed, transcripts) are
+instantly broadcast to every connected dashboard browser.
+
+Usage:
+    from ws_hub import ws_manager
+    await ws_manager.broadcast_all({"type": "call_status", ...})
+    await ws_manager.broadcast_to_client("client_123", {...})
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from typing import Dict, Set
+
+from fastapi import WebSocket
+
+logger = logging.getLogger("ws_hub")
+
+
+class WebSocketManager:
+    """
+    Central hub for WebSocket connections.
+
+    Supports two broadcast scopes:
+    - broadcast_all()       : sends to every connected browser (admin view)
+    - broadcast_to_client() : sends only to browsers logged-in as a specific client
+    """
+
+    def __init__(self):
+        # client_id -> set of connected websockets
+        self._connections: Dict[str, Set[WebSocket]] = {}
+        self._lock = asyncio.Lock()
+
+    async def connect(self, websocket: WebSocket, client_id: str = "global") -> None:
+        await websocket.accept()
+        async with self._lock:
+            if client_id not in self._connections:
+                self._connections[client_id] = set()
+            self._connections[client_id].add(websocket)
+        logger.info("WS connected: client=%s  total=%d", client_id, self._total_connections())
+
+    async def disconnect(self, websocket: WebSocket, client_id: str = "global") -> None:
+        async with self._lock:
+            bucket = self._connections.get(client_id, set())
+            bucket.discard(websocket)
+            if not bucket:
+                self._connections.pop(client_id, None)
+        logger.info("WS disconnected: client=%s  total=%d", client_id, self._total_connections())
+
+    def _total_connections(self) -> int:
+        return sum(len(v) for v in self._connections.values())
+
+    async def broadcast_to_client(self, client_id: str, message: dict) -> None:
+        """Send a message to all browsers connected under a specific client_id."""
+        payload = json.dumps(message, default=str)
+        dead: list[WebSocket] = []
+
+        bucket = self._connections.get(client_id, set())
+        for ws in list(bucket):
+            try:
+                await ws.send_text(payload)
+            except Exception:
+                dead.append(ws)
+
+        for ws in dead:
+            await self.disconnect(ws, client_id)
+
+    async def broadcast_all(self, message: dict) -> None:
+        """Send a message to every connected browser across all clients."""
+        payload = json.dumps(message, default=str)
+        dead: list[tuple[WebSocket, str]] = []
+
+        async with self._lock:
+            snapshot = {cid: set(sockets) for cid, sockets in self._connections.items()}
+
+        for client_id, sockets in snapshot.items():
+            for ws in sockets:
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    dead.append((ws, client_id))
+
+        for ws, client_id in dead:
+            await self.disconnect(ws, client_id)
+
+    async def send_call_event(
+        self,
+        event_type: str,
+        *,
+        campaign_id: str = "",
+        lead_id: str = "",
+        lead_name: str = "",
+        status: str = "",
+        snippet: str = "",
+        transcripts: list | None = None,
+        result: dict | None = None,
+        provider: str = "",
+        client_id: str = "global",
+    ) -> None:
+        """
+        Structured helper — builds a typed event and broadcasts it.
+
+        event_type values:
+          call_ringing   — call just initiated
+          call_connected — call picked up
+          call_talking   — transcript snippet available
+          call_completed — call ended, result attached
+          call_error     — something went wrong
+          demo_started   — demo mode initiated
+        """
+        message = {
+            "type": event_type,
+            "campaignId": campaign_id,
+            "leadId": lead_id,
+            "leadName": lead_name,
+            "status": status,
+            "snippet": snippet,
+            "transcripts": transcripts or [],
+            "result": result or {},
+            "provider": provider,
+        }
+        # Always broadcast globally for admin + to specific client
+        await self.broadcast_all(message)
+        if client_id and client_id != "global":
+            await self.broadcast_to_client(client_id, message)
+
+
+# Singleton instance shared across the entire app
+ws_manager = WebSocketManager()

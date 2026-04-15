@@ -105,7 +105,12 @@ def _call_groq_api(
     temperature: float,
     response_format: Optional[dict[str, str]] = None,
 ) -> str:
-    """Call Groq with retry logic and return the raw content string."""
+    """Call Groq with retry + exponential backoff. Returns raw content string.
+
+    Issue 13 fix: backoff uses time.sleep in this sync function (called via
+    run_in_executor so it does NOT block the async event loop).
+    """
+    import random as _random
     for attempt in range(1, cfg.MAX_RETRIES + 1):
         try:
             t0 = time.time()
@@ -121,14 +126,17 @@ def _call_groq_api(
             logger.info("LLM request completed in %.3fs (attempt %d/%d)", latency, attempt, cfg.MAX_RETRIES)
             return completion.choices[0].message.content or ""
         except RateLimitError:
-            logger.error("Groq rate limit hit on attempt %d.", attempt)
-            time.sleep(2**attempt)
+            wait = (2 ** attempt) + _random.uniform(0, 0.5)   # jitter
+            logger.warning("Groq rate limit hit (attempt %d/%d) — retrying in %.1fs", attempt, cfg.MAX_RETRIES, wait)
+            if attempt < cfg.MAX_RETRIES:
+                time.sleep(wait)
         except APITimeoutError:
-            logger.error("Groq request timed out on attempt %d.", attempt)
+            logger.error("Groq request timed out (attempt %d/%d)", attempt, cfg.MAX_RETRIES)
             if attempt == cfg.MAX_RETRIES:
                 return ""
+            time.sleep(1.0)
         except APIError as exc:
-            logger.error("Groq API error on attempt %d: %s", attempt, exc)
+            logger.error("Groq API error (attempt %d/%d): %s", attempt, cfg.MAX_RETRIES, exc)
             return ""
     return ""
 

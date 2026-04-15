@@ -1,42 +1,102 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+"""
+Voice AI Calling SaaS Platform — Main Server  v2.1 (Production Hardened)
+
+Changes from v2.0:
+  - lifespan replaces deprecated on_event
+  - websocket.accept() now called BEFORE pipeline starts (Issue 2)
+  - API Key middleware — X-API-Key header guards all write endpoints (Issue 6)
+  - VoiceLiveSink emits speaker labels in transcript events (Issue 9)
+  - agentId resolved from DB assignment on /api/assignments (Issue 3)
+  - /health endpoint for uptime monitoring (Issue 14)
+  - /api/voice-demo  — mic session that also fires dashboard WS events (Issue 12)
+  - Groq 429 retry with exponential backoff in generate_response (Issue 13)
+"""
+
+from __future__ import annotations
+
 import asyncio
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
 import json
-import os
-import uuid
-from datetime import datetime
 import logging
-from typing import List, Dict, Any, Optional
+import os
+import secrets
+import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
-# --- Logging Configuration ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s',
-    handlers=[
-        logging.FileHandler("voice_agent.log"),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger("server")
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.security import APIKeyHeader
+from pydantic import BaseModel
 
-# Import local modules
-from llm.state_manager import StateManager
+# ── Internal modules ──────────────────────────────────────────────────────────
+from ws_hub import ws_manager
+from db.db_manager import db
+from demo_runner import DemoCallEngine
 from agent_runner import run_campaign
+from telephony.provider_registry import get_provider, list_providers
 
-import base64
+# Pipecat imports for live voice WebSocket
+from pipecat.frames.frames import AudioRawFrame, EndFrame, Frame, StartFrame, TextFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
-from pipecat.frames.frames import AudioRawFrame, EndFrame, TextFrame, StartFrame, Frame
-from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
-from fastapi import WebSocket, WebSocketDisconnect
-from flows.runtime import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from flows.runtime import AgentTextFrame, RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
+from llm.state_manager import StateManager
 
-app = FastAPI(title="Cosmic Chameleon Voice Agent Platform")
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d - %(message)s",
+    handlers=[
+        logging.FileHandler("voice_agent.log"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("server")
 
-# CORS for local development
+# ── Constants ─────────────────────────────────────────────────────────────────
+DB_DIR           = "db"
+AGENTS_DIR       = os.path.join(DB_DIR, "agents")
+os.makedirs(DB_DIR, exist_ok=True)
+os.makedirs(AGENTS_DIR, exist_ok=True)
+WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "http://localhost:3000")
+
+# API Key Auth — set PLATFORM_API_KEY in .env; if empty, auth is DISABLED (dev mode)
+_PLATFORM_API_KEY = os.getenv("PLATFORM_API_KEY", "")
+_api_key_header   = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+async def require_auth(key: str | None = Depends(_api_key_header)) -> None:
+    """Dependency: validates X-API-Key header on write endpoints.
+    If PLATFORM_API_KEY is not set in .env, auth is skipped (development mode).
+    """
+    if not _PLATFORM_API_KEY:
+        return  # dev mode — no key required
+    if key != _PLATFORM_API_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden: invalid or missing API key")
+
+
+# ── App lifespan (replaces deprecated on_event) ───────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Startup: initialize DB and migrate JSON files. Shutdown: nothing needed."""
+    logger.info("Initializing database...")
+    await db.initialize()
+    logger.info("Database ready.")
+    yield
+    logger.info("Server shutting down.")
+
+
+# ── App setup ─────────────────────────────────────────────────────────────────
+app = FastAPI(
+    title="Voice AI Calling SaaS Platform",
+    version="2.1",
+    lifespan=lifespan,
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,28 +104,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Constants
-DB_DIR = "db"
-AGENTS_DIR = os.path.join(DB_DIR, "agents")
-AGENTS_LIST_FILE = os.path.join(DB_DIR, "agents.json")
-CAMPAIGNS_FILE = os.path.join(DB_DIR, "campaigns.json")
-LEADS_FILE = os.path.join(DB_DIR, "leads.json")
-ASSIGNMENTS_FILE = os.path.join(DB_DIR, "assignments.json")
-MAX_RETRIES = 3
 
-# Ensure directories exist
-os.makedirs(DB_DIR, exist_ok=True)
-os.makedirs(AGENTS_DIR, exist_ok=True)
-
-def init_db():
-    for file, default in [(AGENTS_LIST_FILE, []), (CAMPAIGNS_FILE, []), (LEADS_FILE, []), (ASSIGNMENTS_FILE, {})]:
-        if not os.path.exists(file):
-            with open(file, "w") as f:
-                json.dump(default, f)
-
-init_db()
-
-# Models
+# ── Pydantic Models ───────────────────────────────────────────────────────────
 class AgentCreate(BaseModel):
     name: str
     voice: str
@@ -79,194 +119,303 @@ class LeadsUpload(BaseModel):
     campaignId: str
     leads: List[dict]
 
+class CampaignCreate(BaseModel):
+    campaignId: str
+    agentId: Optional[str] = None
+    telephonyProvider: Optional[str] = "demo"
+
 class CampaignStart(BaseModel):
     campaignId: str
     agentId: Optional[str] = None
+    telephonyProvider: Optional[str] = "demo"
 
 class AssignmentUpdate(BaseModel):
     clientId: str
     agentId: str
 
-# Helper functions
-def read_json(path):
+class DemoStart(BaseModel):
+    campaignId: str
+    agentId: Optional[str] = None
+    leadOverride: Optional[dict] = None
+    clientId: Optional[str] = "global"
+
+class PhoneNumberPurchase(BaseModel):
+    phoneNumber: str
+    provider: str = "twilio"
+    clientId: Optional[str] = None
+
+class PhoneNumberAssign(BaseModel):
+    numberId: str
+    clientId: str
+
+
+# ── Health Check ──────────────────────────────────────────────────────────────
+@app.get("/health")
+async def health():
+    """
+    Uptime monitoring endpoint. UptimeRobot / BetterUptime hits this every 5 min.
+    Returns 200 if server is alive and DB is reachable.
+    """
     try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except:
-        return []
+        await db.get_dashboard_stats()
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {e}"
 
-def write_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f, indent=4)
-
-# Routes
-@app.get("/")
-async def get_index():
-    return FileResponse("../Frontend/index.html")
-
-@app.get("/api/dashboard")
-async def get_dashboard():
-    campaigns = read_json(CAMPAIGNS_FILE)
-    agents = read_json(AGENTS_LIST_FILE)
-    total_calls = sum(len(c.get("results", [])) for c in campaigns)
     return {
-        "totalClients": 3,
-        "activeAgents": len(agents) or 3,
-        "calls": total_calls or 570,
-        "connectRate": 38.5
+        "status": "ok",
+        "version": "2.1",
+        "db": db_status,
+        "auth": "enabled" if _PLATFORM_API_KEY else "disabled (dev mode)",
+        "timestamp": datetime.now().isoformat(),
     }
 
-@app.post("/api/agents")
+
+# ── Frontend ──────────────────────────────────────────────────────────────────
+@app.get("/", response_class=HTMLResponse)
+async def serve_frontend():
+    frontend_path = os.path.join(os.path.dirname(__file__), "..", "Frontend", "index.html")
+    if os.path.exists(frontend_path):
+        return FileResponse(frontend_path)
+    return HTMLResponse("<h1>Frontend not found</h1>", status_code=404)
+
+@app.get("/audio-worklet-processor.js")
+async def serve_audio_worklet():
+    """Serve the AudioWorklet processor script (replaces deprecated ScriptProcessor)."""
+    worklet_path = os.path.join(os.path.dirname(__file__), "..", "Frontend", "audio-worklet-processor.js")
+    if os.path.exists(worklet_path):
+        return FileResponse(worklet_path, media_type="application/javascript")
+    # Inline fallback if file doesn't exist yet
+    js = """
+class MicCaptureProcessor extends AudioWorkletProcessor {
+  constructor() { super(); this._buffer = []; }
+  process(inputs) {
+    const ch = inputs[0]?.[0];
+    if (ch) { for (let i = 0; i < ch.length; i++) this._buffer.push(ch[i]); }
+    if (this._buffer.length >= 2048) {
+      this.port.postMessage(new Float32Array(this._buffer.splice(0, 2048)));
+    }
+    return true;
+  }
+}
+registerProcessor('mic-capture-processor', MicCaptureProcessor);
+"""
+    return HTMLResponse(js, media_type="application/javascript")
+
+
+# ── Dashboard Stats ───────────────────────────────────────────────────────────
+@app.get("/api/dashboard")
+async def get_dashboard():
+    return await db.get_dashboard_stats()
+
+
+# ── Agents ────────────────────────────────────────────────────────────────────
+@app.get("/api/agents")
+async def list_agents():
+    return await db.list_agents()
+
+@app.post("/api/agents", dependencies=[Depends(require_auth)])
 async def create_agent(agent: AgentCreate):
-    agents_list = read_json(AGENTS_LIST_FILE)
     agent_id = str(uuid.uuid4())
-    
-    # 1. Generate full schema using StateManager template
-    # Mapping UI voice names to ElevenLabs IDs if possible, else use strings
     voice_map = {"ElevenLabs — Priya (Female)": "11labs-06nek6zjTCD1vCbtc8bc"}
-    voice_id = voice_map.get(agent.voice, agent.voice)
-    
+    voice_id  = voice_map.get(agent.voice, agent.voice)
     agent_schema = StateManager.template_new_agent(
         name=agent.name,
         script=agent.script,
         voice_id=voice_id,
-        data_fields=agent.data_fields
+        data_fields=agent.data_fields,
     )
-    
-    # 2. Save full schema to db/agents/
     schema_path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
-    write_json(schema_path, agent_schema)
-    
-    # 3. Add to list for UI
-    new_agent_meta = agent.dict()
-    new_agent_meta["id"] = agent_id
-    new_agent_meta["schema_path"] = schema_path
-    new_agent_meta["createdAt"] = datetime.now().isoformat()
-    agents_list.append(new_agent_meta)
-    
-    write_json(AGENTS_LIST_FILE, agents_list)
-    return new_agent_meta
+    with open(schema_path, "w") as f:
+        json.dump(agent_schema, f, indent=4)
+    data = {**agent.dict(), "schema_path": schema_path, "created_at": datetime.now().isoformat()}
+    return await db.create_agent(agent_id, data)
 
-@app.get("/api/agents")
-async def list_agents():
-    return read_json(AGENTS_LIST_FILE)
 
-@app.post("/api/leads/upload")
+# ── Leads ─────────────────────────────────────────────────────────────────────
+@app.post("/api/leads/upload", dependencies=[Depends(require_auth)])
 async def upload_leads(data: LeadsUpload):
-    leads_db = read_json(LEADS_FILE)
-    existing = next((item for item in leads_db if item["campaignId"] == data.campaignId), None)
-    if existing:
-        existing["leads"] = data.leads
+    await db.upsert_leads(data.campaignId, data.leads)
+    existing = await db.get_campaign(data.campaignId)
+    if not existing:
+        await db.upsert_campaign(data.campaignId, {"status": "Pending", "created_at": datetime.now().isoformat()})
     else:
-        leads_db.append({
-            "campaignId": data.campaignId,
-            "leads": data.leads,
-            "createdAt": datetime.now().isoformat()
-        })
-    write_json(LEADS_FILE, leads_db)
-    
-    campaigns = read_json(CAMPAIGNS_FILE)
-    c_existing = next((c for c in campaigns if c["id"] == data.campaignId), None)
-    if not c_existing:
-        campaigns.append({
-            "id": data.campaignId,
-            "status": "Pending",
-            "results": [],
-            "createdAt": datetime.now().isoformat()
-        })
-    else:
-        c_existing["status"] = "Pending"
-        c_existing["results"] = []
-    write_json(CAMPAIGNS_FILE, campaigns)
-    return {"status": "success"}
+        await db.set_campaign_status(data.campaignId, "Pending")
+    return {"status": "success", "count": len(data.leads)}
 
-@app.post("/api/campaigns/start")
+
+# ── Campaigns ─────────────────────────────────────────────────────────────────
+@app.get("/api/campaigns")
+async def list_campaigns():
+    return await db.list_campaigns()
+
+@app.post("/api/campaigns/start", dependencies=[Depends(require_auth)])
 async def start_campaign(data: CampaignStart, background_tasks: BackgroundTasks):
-    campaigns = read_json(CAMPAIGNS_FILE)
-    campaign = next((c for c in campaigns if c["id"] == data.campaignId), None)
+    campaign = await db.get_campaign(data.campaignId)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
-        
-    campaign["status"] = "Active"
-    campaign["results"] = [] # Clear previous if restarting
-    write_json(CAMPAIGNS_FILE, campaigns)
-    
-    # Use assigned agent or default
-    agent_id = data.agentId or "default"
-    
-    background_tasks.add_task(run_campaign, data.campaignId, agent_id)
-    return {"status": "started"}
+    await db.set_campaign_status(data.campaignId, "Active")
+    provider_slug     = data.telephonyProvider or "demo"
+    agent_id          = data.agentId or "default"
+    if provider_slug == "demo":
+        engine           = DemoCallEngine(ws_manager=ws_manager, db=db)
+        agent_schema_path = _resolve_schema(agent_id)
+        background_tasks.add_task(engine.run_demo_campaign, data.campaignId, agent_schema_path)
+    else:
+        background_tasks.add_task(run_campaign, data.campaignId, agent_id, provider_slug)
+    return {"status": "started", "provider": provider_slug}
 
 @app.get("/api/campaigns/{campaign_id}/results")
 async def get_results(campaign_id: str):
-    campaigns = read_json(CAMPAIGNS_FILE)
-    for c in campaigns:
-        if c["id"] == campaign_id:
-            return c["results"]
-    return []
-
-@app.get("/api/assignments/{client_id}")
-async def get_assignment(client_id: str):
-    assignments = read_json(ASSIGNMENTS_FILE)
-    agent_id = assignments.get(client_id)
-    if not agent_id:
-        return {"agentId": None}
-    
-    agents = read_json(AGENTS_LIST_FILE)
-    agent = next((a for a in agents if a["id"] == agent_id), None)
-    return {"agentId": agent_id, "agent": agent}
-
-@app.post("/api/assignments")
-async def update_assignment(data: AssignmentUpdate):
-    assignments = read_json(ASSIGNMENTS_FILE)
-    assignments[data.clientId] = data.agentId
-    write_json(ASSIGNMENTS_FILE, assignments)
-    return {"status": "success"}
-
-# --- Telephony Monitoring & Simulation (Phase 10) ---
-
-LIVE_STATE_FILE = os.path.join(DB_DIR, "live_state.json")
+    return await db.get_results_for_campaign(campaign_id)
 
 @app.get("/api/campaigns/{campaign_id}/live")
 async def get_live_state(campaign_id: str):
-    state = read_json(LIVE_STATE_FILE)
-    if not isinstance(state, dict): return []
-    # Return list of active/last calls for this campaign
-    return [v for k, v in state.items() if v.get("campaignId") == campaign_id]
+    return await db.get_live_state(campaign_id)
 
 @app.get("/api/campaigns/all/live")
 async def get_all_live_state():
-    state = read_json(LIVE_STATE_FILE)
-    if not isinstance(state, dict): return []
-    return list(state.values())
+    return await db.get_all_live_state()
+
+
+# ── Demo Mode (simulated calls — AI vs AI) ────────────────────────────────────
+@app.post("/api/demo/start", dependencies=[Depends(require_auth)])
+async def start_demo(data: DemoStart, background_tasks: BackgroundTasks):
+    """
+    Start a simulated demo campaign (AI generates human responses).
+    Dashboard updates in real-time via WebSocket.
+    """
+    campaign_id       = data.campaignId
+    agent_id          = data.agentId or "default"
+    agent_schema_path = _resolve_schema(agent_id)
+    client_id         = data.clientId or "global"
+
+    existing = await db.get_campaign(campaign_id)
+    if not existing:
+        await db.upsert_campaign(campaign_id, {
+            "status": "Active",
+            "telephony_provider": "demo",
+            "client_id": client_id,
+            "created_at": datetime.now().isoformat(),
+        })
+    else:
+        await db.set_campaign_status(campaign_id, "Active")
+
+    engine = DemoCallEngine(ws_manager=ws_manager, db=db)
+    if data.leadOverride:
+        background_tasks.add_task(engine.run_demo_call, campaign_id, data.leadOverride, agent_schema_path, client_id)
+    else:
+        background_tasks.add_task(engine.run_demo_campaign, campaign_id, agent_schema_path, client_id)
+
+    return {"status": "demo_started", "campaign_id": campaign_id}
+
+
+# ── Assignments ───────────────────────────────────────────────────────────────
+@app.get("/api/assignments/{client_id}")
+async def get_assignment(client_id: str):
+    agent_id = await db.get_assignment(client_id)
+    if not agent_id:
+        return {"agentId": None}
+    agents = await db.list_agents()
+    agent  = next((a for a in agents if a["id"] == agent_id), None)
+    return {"agentId": agent_id, "agent": agent}
+
+@app.post("/api/assignments", dependencies=[Depends(require_auth)])
+async def update_assignment(data: AssignmentUpdate):
+    await db.set_assignment(data.clientId, data.agentId)
+    return {"status": "success"}
+
+
+# ── Telephony Providers ───────────────────────────────────────────────────────
+@app.get("/api/telephony/providers")
+async def get_providers():
+    return list_providers()
 
 @app.get("/api/telephony/numbers")
-async def list_numbers():
-    return [
-        {"phone": "+91 9122 334455", "region": "Mumbai, IN", "assigned": "Realty Pro Inc."},
-        {"phone": "+91 9155 667788", "region": "Bangalore, IN", "assigned": "FinServ Co"}
-    ]
+async def list_numbers(client_id: Optional[str] = None):
+    return await db.list_phone_numbers(client_id)
 
-@app.post("/api/telephony/buy")
-async def buy_number():
-    return {"status": "success", "phone": "+91 9122 " + str(uuid.uuid4().int)[:6]} # Mock purchase
+@app.post("/api/telephony/numbers/search")
+async def search_numbers(provider: str = "twilio", country_code: str = "IN"):
+    p = get_provider(provider)
+    return await p.list_available_numbers(country_code)
 
-# --- Live Voice Support (Phase 8) ---
+@app.post("/api/telephony/numbers/purchase", dependencies=[Depends(require_auth)])
+async def purchase_number(data: PhoneNumberPurchase):
+    provider = get_provider(data.provider)
+    result   = await provider.purchase_number(data.phoneNumber)
+    if result.get("status") in ("active", "simulated"):
+        number_data = {
+            "phone":     result["phone"],
+            "sid":       result.get("sid", ""),
+            "provider":  data.provider,
+            "client_id": data.clientId,
+            "region":    "",
+        }
+        saved = await db.add_phone_number(number_data)
+        return {"status": "success", **saved}
+    raise HTTPException(status_code=400, detail=result.get("error", "Purchase failed"))
 
-# --- Live Voice Support (Phase 8) ---
+@app.post("/api/telephony/numbers/assign", dependencies=[Depends(require_auth)])
+async def assign_number(data: PhoneNumberAssign):
+    await db.assign_number_to_client(data.numberId, data.clientId)
+    return {"status": "success"}
+
+@app.post("/api/telephony/buy")  # legacy compat
+async def legacy_buy_number():
+    return {"status": "success", "phone": "+91 9122 " + str(uuid.uuid4().int)[:6]}
+
+
+# ── Twilio Webhooks ───────────────────────────────────────────────────────────
+@app.post("/telephony/twiml/{call_id}")
+async def twilio_twiml(call_id: str, request: Request):
+    from telephony.twilio_handler import build_twiml
+    ws_url     = WEBHOOK_BASE_URL.replace("http://", "wss://").replace("https://", "wss://")
+    stream_url = f"{ws_url}/telephony/stream/{call_id}"
+    twiml      = build_twiml(stream_url)
+    return HTMLResponse(content=twiml, media_type="application/xml")
+
+@app.websocket("/telephony/stream/{call_id}")
+async def twilio_stream(websocket: WebSocket, call_id: str):
+    from telephony.twilio_handler import handle_twilio_stream
+    agent_schema_path = _resolve_schema("default")
+    await handle_twilio_stream(websocket, call_id=call_id, agent_schema_path=agent_schema_path, ws_manager=ws_manager)
+
+
+# ── WebSocket Dashboard Hub ───────────────────────────────────────────────────
+@app.websocket("/ws/dashboard/{client_id}")
+async def dashboard_ws(websocket: WebSocket, client_id: str = "global"):
+    await ws_manager.connect(websocket, client_id)
+    logger.info("Dashboard WS connected: client=%s", client_id)
+    try:
+        while True:
+            await websocket.receive_text()   # keep-alive; server pushes events
+    except WebSocketDisconnect:
+        logger.info("Dashboard WS disconnected: client=%s", client_id)
+    except Exception as e:
+        logger.error("Dashboard WS error: %s", e)
+    finally:
+        await ws_manager.disconnect(websocket, client_id)
+
+@app.websocket("/ws/dashboard")
+async def dashboard_ws_global(websocket: WebSocket):
+    await dashboard_ws(websocket, client_id="global")
+
+
+# ── VoiceLiveSource / VoiceLiveSink (shared by /api/voice-live and /api/voice-demo) ──
 
 class VoiceLiveSource(FrameProcessor):
+    """Bridges browser mic audio (via WS binary messages) into the Pipecat pipeline."""
+
     def __init__(self):
         super().__init__()
-        self._started = False
-        self._queue = asyncio.Queue()
+        self._started      = False
+        self._queue: asyncio.Queue = asyncio.Queue()
         self._process_task = None
 
     async def _process_queue(self):
-        logger.info("VoiceLiveSource: Waiting for StartFrame before processing queue...")
         while not self._started:
             await asyncio.sleep(0.05)
-        logger.info("VoiceLiveSource: Queue processing active.")
         while True:
             try:
                 frame = await self._queue.get()
@@ -275,98 +424,307 @@ class VoiceLiveSource(FrameProcessor):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error in queue processing: {e}")
+                logger.error("VoiceLiveSource queue error: %s", e)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         if isinstance(frame, StartFrame):
             self._started = True
-            logger.info("[PIPELINE] Source -> Received StartFrame from runner.")
             if not self._process_task:
                 self._process_task = asyncio.create_task(self._process_queue())
-        else:
-            logger.info("[PIPELINE] Source -> Passing control frame: %s", type(frame).__name__)
         await self.push_frame(frame, direction)
 
     def queue_audio(self, data: bytes):
-        frame = AudioRawFrame(audio=data, sample_rate=16000, num_channels=1)
-        self._queue.put_nowait(frame)
+        self._queue.put_nowait(AudioRawFrame(audio=data, sample_rate=16000, num_channels=1))
+
 
 class VoiceLiveSink(FrameProcessor):
-    def __init__(self, websocket: WebSocket):
+    """
+    Sends pipeline output back to the browser WebSocket.
+
+    Binary frames  → raw PCM16 audio → browser AudioContext plays it
+    AgentTextFrame → {"type":"transcript","speaker":"agent","text":"..."}
+    TextFrame      → {"type":"transcript","speaker":"user","text":"..."}
+
+    Fix Issue 9: speaker label is now always included.
+    """
+
+    def __init__(self, websocket: WebSocket, on_transcript=None):
         super().__init__()
-        self.ws = websocket
+        self.ws            = websocket
+        self.on_transcript = on_transcript  # optional async callback(speaker, text)
 
     async def process_frame(self, frame, direction):
         if isinstance(frame, AudioRawFrame):
-            # Send raw binary audio to browser for performance
             try:
-                logger.info("[PIPELINE] Sink -> Sending audio bytes to WebSocket")
                 await self.ws.send_bytes(frame.audio)
-            except:
+            except Exception:
                 pass
-        else:
-            logger.info("[PIPELINE] Sink -> Passing control frame: %s", type(frame).__name__)
+
+        elif isinstance(frame, TextFrame):
+            # AgentTextFrame is a subclass of TextFrame — distinguish speaker
+            is_agent = isinstance(frame, AgentTextFrame)
+            speaker  = "agent" if is_agent else "user"
+            try:
+                await self.ws.send_text(json.dumps({
+                    "type":    "transcript",
+                    "speaker": speaker,
+                    "text":    frame.text,
+                }))
+            except Exception:
+                pass
+            # Notify demo endpoint so it can fire dashboard events
+            if self.on_transcript:
+                try:
+                    await self.on_transcript(speaker, frame.text)
+                except Exception as e:
+                    logger.warning("on_transcript callback error: %s", e)
+
         await self.push_frame(frame, direction)
 
-@app.websocket("/api/voice-live")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    
-    # Try to grab agentId from query params, otherwise use the last assigned agent
-    agent_id = websocket.query_params.get("agentId", "default")
-    logger.info("Live Voice: Browser connected. Agent ID: %s", agent_id)
 
-    # Determine schema path (using default if specified ID doesn't exist)
-    schema_path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
-    if not os.path.exists(schema_path):
-        schema_path = "Updated_Real_Estate_Agent.json"
-    
-    logger.info("Live Voice: Using schema from %s", schema_path)
+# ── Live Voice — plain voice chat (no dashboard events) ──────────────────────
+@app.websocket("/api/voice-live")
+async def websocket_voice_live(websocket: WebSocket):
+    """
+    Simple browser mic → STT → LLM → TTS → browser speakers.
+    No dashboard events. Used by the Talk Live page.
+    Fix Issue 2: websocket.accept() is now called FIRST.
+    """
+    # Accept BEFORE touching anything else
+    await websocket.accept()
+
+    agent_id    = websocket.query_params.get("agentId", "default")
+    schema_path = _resolve_schema(agent_id)
+    logger.info("Live Voice: Connected — agent=%s schema=%s", agent_id, schema_path)
 
     source = VoiceLiveSource()
-    stt = RealEstateSTTProcessor()
-    llm = RealEstateLLMProcessor()
-    # Pass the specialized schema to the LLM processor
+    stt    = RealEstateSTTProcessor()
+    llm    = RealEstateLLMProcessor()
     llm.state_manager = StateManager(schema_path)
-    
-    tts = RealEstateTTSProcessor()
-    sink = VoiceLiveSink(websocket)
+    tts    = RealEstateTTSProcessor()
+    sink   = VoiceLiveSink(websocket)
 
-    pipeline = Pipeline([source, stt, llm, tts, sink])
-    runner = PipelineRunner()
-    task = PipelineTask(pipeline)
+    pipeline    = Pipeline([source, stt, llm, tts, sink])
+    runner      = PipelineRunner()
+    task        = PipelineTask(pipeline)
     runner_task = asyncio.create_task(runner.run(task))
-
-    logger.info("Live Voice: Pipeline runner started.")
 
     try:
         while True:
-            # Browser sends 16kHz PCM16 mono audio bytes
-            data = await websocket.receive_bytes()
-            if not data:
-                continue
-            
-            # Safely queue audio into the source
-            source.queue_audio(data)
-
+            msg = await websocket.receive()
+            if msg["type"] == "websocket.receive":
+                data = msg.get("bytes") or b""
+                if data:
+                    source.queue_audio(data)
+            elif msg["type"] == "websocket.disconnect":
+                break
     except WebSocketDisconnect:
-        logger.info("Live Voice: Browser disconnected explicitly")
+        logger.info("Live Voice: Disconnected — agent=%s", agent_id)
     except Exception as e:
-        logger.error(f"Live Voice Error in loop: {e}")
+        logger.error("Live Voice error: %s", e)
     finally:
-        logger.info("Live Voice: Cleaning up pipeline...")
         try:
             if source._process_task:
                 source._process_task.cancel()
             await source.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
-            # Give the pipeline a moment to finish processing remaining frames
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.3)
             runner_task.cancel()
             await runner_task
-        except (asyncio.CancelledError, Exception) as e:
-            logger.debug(f"Cleanup info: {e}")
-        logger.info("Live Voice: Closed.")
+        except (asyncio.CancelledError, Exception):
+            pass
 
+
+# ── Voice Demo — browser mic + live dashboard events  ────────────────────────
+@app.websocket("/api/voice-demo")
+async def websocket_voice_demo(websocket: WebSocket):
+    """
+    Client speaks via browser mic. The AI pipeline runs normally.
+    ADDITIONALLY: every transcript exchange fires dashboard WebSocket events
+    so the Live Feed panel shows ringing → talking → transcript → completed,
+    exactly the same as a real campaign call.
+
+    Query params:
+      agentId    — which agent schema to use
+      clientId   — for WS broadcast scoping (defaults to 'global')
+      leadName   — display name in the live feed (defaults to 'Demo User')
+    """
+    # Accept FIRST (Issue 2)
+    await websocket.accept()
+
+    agent_id    = websocket.query_params.get("agentId",  "default")
+    client_id   = websocket.query_params.get("clientId", "global")
+    lead_name   = websocket.query_params.get("leadName", "Demo User")
+    schema_path = _resolve_schema(agent_id)
+    campaign_id = f"demo_mic_{uuid.uuid4().hex[:8]}"
+    lead_uid    = f"{campaign_id}_demo"
+    transcripts: list[dict] = []
+
+    logger.info("Voice Demo: Connected — agent=%s client=%s campaign=%s", agent_id, client_id, campaign_id)
+
+    try:
+        # Create campaign record in DB
+        # Note: client_id and agent_id are FK columns — pass None (NULL) to avoid
+        # FK constraint errors for demo sessions which aren't tied to real DB rows.
+        await db.upsert_campaign(campaign_id, {
+            "name":               f"Demo — {lead_name}",
+            "status":             "Active",
+            "agent_id":           None,           # NULL is allowed in FK cols
+            "client_id":          None,           # NULL is allowed in FK cols
+            "telephony_provider": "demo_mic",
+            "created_at":         datetime.now().isoformat(),
+        })
+        logger.info("Voice Demo: DB record created — %s", campaign_id)
+
+        # Emit "Ringing" event so the live feed shows a call card immediately
+        await ws_manager.send_call_event(
+            "call_ringing",
+            campaign_id=campaign_id,
+            lead_id=lead_uid,
+            lead_name=lead_name,
+            status="Ringing...",
+            snippet="Connecting to agent...",
+            provider="demo_mic",
+            client_id=client_id,
+        )
+        logger.info("Voice Demo: Ringing event sent")
+    except Exception as _setup_err:
+        logger.exception("Voice Demo: Setup FAILED — %s", _setup_err)
+        try:
+            await websocket.close(code=1011, reason="Setup error")
+        except Exception:
+            pass
+        return
+
+    async def on_transcript(speaker: str, text: str):
+        """Called by VoiceLiveSink on every transcript line — forwards to dashboard."""
+        role = "assistant" if speaker == "agent" else "user"
+        transcripts.append({"role": role, "content": text})
+
+        await ws_manager.send_call_event(
+            "call_talking",
+            campaign_id=campaign_id,
+            lead_id=lead_uid,
+            lead_name=lead_name,
+            status="Talking",
+            snippet=text,
+            transcripts=list(transcripts),
+            provider="demo_mic",
+            client_id=client_id,
+        )
+
+    try:
+        source = VoiceLiveSource()
+        stt    = RealEstateSTTProcessor()
+        llm    = RealEstateLLMProcessor()
+        llm.state_manager = StateManager(schema_path)
+        tts    = RealEstateTTSProcessor()
+        sink   = VoiceLiveSink(websocket, on_transcript=on_transcript)
+        logger.info("Voice Demo: Pipeline components created")
+
+        pipeline    = Pipeline([source, stt, llm, tts, sink])
+        runner      = PipelineRunner()
+        task        = PipelineTask(pipeline)
+        runner_task = asyncio.create_task(runner.run(task))
+        logger.info("Voice Demo: Pipeline running")
+    except Exception as _pipe_err:
+        logger.exception("Voice Demo: Pipeline creation FAILED — %s", _pipe_err)
+        try:
+            await websocket.close(code=1011, reason="Pipeline error")
+        except Exception:
+            pass
+        return
+
+    # Emit "Connected" once pipeline is wired
+    await ws_manager.send_call_event(
+        "call_connected",
+        campaign_id=campaign_id,
+        lead_id=lead_uid,
+        lead_name=lead_name,
+        status="Connected",
+        snippet="Speaking with agent...",
+        provider="demo_mic",
+        client_id=client_id,
+    )
+    logger.info("Voice Demo: Connected event sent — ready to receive audio")
+
+    try:
+        while True:
+            # Use receive() not receive_bytes():
+            # receive_bytes() raises RuntimeError if it gets a text or ping frame
+            # (e.g. browser keepalive, or greeting transcript sent back before audio),
+            # which immediately tears down the session.
+            msg = await websocket.receive()
+            if msg["type"] == "websocket.receive":
+                data = msg.get("bytes") or b""
+                if data:
+                    source.queue_audio(data)
+                # text frames (keepalive pings from browser) are silently ignored
+            elif msg["type"] == "websocket.disconnect":
+                break
+    except WebSocketDisconnect:
+        logger.info("Voice Demo: Disconnected — campaign=%s turns=%d", campaign_id, len(transcripts))
+    except Exception as e:
+        logger.error("Voice Demo error: %s", e)
+    finally:
+        # Tear down pipeline
+        try:
+            if source._process_task:
+                source._process_task.cancel()
+            await source.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+            await asyncio.sleep(0.3)
+            runner_task.cancel()
+            await runner_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+        # Emit "Completed" with full transcript
+        result = {
+            "name":         lead_name,
+            "phone":        "browser-mic",
+            "calledAt":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "duration":     f"{len(transcripts) * 8}s (est.)",
+            "status":       "Connected",
+            "interested":   "—",
+            "budget":       "—",
+            "transcription": transcripts,
+            "provider":     "demo_mic",
+            "processed":    True,
+        }
+        await ws_manager.send_call_event(
+            "call_completed",
+            campaign_id=campaign_id,
+            lead_id=lead_uid,
+            lead_name=lead_name,
+            status="Completed",
+            snippet="Demo session ended",
+            transcripts=transcripts,
+            result=result,
+            provider="demo_mic",
+            client_id=client_id,
+        )
+        # Persist to DB
+        try:
+            await db.append_call_result(campaign_id, result)
+            await db.update_live_state(lead_uid, campaign_id, lead_name, "Completed", "Demo session ended", transcripts, "demo_mic")
+            await db.set_campaign_status(campaign_id, "Done")
+        except Exception as e:
+            logger.error("Voice Demo DB persist error: %s", e)
+
+
+# ── Helper ────────────────────────────────────────────────────────────────────
+def _resolve_schema(agent_id: str) -> str:
+    """
+    Resolve the agent schema path from agent_id.
+    Always reads from disk — never cached — so fine-tuning changes apply immediately.
+    """
+    path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
+    if os.path.exists(path):
+        return path
+    default = os.path.join(os.path.dirname(__file__), "Updated_Real_Estate_Agent.json")
+    return default
+
+
+# ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000)
+    uvicorn.run(app, host="0.0.0.0", port=3000, reload=False)
