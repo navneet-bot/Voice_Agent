@@ -76,11 +76,15 @@ class RealEstateLLMProcessor(FrameProcessor):
         self.state_manager = StateManager(STATE_SCHEMA_PATH)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
+        await super().process_frame(frame, direction)
         if isinstance(frame, StartFrame) and not self._booted:
             self._booted = True
             self.state_manager.reset_state()
             pipeline_logger.log_event("call_started", {"start_node": self.state_manager.start_node_id})
             
+            # PUSH STARTFRAME DOWNSTREAM FIRST to strictly follow Pipecat protocol
+            await self.push_frame(frame, direction)
+
             logger.info("[PIPELINE] LLM -> Received StartFrame. Triggering initial greeting...")
             try:
                 reply = await generate_response(
@@ -100,7 +104,6 @@ class RealEstateLLMProcessor(FrameProcessor):
                 pipeline_logger.log_event("agent_reply", {"content": reply, "node": self.state_manager.current_node_id})
                 await self.push_frame(AgentTextFrame(reply, language=self.current_language), direction)
             
-            await self.push_frame(frame, direction)
             return
 
         if not isinstance(frame, TextFrame):
@@ -164,6 +167,7 @@ class RealEstateSTTProcessor(FrameProcessor):
         self.last_emit_at = 0.0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
+        await super().process_frame(frame, direction)
         if not isinstance(frame, AudioRawFrame):
             logger.info("[PIPELINE] STT -> Passing control frame: %s", type(frame).__name__)
             await self.push_frame(frame, direction)
@@ -213,6 +217,7 @@ class RealEstateTTSProcessor(FrameProcessor):
         self.last_reply_at = 0.0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
+        await super().process_frame(frame, direction)
         if not isinstance(frame, TextFrame):
             logger.info("[PIPELINE] TTS -> Passing control frame: %s", type(frame).__name__)
             await self.push_frame(frame, direction)

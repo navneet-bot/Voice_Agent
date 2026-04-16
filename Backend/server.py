@@ -427,11 +427,12 @@ class VoiceLiveSource(FrameProcessor):
                 logger.error("VoiceLiveSource queue error: %s", e)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        await self.push_frame(frame, direction)
         if isinstance(frame, StartFrame):
             self._started = True
             if not self._process_task:
                 self._process_task = asyncio.create_task(self._process_queue())
-        await self.push_frame(frame, direction)
 
     def queue_audio(self, data: bytes):
         self._queue.put_nowait(AudioRawFrame(audio=data, sample_rate=16000, num_channels=1))
@@ -454,6 +455,7 @@ class VoiceLiveSink(FrameProcessor):
         self.on_transcript = on_transcript  # optional async callback(speaker, text)
 
     async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
         if isinstance(frame, AudioRawFrame):
             try:
                 await self.ws.send_bytes(frame.audio)
