@@ -614,11 +614,16 @@ async def websocket_voice_demo(websocket: WebSocket):
             client_id=client_id,
         )
 
+    # Keep a reference to the LLM processor so we can read extracted conversation
+    # data (budget, location, etc.) from the StateManager after the call ends.
+    llm_ref = None
+
     try:
         source = VoiceLiveSource()
         stt    = RealEstateSTTProcessor()
         llm    = RealEstateLLMProcessor()
         llm.state_manager = StateManager(schema_path)
+        llm_ref = llm  # capture ref BEFORE runner_task starts
         tts    = RealEstateTTSProcessor()
         sink   = VoiceLiveSink(websocket, on_transcript=on_transcript)
         logger.info("Voice Demo: Pipeline components created")
@@ -679,19 +684,34 @@ async def websocket_voice_demo(websocket: WebSocket):
         except (asyncio.CancelledError, Exception):
             pass
 
-        # Emit "Completed" with full transcript
+        # ── Extract real lead data from the StateManager conversation_data ──
+        conv_data: dict = {}
+        try:
+            if llm_ref and hasattr(llm_ref, "state_manager"):
+                conv_data = llm_ref.state_manager.conversation_data or {}
+        except Exception as _cd_err:
+            logger.warning("Voice Demo: Could not read conversation_data — %s", _cd_err)
+
+        interested = "Yes" if (conv_data.get("intent_value") or conv_data.get("location")) else "No"
+
+        # Emit "Completed" with full transcript and real extracted lead data
         result = {
-            "name":         lead_name,
-            "phone":        "browser-mic",
-            "calledAt":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "duration":     f"{len(transcripts) * 8}s (est.)",
-            "status":       "Connected",
-            "interested":   "—",
-            "budget":       "—",
+            "name":          lead_name,
+            "phone":         "browser-mic",
+            "calledAt":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "duration":      f"{len(transcripts) * 8}s (est.)",
+            "status":        "Connected",
+            "interested":    interested,
+            "budget":        conv_data.get("budget", "—"),
+            "location":      conv_data.get("location", "—"),
+            "timeline":      conv_data.get("timeline", "—"),
+            "property_type": conv_data.get("property_type", "—"),
             "transcription": transcripts,
-            "provider":     "demo_mic",
-            "processed":    True,
+            "provider":      "demo_mic",
+            "processed":     True,
+            "lead_data":     conv_data,  # send raw extracted slots for frontend card
         }
+        logger.info("Voice Demo: Extracted lead data — %s", conv_data)
         await ws_manager.send_call_event(
             "call_completed",
             campaign_id=campaign_id,
@@ -704,6 +724,18 @@ async def websocket_voice_demo(websocket: WebSocket):
             provider="demo_mic",
             client_id=client_id,
         )
+        # Also push the completed result directly to the voice WebSocket so the
+        # frontend Demo page (which listens on liveSocket.onmessage) can render
+        # the lead summary card without waiting for the dashboard WS.
+        try:
+            await websocket.send_text(json.dumps({
+                "type":   "call_completed",
+                "result": result,
+                "leadId": lead_uid,
+                "leadName": lead_name,
+            }))
+        except Exception:
+            pass  # WebSocket may already be closed — that's fine
         # Persist to DB
         try:
             await db.append_call_result(campaign_id, result)

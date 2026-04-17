@@ -2253,6 +2253,10 @@
             </div>
           </div>
         </div>
+
+        <!-- Lead Result Card — shown after call ends -->
+        <div id="dm-result-card" style="display:none"></div>
+
       </div>
     </div>`;
   }
@@ -2335,7 +2339,69 @@
           </div>
           <div style="font-size:12px;color:#166534;margin-top:4px">✓ ${msg.transcripts?.length||0} turns — result saved to Call Results</div>`;
       }
+      // Render lead summary card from result data
+      const result = msg.result || {};
+      _renderDemoResultCard(result);
     }
+  }
+
+  /* Renders a Lead Summary Card in the demo page after a call ends.
+     Called by _handleDemoDashboardEvent when call_completed is received. */
+  function _renderDemoResultCard(result) {
+    const el = document.getElementById('dm-result-card');
+    if (!el) return;
+
+    const interested    = result.interested    || '—';
+    const budget        = result.budget        || '—';
+    const location      = result.location      || '—';
+    const timeline      = result.timeline      || '—';
+    const propertyType  = result.property_type || '—';
+    const duration      = result.duration      || '—';
+    const turns         = (result.transcription || []).length;
+
+    const interestedColor = interested === 'Yes' ? '#166534' : '#991b1b';
+    const interestedBg    = interested === 'Yes' ? '#d1fae5' : '#fee2e2';
+
+    el.style.display = 'block';
+    el.innerHTML = `
+      <div class="card" style="padding:0;overflow:hidden;margin-top:0;animation:slideUp 0.4s ease-out">
+        <div class="card-header" style="background:linear-gradient(135deg,#0f172a,#1e1b4b);border:none">
+          <span class="card-title" style="color:#f1f5f9">📋 Lead Summary</span>
+          <span style="font-size:11px;color:#64748b">Extracted from conversation</span>
+        </div>
+        <div style="padding:16px 20px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
+              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">INTERESTED</div>
+              <div style="font-size:15px;font-weight:600;color:${interestedColor};background:${interestedBg};display:inline-block;padding:2px 10px;border-radius:20px">${interested}</div>
+            </div>
+            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
+              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">BUDGET</div>
+              <div style="font-size:14px;font-weight:600;color:#1e293b">${budget}</div>
+            </div>
+            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
+              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">PREFERRED LOCATION</div>
+              <div style="font-size:14px;font-weight:600;color:#1e293b">${location}</div>
+            </div>
+            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
+              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">PROPERTY TYPE</div>
+              <div style="font-size:14px;font-weight:600;color:#1e293b">${propertyType}</div>
+            </div>
+            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
+              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">TIMELINE</div>
+              <div style="font-size:14px;font-weight:600;color:#1e293b">${timeline}</div>
+            </div>
+            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
+              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">CONVERSATION</div>
+              <div style="font-size:14px;font-weight:600;color:#1e293b">${turns} turns · ${duration}</div>
+            </div>
+          </div>
+          <div style="border-top:1px solid #e2e8f0;padding-top:10px;display:flex;align-items:center;gap:8px">
+            <span style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block"></span>
+            <span style="font-size:12px;color:#166534;font-weight:500">Result saved to Call Results tab</span>
+          </div>
+        </div>
+      </div>`;
   }
 
   /* ═══════════════════════════════════════════════════════════════
