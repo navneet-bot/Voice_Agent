@@ -8,11 +8,12 @@ Latency target is <200ms per audio chunk.
 import io
 import logging
 import time
+import threading
 import wave
 
 import numpy as np
 import scipy.io.wavfile as wavfile
-from groq import Groq
+from groq import Groq, RateLimitError
 
 from llm.config import GROQ_API_KEY
 from . import config
@@ -23,6 +24,28 @@ if not GROQ_API_KEY:
     raise RuntimeError("GROQ_API_KEY not found. STT cannot start.")
 
 _client = Groq(api_key=GROQ_API_KEY)
+
+# ── Rate-limit cooldown (Fix #3) ─────────────────────────────────
+# When Groq returns 429, we stop sending STT requests for 5 seconds.
+# This prevents the API from being hammered and avoids consuming rate quota
+# on audio chunks that will all fail anyway during the cooldown window.
+_stt_rate_limited_until: float = 0.0
+_stt_lock = threading.Lock()
+
+# ── Hallucination filter (Fix #7: foreign-language noise) ───────────────
+_HALLUCINATIONS = {
+    # English Whisper hallucinations on silence
+    "thank you.", "thank you", "you.", "you", "thanks.", "thanks",
+    # Very common foreign-language hallucinations from multilingual Whisper
+    "\uac10\uc0ac\ud569\ub2c8\ub2e4",     # Korean: gamsahamnida
+    "\uac10\uc0ac\ud569\ub2c8\ub2e4.",    # Korean with period
+    "\u3042\u308a\u304c\u3068\u3046",      # Japanese: arigatou
+    "\u3042\u308a\u304c\u3068\u3046\u3054\u3056\u3044\u307e\u3059",  # Japanese: arigatou gozaimasu
+    "\u0634\u0643\u0631\u0627",            # Arabic: shukran
+    "merci", "danke", "gracias", "obrigado",
+    # Noise/silence markers
+    ".", "..", "...", "um", "uh", "hmm", "mm",
+}
 
 
 def _bytes_to_pcm16(audio_bytes: bytes) -> np.ndarray:
@@ -51,8 +74,17 @@ def transcribe_audio(audio_chunk: bytes) -> str:
     """Transcribe a short audio chunk to text using Groq Cloud STT.
 
     Accepts raw audio bytes (16 kHz, mono) and routes it to `whisper-large-v3-turbo`.
+    Returns "" and enters a 5-second cooldown on 429 rate limit errors.
     """
+    global _stt_rate_limited_until
     if not audio_chunk:
+        return ""
+
+    # Skip this chunk if we are in a rate-limit cooldown window
+    with _stt_lock:
+        cooldown = _stt_rate_limited_until
+    if time.time() < cooldown:
+        logger.debug("STT: In rate-limit cooldown, skipping chunk")
         return ""
 
     try:
@@ -92,19 +124,31 @@ def transcribe_audio(audio_chunk: bytes) -> str:
         
         latency = time.perf_counter() - t0
         text = transcription.text.strip()
-        
-        # --- Hallucination Filter ---
-        # Whisper-large-v3-turbo often hallucination "Thank you", "you", or "Mm-hmm" 
-        # on silence or static. We filter these out if they are the only words.
-        hallucinations = {"thank you.", "thank you", "you.", "you", "thanks.", "thanks"}
-        if text.lower() in hallucinations:
+
+        # ── Hallucination Filter (Fix #7) ───────────────────────────────────
+        # Exact-match common English + multilingual hallucinations
+        if text.lower() in _HALLUCINATIONS or text in _HALLUCINATIONS:
             logger.info("STT (Groq Cloud) ignored hallucination: '%s'", text)
             return ""
+
+        # Reject very short transcripts that are predominantly non-ASCII
+        # (e.g. a 4-char Korean snippet on background noise)
+        if text:
+            non_latin = sum(1 for ch in text if ch.isalpha() and not ch.isascii())
+            if non_latin > 0 and len(text) < 8 and non_latin / len(text) > 0.5:
+                logger.info("STT (Groq Cloud) rejected short non-Latin noise: '%s'", text)
+                return ""
 
         if text:
             logger.info("STT (Groq Cloud) produced '%s' in %.3fs", text, latency)
         return text
 
+    except RateLimitError:
+        # Enter a 5-second cooldown window so we don't hammer the API
+        with _stt_lock:
+            _stt_rate_limited_until = time.time() + 5.0
+        logger.warning("STT rate limited (429) — entering 5s cooldown. Audio chunk dropped.")
+        return ""
     except Exception as e:
         logger.exception("Groq Transcription failed: %s", e)
         return ""

@@ -726,17 +726,26 @@ class StateManager:
                 _log("FALLBACK ESCALATE", f'{next_node["id"]} → "{escalation}"')
 
         # ── Refinement 5: flow continuity — same node as last turn ──
-        # Suppress when deny, hostile, or fallback escalation — it sounds wrong
+        # Suppress when:
+        #   - state actually moved (confirm edge followed correctly)
+        #   - intent was a deny type
+        #   - fallback escalation is active
+        #   - a supplemental LLM response was generated
+        state_moved = next_node["id"] != current_node["id"]
+        is_genuine_repeat = (
+            not state_moved                         # node did NOT change this turn
+            and self._last_node_id == self.current_node_id  # AND it didn't change last turn either
+            and intent not in {"confirm", *ALL_DENY_INTENTS}  # AND it wasn't a handled confirm/deny
+        )
         is_fallback_escalated = (
             next_node.get("type") == "fallback"
             and self._fallback_counts.get(next_node["id"], 0) > MAX_FALLBACK_ATTEMPTS
         )
-        if (self._last_node_id == self.current_node_id
+        if (is_genuine_repeat
                 and not supplemental
-                and intent not in ALL_DENY_INTENTS
                 and not is_fallback_escalated):
-            json_response = f"Just to confirm — {json_response}"
-            _log("REPEAT NODE", 'Prepending "Just to confirm —" — same node as last turn')
+            json_response = f"Just to confirm \u2014 {json_response}"
+            _log("REPEAT NODE", 'Prepending "Just to confirm \u2014" \u2014 genuine repeat node (no transition)')
 
         # ── Phase 5: combine supplemental + JSON ──
         if supplemental:
@@ -1127,6 +1136,23 @@ class StateManager:
                 return "unclear_visit_datetime"
             if current_node["id"] in ("node-1736492391269", "fallback_callback_time"):
                 return "unclear_callback_time"
+            return "confirm"
+
+        # ── Catch-all: unclear/off-topic ─────────────────────────────────
+        # ONLY upgrade unclear intent to 'confirm' if the user's text actually
+        # contains an affirmative signal. Without this guard, inputs like
+        # "for music" or "maybe" get misrouted through the confirm edge.
+        _AFFIRMATIVE_SIGNALS = {
+            "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "alright",
+            "correct", "right", "go ahead", "fine", "sounds good", "of course",
+            # Hinglish affirmatives
+            "haan", "han", "ha", "ji", "theek", "bilkul", "zaroor",
+        }
+        has_affirmative = any(
+            signal in clean_text.split() or clean_text == signal
+            for signal in _AFFIRMATIVE_SIGNALS
+        )
+        if has_affirmative:
             return "confirm"
 
         if intent in {"provide_timeline", "provide_visit_datetime"}:

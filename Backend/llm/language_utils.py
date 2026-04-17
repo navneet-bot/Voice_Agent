@@ -99,7 +99,32 @@ def analyze_user_text(text: str, fallback: str = "en") -> UserTextAnalysis:
             text, cleaned, normalized_fallback, 0.0, False, "punctuation_only", 0, 0, 0
         )
 
-    if unsupported_letters > 0 and unsupported_letters >= max(latin_letters, devanagari_letters):
+    # Whitelist common Unicode punctuation Whisper sometimes inserts
+    # (curly apostrophes/quotes, em-dashes, ellipsis) — these are NOT
+    # foreign scripts and should not cause a transcript to be rejected.
+    _PUNCT_WHITELIST = {
+        '\u2019', '\u2018',  # curly apostrophes
+        '\u201c', '\u201d',  # curly double quotes
+        '\u2013', '\u2014',  # en-dash / em-dash
+        '\u2026',            # ellipsis
+        '\u00e9', '\u00e8', '\u00e0', '\u00e2',  # French accented vowels (common in names)
+    }
+    # Count only truly foreign-alphabet letters (not the whitelisted punctuation)
+    adjusted_unsupported = sum(
+        1 for ch in cleaned
+        if ch.isalpha()
+        and ch not in _PUNCT_WHITELIST
+        and not (DEVANAGARI_RANGE[0] <= ch <= DEVANAGARI_RANGE[1])
+        and not ch.isascii()
+    )
+    total_letters = latin_letters + devanagari_letters + adjusted_unsupported
+    unsupported_ratio = adjusted_unsupported / total_letters if total_letters > 0 else 0.0
+
+    # Only reject as unsupported_script if foreign chars dominate (>60%)
+    # AND there is very little usable Latin or Devanagari content (<3 chars each).
+    # This prevents over-dropping Hinglish turns that happen to contain a
+    # curly apostrophe or a single accented character.
+    if adjusted_unsupported > 0 and unsupported_ratio > 0.60 and latin_letters < 3 and devanagari_letters < 3:
         return UserTextAnalysis(
             text,
             cleaned,

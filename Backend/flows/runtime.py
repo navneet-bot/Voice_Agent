@@ -13,6 +13,19 @@ import soundfile as sf
 from scipy.signal import resample_poly
 
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=30)
+
+# ── TTS generator sentinel (Fix #1: StopIteration in run_in_executor) ─────
+# PEP 479 converts StopIteration raised inside a Future into RuntimeError.
+# We catch it inside the thread before it can escape.
+_GENERATOR_SENTINEL = object()
+
+
+def _safe_next(gen):
+    """Call next(gen) inside a thread. Returns _GENERATOR_SENTINEL on StopIteration."""
+    try:
+        return next(gen)
+    except StopIteration:
+        return _GENERATOR_SENTINEL
 _ml_semaphore = asyncio.Semaphore(4)
 
 try:
@@ -242,16 +255,20 @@ class RealEstateTTSProcessor(FrameProcessor):
             self.last_reply_at = now
             async with _ml_semaphore:
                 while True:
-                    try:
-                        chunk_bytes = await asyncio.get_running_loop().run_in_executor(_executor, next, speech_gen)
-                        if chunk_bytes:
-                            logger.info("[PIPELINE] TTS -> Sending audio chunk to Sink")
-                            await self.push_frame(
-                                AudioRawFrame(audio=chunk_bytes, sample_rate=24000, num_channels=1),
-                                direction,
-                            )
-                    except StopIteration:
+                    # Use _safe_next — bare next() inside run_in_executor raises
+                    # RuntimeError (PEP 479), not StopIteration, so the except
+                    # StopIteration below would never fire.
+                    chunk_bytes = await asyncio.get_running_loop().run_in_executor(
+                        _executor, _safe_next, speech_gen
+                    )
+                    if chunk_bytes is _GENERATOR_SENTINEL:
                         break
+                    if chunk_bytes:
+                        logger.info("[PIPELINE] TTS -> Sending audio chunk to Sink")
+                        await self.push_frame(
+                            AudioRawFrame(audio=chunk_bytes, sample_rate=24000, num_channels=1),
+                            direction,
+                        )
         except Exception as exc:
             logger.error("[PIPELINE] TTS -> Error: %s", exc)
 

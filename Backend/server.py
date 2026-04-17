@@ -14,6 +14,27 @@ Changes from v2.0:
 
 from __future__ import annotations
 
+# ── Fix #4: Force UTF-8 on Windows stdout/stderr ─────────────────────────────
+# Python on Windows uses the active console code page (usually cp1252) which
+# cannot encode Devanagari, Unicode arrows (→), or emoji. This causes
+# UnicodeEncodeError in the logging StreamHandler, silently swallowing log lines.
+# Reconfigure BEFORE any import that might trigger logging.
+import sys
+import io as _io
+
+def _force_utf8_streams() -> None:
+    for _stream_name in ("stdout", "stderr"):
+        _stream = getattr(sys, _stream_name, None)
+        if _stream and hasattr(_stream, "buffer"):
+            setattr(
+                sys,
+                _stream_name,
+                _io.TextIOWrapper(_stream.buffer, encoding="utf-8", errors="replace", line_buffering=True),
+            )
+
+_force_utf8_streams()
+# ─────────────────────────────────────────────────────────────────────────────
+
 import asyncio
 import json
 import logging
