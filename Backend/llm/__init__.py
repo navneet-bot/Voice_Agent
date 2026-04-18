@@ -7,6 +7,6 @@ Usage:
     response = generate_response("Hello, are you interested in our property?")
 """
 
-from llm.llm import generate_response
+from .llm import generate_response
 
 __all__ = ["generate_response"]

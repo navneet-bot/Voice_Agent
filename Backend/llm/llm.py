@@ -11,7 +11,7 @@ from typing import Any, Optional
 
 from groq import APIError, APITimeoutError, Groq, RateLimitError
 
-import llm.config as cfg
+from . import config as cfg
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +259,7 @@ def generate_phrase_constrained_response(user_text: str, context: dict) -> str:
     Settings: max_tokens=cfg.PHRASE_RESPONSE_MAX_TOKENS,
               temperature=cfg.PHRASE_RESPONSE_TEMPERATURE
     """
-    from llm.state_manager import get_phrase_bank
+    from .state_manager import get_phrase_bank
     phrase_bank = get_phrase_bank()
 
     system_prompt = _build_phrase_constrained_system(phrase_bank)
@@ -296,7 +296,7 @@ def generate_phrase_constrained_response(user_text: str, context: dict) -> str:
         return _STATIC_FALLBACK
 
     # Log phrase matching
-    from llm.state_manager import _match_phrases_used, _PHRASE_BANK
+    from .state_manager import _match_phrases_used, _PHRASE_BANK
     matched = _match_phrases_used(reply, _PHRASE_BANK)
     if matched:
         logger.info("[JSON PHRASES USED] %s", "; ".join(f'"{p}"' for p in matched[:5]))
@@ -320,7 +320,7 @@ async def generate_response(
     del conversation_history, language
 
     if state_manager is None:
-        from llm.state_manager import StateManager
+        from .state_manager import StateManager
 
         state_manager = StateManager("Updated_Real_Estate_Agent.json")
 

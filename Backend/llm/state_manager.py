@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import llm.config as cfg
+from . import config as cfg
 
 logger = logging.getLogger(__name__)
 
@@ -706,7 +706,7 @@ class StateManager:
 
         # ── Phase 3: phrase-constrained LLM fallback (only when no node matched) ──
         if stayed_on_current and _is_informational_query(user_text, raw_intent):
-            from llm.llm import generate_phrase_constrained_response
+            from .llm import generate_phrase_constrained_response
             supplemental = generate_phrase_constrained_response(
                 user_text, self.conversation_data
             )
@@ -1087,6 +1087,26 @@ class StateManager:
             return "provide_location"
         if entities.get("budget") and not intent.startswith("provide"):
             return "provide_budget"
+
+        if current_node.get("id") in VISIT_SCHEDULING_NODES:
+            is_visit_rejection = any(rej in clean_text for rej in [
+                "not interested", "don't want", "no visit"
+            ])
+            if not is_visit_rejection:
+                datetime_keywords = [
+                    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+                    "today", "tomorrow", "tonight",
+                    "next week", "this week", "weekend",
+                    "morning", "afternoon", "evening", "night",
+                    "am", "pm"
+                ]
+                has_datetime_keyword = any(re.search(rf"\b{kw}\b", clean_text) for kw in datetime_keywords)
+                has_date_number = any(char.isdigit() for char in clean_text)
+                
+                if entities.get("timeline") or has_datetime_keyword or has_date_number:
+                    if not entities.get("timeline") and not entities.get("visit_time"):
+                        entities["timeline"] = user_text.strip()
+                    return "provide_visit_datetime"
 
         if clean_text in {"ok", "okay", "alright", "fine", "cool", "great", "sure", "thanks", "thank you", "done"}:
             if intent.startswith("unclear"):
