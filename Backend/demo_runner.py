@@ -367,6 +367,7 @@ class DemoCallEngine:
             "transcription": transcripts or [],
             "provider": provider,
             "processed": True,
+            "lead_data": data,
         }
 
     @staticmethod

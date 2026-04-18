@@ -36,6 +36,11 @@ _stt_lock = threading.Lock()
 _HALLUCINATIONS = {
     # English Whisper hallucinations on silence
     "thank you.", "thank you", "you.", "you", "thanks.", "thanks",
+    "thank you for watching.", "thanks for watching.", "thank you.",
+    "please subscribe.", "subscribe.", "if you have any questions, please let me know.",
+    "bye.", "bye", "bye bye.", "bye bye", "goodbye.", "goodbye",
+    "i'm sorry.", "i'm sorry", "sorry.", "sorry",
+    "i love you.", "i love you", "(laughs)", "(sighs)",
     # Very common foreign-language hallucinations from multilingual Whisper
     "\uac10\uc0ac\ud569\ub2c8\ub2e4",     # Korean: gamsahamnida
     "\uac10\uc0ac\ud569\ub2c8\ub2e4.",    # Korean with period
@@ -44,7 +49,7 @@ _HALLUCINATIONS = {
     "\u0634\u0643\u0631\u0627",            # Arabic: shukran
     "merci", "danke", "gracias", "obrigado",
     # Noise/silence markers
-    ".", "..", "...", "um", "uh", "hmm", "mm",
+    ".", "..", "...", "um", "uh", "hmm", "mm", "ah", "oh",
 }
 
 
@@ -74,7 +79,7 @@ def transcribe_audio(audio_chunk: bytes) -> str:
     """Transcribe a short audio chunk to text using Groq Cloud STT.
 
     Accepts raw audio bytes (16 kHz, mono) and routes it to `whisper-large-v3-turbo`.
-    Returns "" and enters a 5-second cooldown on 429 rate limit errors.
+    Features exponential backoff for 429 rate limits.
     """
     global _stt_rate_limited_until
     if not audio_chunk:
@@ -106,49 +111,58 @@ def transcribe_audio(audio_chunk: bytes) -> str:
     
     buffer.name = "chunk.wav"  # Required by API for MIME type extraction
 
-    try:
-        t0 = time.perf_counter()
-        buffer.seek(0)
-        
-        kwargs = {
-            "file": (buffer.name, buffer.read()),
-            "model": "whisper-large-v3-turbo",
-            "response_format": "json"
-        }
-        
-        # Lock language ONLY if strictly set in config, otherwise auto-detect for code-mixing
-        if config.LANGUAGE:
-            kwargs["language"] = config.LANGUAGE
+    MAX_RETRIES = 3
+    for attempt in range(MAX_RETRIES):
+        try:
+            t0 = time.perf_counter()
+            buffer.seek(0)
+            
+            kwargs = {
+                "file": (buffer.name, buffer.read()),
+                "model": "whisper-large-v3-turbo",
+                "response_format": "json"
+            }
+            
+            # Lock language ONLY if strictly set in config, otherwise auto-detect for code-mixing
+            if config.LANGUAGE:
+                kwargs["language"] = config.LANGUAGE
 
-        transcription = _client.audio.transcriptions.create(**kwargs)
-        
-        latency = time.perf_counter() - t0
-        text = transcription.text.strip()
+            transcription = _client.audio.transcriptions.create(**kwargs)
+            
+            latency = time.perf_counter() - t0
+            text = transcription.text.strip()
 
-        # ── Hallucination Filter (Fix #7) ───────────────────────────────────
-        # Exact-match common English + multilingual hallucinations
-        if text.lower() in _HALLUCINATIONS or text in _HALLUCINATIONS:
-            logger.info("STT (Groq Cloud) ignored hallucination: '%s'", text)
-            return ""
-
-        # Reject very short transcripts that are predominantly non-ASCII
-        # (e.g. a 4-char Korean snippet on background noise)
-        if text:
-            non_latin = sum(1 for ch in text if ch.isalpha() and not ch.isascii())
-            if non_latin > 0 and len(text) < 8 and non_latin / len(text) > 0.5:
-                logger.info("STT (Groq Cloud) rejected short non-Latin noise: '%s'", text)
+            # ── Hallucination Filter (Fix #7) ───────────────────────────────────
+            # Exact-match common English + multilingual hallucinations
+            if text.lower() in _HALLUCINATIONS or text in _HALLUCINATIONS:
+                logger.info("STT (Groq Cloud) ignored hallucination: '%s'", text)
                 return ""
 
-        if text:
-            logger.info("STT (Groq Cloud) produced '%s' in %.3fs", text, latency)
-        return text
+            # Reject very short transcripts that are predominantly non-ASCII
+            # (e.g. a 4-char Korean snippet on background noise)
+            if text:
+                non_latin = sum(1 for ch in text if ch.isalpha() and not ch.isascii())
+                if non_latin > 0 and len(text) < 8 and non_latin / len(text) > 0.5:
+                    logger.info("STT (Groq Cloud) rejected short non-Latin noise: '%s'", text)
+                    return ""
 
-    except RateLimitError:
-        # Enter a 5-second cooldown window so we don't hammer the API
-        with _stt_lock:
-            _stt_rate_limited_until = time.time() + 5.0
-        logger.warning("STT rate limited (429) — entering 5s cooldown. Audio chunk dropped.")
-        return ""
-    except Exception as e:
-        logger.exception("Groq Transcription failed: %s", e)
-        return ""
+            if text:
+                logger.info("STT (Groq Cloud) produced '%s' in %.3fs", text, latency)
+            return text
+
+        except RateLimitError:
+            if attempt < MAX_RETRIES - 1:
+                wait_time = (2 ** attempt) + (time.time() % 0.5) # simple jitter
+                logger.warning("STT rate limited (429) — retrying in %.1fs (attempt %d/%d)", wait_time, attempt+1, MAX_RETRIES)
+                time.sleep(wait_time)
+            else:
+                # Enter a global 5-second cooldown window so we don't hammer the API after exhausting retries
+                with _stt_lock:
+                    _stt_rate_limited_until = time.time() + 5.0
+                logger.error("STT rate limited (429) out of retries — entering 5s global cooldown. Chunk dropped.")
+                return ""
+        except Exception as e:
+            logger.exception("Groq Transcription failed: %s", e)
+            return ""
+
+    return ""

@@ -452,11 +452,19 @@ class DatabaseManager:
             try:
                 import uuid as _uuid
                 rid = str(_uuid.uuid4())
+                lead_data_json = json.dumps(result.get("lead_data", {}))
+                
+                # Check if lead_data column exists, if not add it dynamically for backwards compat
+                try:
+                    conn.execute("ALTER TABLE call_results ADD COLUMN lead_data TEXT")
+                except sqlite3.OperationalError:
+                    pass # Column already exists
+                    
                 conn.execute(
                     """INSERT INTO call_results
                        (id, campaign_id, lead_name, phone, called_at, duration, status,
-                        outcome, interested, budget, callback_time, transcription, provider, processed)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        outcome, interested, budget, callback_time, transcription, provider, processed, lead_data)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         rid, campaign_id, result.get("name"), result.get("phone"),
                         result.get("calledAt"), result.get("duration"),
@@ -464,6 +472,7 @@ class DatabaseManager:
                         result.get("interested"), result.get("budget"),
                         result.get("callback"), json.dumps(result.get("transcription", [])),
                         result.get("provider", "demo"), 1 if result.get("processed") else 0,
+                        lead_data_json
                     )
                 )
                 conn.commit()

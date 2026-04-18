@@ -410,7 +410,17 @@ async def dashboard_ws(websocket: WebSocket, client_id: str = "global"):
     logger.info("Dashboard WS connected: client=%s", client_id)
     try:
         while True:
-            await websocket.receive_text()   # keep-alive; server pushes events
+            msg = await websocket.receive()
+            if msg["type"] == "websocket.receive":
+                # handle ping frames from frontend by replying with pong
+                text_data = msg.get("text")
+                if text_data == "ping":
+                    try:
+                        await websocket.send_text("pong")
+                    except Exception:
+                        pass
+            elif msg["type"] == "websocket.disconnect":
+                break
     except WebSocketDisconnect:
         logger.info("Dashboard WS disconnected: client=%s", client_id)
     except Exception as e:
@@ -538,6 +548,12 @@ async def websocket_voice_live(websocket: WebSocket):
             if msg["type"] == "websocket.receive":
                 data = msg.get("bytes") or b""
                 if data:
+                    if data == b"ping":
+                        try:
+                            await websocket.send_bytes(b"pong")
+                        except Exception:
+                            pass
+                        continue
                     source.queue_audio(data)
             elif msg["type"] == "websocket.disconnect":
                 break
@@ -685,6 +701,12 @@ async def websocket_voice_demo(websocket: WebSocket):
             if msg["type"] == "websocket.receive":
                 data = msg.get("bytes") or b""
                 if data:
+                    if data == b"ping":
+                        try:
+                            await websocket.send_bytes(b"pong")
+                        except Exception:
+                            pass
+                        continue
                     source.queue_audio(data)
                 # text frames (keepalive pings from browser) are silently ignored
             elif msg["type"] == "websocket.disconnect":
@@ -715,7 +737,6 @@ async def websocket_voice_demo(websocket: WebSocket):
 
         interested = "Yes" if (conv_data.get("intent_value") or conv_data.get("location")) else "No"
 
-        # Emit "Completed" with full transcript and real extracted lead data
         result = {
             "name":          lead_name,
             "phone":         "browser-mic",

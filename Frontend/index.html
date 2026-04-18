@@ -776,19 +776,29 @@
     const wsUrl = `${WS_BASE_URL}/ws/dashboard`;
     _dashboardWS = new WebSocket(wsUrl);
 
+    let pingInterval;
+
     _dashboardWS.onopen = () => {
       console.log('[WS] Dashboard connected');
       updateWsStatus('connected');
+      // Send a text ping every 5 seconds to keep Heroku/Nginx from dropping connection
+      pingInterval = setInterval(() => {
+        if (_dashboardWS.readyState === WebSocket.OPEN) {
+          _dashboardWS.send("ping");
+        }
+      }, 5000);
     };
 
     _dashboardWS.onmessage = (event) => {
       try {
+        if (event.data === "pong") return; // Ignore heartbeat pongs
         const msg = JSON.parse(event.data);
         handleDashboardEvent(msg);
       } catch(e) { console.warn('[WS] Bad message', e); }
     };
 
     _dashboardWS.onclose = () => {
+      if (pingInterval) clearInterval(pingInterval);
       updateWsStatus('disconnected');
       setTimeout(initDashboardWebSocket, 3000); // auto-reconnect
     };
@@ -2098,9 +2108,22 @@
         nextStartTime += buf.duration;
       };
 
-      const _mySessionId  = ++_voiceSessionId;          // snapshot session ID
       liveSocket.onerror  = () => showToast('Voice server error.');
+      
+      let pingInterval;
+      if (liveSocket) {
+        liveSocket.addEventListener('open', () => {
+           pingInterval = setInterval(() => {
+             if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+                 const encoder = new TextEncoder();
+                 liveSocket.send(encoder.encode('ping'));
+             }
+           }, 5000);
+        });
+      }
+
       liveSocket.onclose  = () => {
+        if (pingInterval) clearInterval(pingInterval);
         if (_voiceSessionId === _mySessionId) stopLiveVoice(); // only if still current session
       };
 

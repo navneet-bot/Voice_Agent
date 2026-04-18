@@ -1,0 +1,60 @@
+{"timestamp": 1776352178.4358335, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776352178.441506, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776352184.0945234, "event": "user_reply", "content": "Gracias.", "node": "node-1767592854176"}
+{"timestamp": 1776352184.4639316, "event": "agent_reply", "content": "Is this a good time for a quick two-minute call about a property option?", "node": "node-1735264873079"}
+{"timestamp": 1776352186.1385722, "event": "user_reply", "content": "Bye.", "node": "node-1735264873079"}
+{"timestamp": 1776352186.380469, "event": "agent_reply", "content": "No problem.\nWhat would be a convenient time for me to call you back?", "node": "node-1736492391269"}
+{"timestamp": 1776352187.156605, "event": "user_reply", "content": "Uh,", "node": "node-1736492391269"}
+{"timestamp": 1776352187.3411179, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nThat's alright.", "node": "fallback_callback_time"}
+{"timestamp": 1776352239.9576325, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776352239.9631133, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776352241.2056544, "event": "user_reply", "content": "Bye.", "node": "node-1767592854176"}
+{"timestamp": 1776352241.4130356, "event": "agent_reply", "content": "Sorry about that.\nThank you for your time.", "node": "node-wrong-person-end"}
+{"timestamp": 1776352350.0703402, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776352350.0851612, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776352352.8090465, "event": "user_reply", "content": "Bye.", "node": "node-1767592854176"}
+{"timestamp": 1776352353.0344186, "event": "agent_reply", "content": "Sorry about that.\nThank you for your time.", "node": "node-wrong-person-end"}
+{"timestamp": 1776352374.4931242, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776352374.4994493, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776352398.9702947, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776352398.9769125, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776352434.5506985, "event": "user_reply", "content": "Yes, you are.", "node": "node-1767592854176"}
+{"timestamp": 1776352434.9021428, "event": "agent_reply", "content": "Is this a good time for a quick two-minute call about a property option?", "node": "node-1735264873079"}
+{"timestamp": 1776352469.8936799, "event": "user_reply", "content": "Y as\u00ed es ayudar.", "node": "node-1735264873079"}
+{"timestamp": 1776352470.2108872, "event": "agent_reply", "content": "Are you looking to buy, rent, or invest in a property?", "node": "node-1735264921453"}
+{"timestamp": 1776434534.8987124, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776434534.9022028, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776434537.8832722, "event": "user_reply", "content": "It's perfect.", "node": "node-1767592854176"}
+{"timestamp": 1776434538.1908543, "event": "agent_reply", "content": "Is this a good time for a quick two-minute call about a property option?", "node": "node-1735264873079"}
+{"timestamp": 1776434542.9983342, "event": "user_reply", "content": "for music.", "node": "node-1735264873079"}
+{"timestamp": 1776434543.3012516, "event": "agent_reply", "content": "Are you looking to buy, rent, or invest in a property?", "node": "node-1735264921453"}
+{"timestamp": 1776434568.9479437, "event": "user_reply", "content": "Yeah.", "node": "node-1735264921453"}
+{"timestamp": 1776434569.2207127, "event": "agent_reply", "content": "Just to confirm \u2014 Are you looking to buy, rent, or invest in a property?", "node": "node-1735264921453"}
+{"timestamp": 1776434584.9877195, "event": "user_reply", "content": "used to drop", "node": "node-1735264921453"}
+{"timestamp": 1776434585.3370874, "event": "agent_reply", "content": "Got it, just to clarify \u2014 No problem.\nAre you looking to buy, rent, or invest in a property?", "node": "fallback_intent"}
+{"timestamp": 1776434596.958377, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776434596.9604774, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776434635.1500218, "event": "user_reply", "content": "Amen.", "node": "node-1767592854176"}
+{"timestamp": 1776434635.418803, "event": "agent_reply", "content": "Is this a good time for a quick two-minute call about a property option?", "node": "node-1735264873079"}
+{"timestamp": 1776434638.3518739, "event": "user_reply", "content": "Yes you are.", "node": "node-1735264873079"}
+{"timestamp": 1776434638.6485894, "event": "agent_reply", "content": "Are you looking to buy, rent, or invest in a property?", "node": "node-1735264921453"}
+{"timestamp": 1776434644.7691746, "event": "user_reply", "content": "Mm-hmm.", "node": "node-1735264921453"}
+{"timestamp": 1776434645.1506743, "event": "agent_reply", "content": "Got it, just to clarify \u2014 No problem.\nAre you looking to buy, rent, or invest in a property?", "node": "fallback_intent"}
+{"timestamp": 1776434647.9726212, "event": "user_reply", "content": "Obrigado.", "node": "fallback_intent"}
+{"timestamp": 1776434648.2357435, "event": "agent_reply", "content": "Got it, just to clarify \u2014 Just to confirm \u2014 No problem.\nAre you looking to buy, rent, or invest in a property?", "node": "fallback_intent"}
+{"timestamp": 1776434654.3923721, "event": "user_reply", "content": "as you are speaking", "node": "fallback_intent"}
+{"timestamp": 1776434654.6031697, "event": "agent_reply", "content": "Are you looking to buy, rent, or invest in a property?", "node": "node-1735264921453"}
+{"timestamp": 1776434657.6005669, "event": "user_reply", "content": "King to Prashant.", "node": "node-1735264921453"}
+{"timestamp": 1776434657.79681, "event": "agent_reply", "content": "Sorry about that.\nThank you for your time.", "node": "node-wrong-person-end"}
+{"timestamp": 1776434670.4056664, "event": "user_reply", "content": "Amen.", "node": "node-wrong-person-end"}
+{"timestamp": 1776434673.621195, "event": "user_reply", "content": "Obrigado.", "node": "node-wrong-person-end"}
+{"timestamp": 1776435562.6752353, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776435562.6781888, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776435570.514029, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
+{"timestamp": 1776435571.20763, "event": "agent_reply", "content": "Is this a good time for a quick two-minute call about a property option?", "node": "node-1735264873079"}
+{"timestamp": 1776435571.522662, "event": "user_reply", "content": "Yes, you are.", "node": "node-1735264873079"}
+{"timestamp": 1776435571.7444956, "event": "agent_reply", "content": "Are you looking to buy, rent, or invest in a property?", "node": "node-1735264921453"}
+{"timestamp": 1776435572.022404, "event": "user_reply", "content": "Yeah.", "node": "node-1735264921453"}
+{"timestamp": 1776435572.2111757, "event": "agent_reply", "content": "Are you looking to buy, rent, or invest in a property?", "node": "node-1735264921453"}
+{"timestamp": 1776435580.8220234, "event": "user_reply", "content": "Bye.", "node": "node-1735264921453"}
+{"timestamp": 1776435581.1469393, "event": "agent_reply", "content": "Thank you for your time.\nHave a great day.", "node": "node-1735969972303"}
