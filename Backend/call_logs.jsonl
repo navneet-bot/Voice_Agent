@@ -88,3 +88,33 @@
 {"timestamp": 1776617549.500638, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
 {"timestamp": 1776617565.2889104, "event": "user_reply", "content": "Yes.", "node": "node-1767592854176"}
 {"timestamp": 1776617565.5332966, "event": "agent_reply", "content": "Quick question \u2014 do you have two minutes right now?\nI came across something that might actually be relevant for you.", "node": "node-1735264873079"}
+{"timestamp": 1776618774.0685165, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776618774.0719702, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776618786.9423404, "event": "user_reply", "content": "Yes.", "node": "node-1767592854176"}
+{"timestamp": 1776618787.2902262, "event": "agent_reply", "content": "Quick question \u2014 do you have two minutes right now?\nI came across something that might actually be relevant for you.", "node": "node-1735264873079"}
+{"timestamp": 1776618788.0772479, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1735264873079"}
+{"timestamp": 1776618788.3268914, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nJust to confirm \u2014 Quick question \u2014 do you have two minutes right now?", "node": "node-1735264873079"}
+{"timestamp": 1776618791.5598853, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1735264873079"}
+{"timestamp": 1776618793.369948, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nJust to confirm \u2014 Quick question \u2014 do you have two minutes right now?", "node": "node-1735264873079"}
+{"timestamp": 1776618794.631893, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1735264873079"}
+{"timestamp": 1776618795.0583584, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nJust to confirm \u2014 Quick question \u2014 do you have two minutes right now?", "node": "node-1735264873079"}
+{"timestamp": 1776618799.7314246, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1735264873079"}
+{"timestamp": 1776618799.9872963, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nJust to confirm \u2014 Quick question \u2014 do you have two minutes right now?", "node": "node-1735264873079"}
+{"timestamp": 1776618802.9313905, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1735264873079"}
+{"timestamp": 1776618803.2492702, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nJust to confirm \u2014 Quick question \u2014 do you have two minutes right now?", "node": "node-1735264873079"}
+{"timestamp": 1776618812.0124347, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776618812.0158572, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776618826.213644, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
+{"timestamp": 1776618826.4485872, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nHey, this is Neha \u2014 I'm with the Real Estate team.", "node": "node-1767592854176"}
+{"timestamp": 1776618829.4173536, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
+{"timestamp": 1776618829.8444874, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nJust to confirm \u2014 Hey, this is Neha \u2014 I'm with the Real Estate team.", "node": "node-1767592854176"}
+{"timestamp": 1776619644.9610066, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776619644.9635284, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776619650.1247382, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
+{"timestamp": 1776619650.4639797, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nHey, this is Neha \u2014 I'm with the Real Estate team.", "node": "node-1767592854176"}
+{"timestamp": 1776619660.5478277, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776619660.5523999, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776619687.343054, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
+{"timestamp": 1776619687.606778, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nHey, this is Neha \u2014 I'm with the Real Estate team.", "node": "node-1767592854176"}
+{"timestamp": 1776619690.5521238, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
+{"timestamp": 1776619690.7647965, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nJust to confirm \u2014 Hey, this is Neha \u2014 I'm with the Real Estate team.", "node": "node-1767592854176"}

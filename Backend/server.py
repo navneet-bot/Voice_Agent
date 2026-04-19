@@ -668,6 +668,11 @@ async def websocket_voice_demo(websocket: WebSocket):
                 "status": "Talking",
                 "snippet": text
             }))
+            await websocket.send_text(json.dumps({
+                "type": "transcript",
+                "speaker": speaker,
+                "text": text
+            }))
         except Exception:
             pass
 
@@ -832,4 +837,4 @@ def _resolve_schema(agent_id: str) -> str:
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=3000, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)

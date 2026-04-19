@@ -10,6 +10,7 @@ import logging
 import time
 import threading
 import wave
+import sys
 
 import numpy as np
 import scipy.io.wavfile as wavfile
@@ -143,11 +144,15 @@ def transcribe_audio(audio_chunk: bytes) -> str:
             if text:
                 non_latin = sum(1 for ch in text if ch.isalpha() and not ch.isascii())
                 if non_latin > 0 and len(text) < 8 and non_latin / len(text) > 0.5:
-                    logger.info("STT (Groq Cloud) rejected short non-Latin noise: '%s'", text)
+                    logger.info("STT (Groq Cloud) rejected short non-Latin noise: '%s'", text.encode('ascii', 'replace').decode('ascii'))
                     return ""
 
             if text:
-                logger.info("STT (Groq Cloud) produced '%s' in %.3fs", text, latency)
+                safe_text = text.encode(sys.stdout.encoding or 'utf-8', errors='replace').decode(sys.stdout.encoding or 'utf-8') if sys.stdout else text.encode('ascii', 'replace').decode('ascii')
+                try:
+                    logger.info("STT (Groq Cloud) produced '%s' in %.3fs", safe_text, latency)
+                except UnicodeEncodeError:
+                    logger.info("STT (Groq Cloud) produced '%s' in %.3fs", text.encode('ascii', 'replace').decode('ascii'), latency)
             return text
 
         except RateLimitError:
