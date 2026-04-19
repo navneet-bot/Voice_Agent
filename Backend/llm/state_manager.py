@@ -1081,7 +1081,11 @@ class StateManager:
         user_text: str,
     ) -> str:
         text = (user_text or "").strip().lower()
-        clean_text = text.strip(" .!,?")
+        # Remove punctuation for signal matching
+        clean_text = re.sub(r'[^\w\s]', ' ', text).strip()
+        clean_text = re.sub(r'\s+', ' ', clean_text)
+        clean_words = clean_text.split()
+
 
         if entities.get("location") and not intent.startswith("provide"):
             return "provide_location"
@@ -1139,6 +1143,30 @@ class StateManager:
             if current_node["id"] == "node-1736492391269":
                 return "unclear_callback_time"
 
+        # ── Catch-all: signals ───────────────────────────────────────────
+        _AFFIRMATIVE_SIGNALS = {
+            "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "alright",
+            "correct", "right", "go ahead", "fine", "sounds good", "of course",
+            "haan", "han", "ha", "ji", "theek", "bilkul", "zaroor",
+        }
+        _NEGATIVE_SIGNALS = {
+            "no", "nope", "nah", "never", "not", "nahi", "na", "nako", "sorry no", "no sorry",
+        }
+        
+        has_affirmative = any(
+            signal in clean_words or clean_text == signal
+            for signal in _AFFIRMATIVE_SIGNALS
+        )
+        has_negative = any(
+            signal in clean_words or clean_text == signal
+            for signal in _NEGATIVE_SIGNALS
+        )
+
+        if has_negative:
+            return "deny"
+        if has_affirmative:
+            return "confirm"
+
         if intent.startswith("unclear") or intent == "ask_off_topic":
             if current_node["id"] in ("node-1735265209472", "node-1736567518748", "node-1736492485610"):
                 return "confirm"
@@ -1156,24 +1184,7 @@ class StateManager:
                 return "unclear_visit_datetime"
             if current_node["id"] in ("node-1736492391269", "fallback_callback_time"):
                 return "unclear_callback_time"
-            return "confirm"
-
-        # ── Catch-all: unclear/off-topic ─────────────────────────────────
-        # ONLY upgrade unclear intent to 'confirm' if the user's text actually
-        # contains an affirmative signal. Without this guard, inputs like
-        # "for music" or "maybe" get misrouted through the confirm edge.
-        _AFFIRMATIVE_SIGNALS = {
-            "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "alright",
-            "correct", "right", "go ahead", "fine", "sounds good", "of course",
-            # Hinglish affirmatives
-            "haan", "han", "ha", "ji", "theek", "bilkul", "zaroor",
-        }
-        has_affirmative = any(
-            signal in clean_text.split() or clean_text == signal
-            for signal in _AFFIRMATIVE_SIGNALS
-        )
-        if has_affirmative:
-            return "confirm"
+            # Removed the dangerous default return "confirm" here
 
         if intent in {"provide_timeline", "provide_visit_datetime"}:
             if current_node["id"] in {"node-1735265015507", "node-1736323961832"}:

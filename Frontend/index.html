@@ -1714,7 +1714,8 @@
 
     fetchResults();
     if (activeCampaignPolling) clearInterval(activeCampaignPolling);
-    activeCampaignPolling = setInterval(fetchResults, 3000);
+    // Removed setInterval(fetchResults, 3000) to stop DOM wiping
+    activeCampaignPolling = null;
   }
 
   function simulateUpload() {
@@ -2393,32 +2394,40 @@
           <span style="font-size:11px;color:#64748b">Extracted from conversation</span>
         </div>
         <div style="padding:16px 20px">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
-              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">INTERESTED</div>
-              <div style="font-size:15px;font-weight:600;color:${interestedColor};background:${interestedBg};display:inline-block;padding:2px 10px;border-radius:20px">${interested}</div>
-            </div>
-            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
-              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">BUDGET</div>
-              <div style="font-size:14px;font-weight:600;color:#1e293b">${budget}</div>
-            </div>
-            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
-              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">PREFERRED LOCATION</div>
-              <div style="font-size:14px;font-weight:600;color:#1e293b">${location}</div>
-            </div>
-            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
-              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">PROPERTY TYPE</div>
-              <div style="font-size:14px;font-weight:600;color:#1e293b">${propertyType}</div>
-            </div>
-            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
-              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">TIMELINE</div>
-              <div style="font-size:14px;font-weight:600;color:#1e293b">${timeline}</div>
-            </div>
-            <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;border:1px solid #e2e8f0">
-              <div style="font-size:10px;color:#94a3b8;letter-spacing:0.5px;margin-bottom:4px">CONVERSATION</div>
-              <div style="font-size:14px;font-weight:600;color:#1e293b">${turns} turns · ${duration}</div>
-            </div>
-          </div>
+          <table style="width:100%; border-collapse: collapse; margin-bottom: 12px; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; font-size: 13px;">
+            <thead>
+              <tr style="background:#f8fafc; color:#64748b; font-size:11px; letter-spacing:0.5px; text-align:left;">
+                <th style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0;">Field</th>
+                <th style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0;">Extracted Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 500; color:#475569;">Interested</td>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color:${interestedColor};"><span style="background:${interestedBg}; padding:2px 8px; border-radius:12px;">${interested}</span></td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 500; color:#475569;">Budget</td>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color:#1e293b;">${budget}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 500; color:#475569;">Preferred Location</td>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color:#1e293b;">${location}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 500; color:#475569;">Property Type</td>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color:#1e293b;">${propertyType}</td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 500; color:#475569;">Timeline</td>
+                <td style="padding: 10px 14px; border-bottom: 1px solid #e2e8f0; font-weight: 600; color:#1e293b;">${timeline}</td>
+              </tr>
+              <tr style="background:#f8fafc;">
+                <td style="padding: 10px 14px; font-weight: 500; color:#475569;">Conversation stats</td>
+                <td style="padding: 10px 14px; font-weight: 600; color:#64748b;">${turns} turns · ${duration}</td>
+              </tr>
+            </tbody>
+          </table>
           <div style="border-top:1px solid #e2e8f0;padding-top:10px;display:flex;align-items:center;gap:8px">
             <span style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block"></span>
             <span style="font-size:12px;color:#166534;font-weight:500">Result saved to Call Results tab</span>

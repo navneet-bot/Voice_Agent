@@ -625,6 +625,16 @@ async def websocket_voice_demo(websocket: WebSocket):
             provider="demo_mic",
             client_id=client_id,
         )
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "call_ringing",
+                "campaign_id": campaign_id,
+                "leadId": lead_uid,
+                "status": "Ringing...",
+                "snippet": "Connecting to agent..."
+            }))
+        except Exception:
+            pass
         logger.info("Voice Demo: Ringing event sent")
     except Exception as _setup_err:
         logger.exception("Voice Demo: Setup FAILED — %s", _setup_err)
@@ -650,6 +660,16 @@ async def websocket_voice_demo(websocket: WebSocket):
             provider="demo_mic",
             client_id=client_id,
         )
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "call_talking",
+                "campaign_id": campaign_id,
+                "leadId": lead_uid,
+                "status": "Talking",
+                "snippet": text
+            }))
+        except Exception:
+            pass
 
     # Keep a reference to the LLM processor so we can read extracted conversation
     # data (budget, location, etc.) from the StateManager after the call ends.
@@ -689,6 +709,15 @@ async def websocket_voice_demo(websocket: WebSocket):
         provider="demo_mic",
         client_id=client_id,
     )
+    try:
+        await websocket.send_text(json.dumps({
+            "type": "call_connected",
+            "campaign_id": campaign_id,
+            "leadId": lead_uid,
+            "status": "Connected"
+        }))
+    except Exception:
+        pass
     logger.info("Voice Demo: Connected event sent — ready to receive audio")
 
     try:

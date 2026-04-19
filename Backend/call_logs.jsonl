@@ -58,3 +58,33 @@
 {"timestamp": 1776435572.2111757, "event": "agent_reply", "content": "Are you looking to buy, rent, or invest in a property?", "node": "node-1735264921453"}
 {"timestamp": 1776435580.8220234, "event": "user_reply", "content": "Bye.", "node": "node-1735264921453"}
 {"timestamp": 1776435581.1469393, "event": "agent_reply", "content": "Thank you for your time.\nHave a great day.", "node": "node-1735969972303"}
+{"timestamp": 1776525804.3117137, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776525804.3154333, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776525809.3845325, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
+{"timestamp": 1776525809.6334774, "event": "agent_reply", "content": "Is this a good time for a quick two-minute call about a property option?", "node": "node-1735264873079"}
+{"timestamp": 1776525812.8400688, "event": "user_reply", "content": "No, you're not.", "node": "node-1735264873079"}
+{"timestamp": 1776525813.2416728, "event": "agent_reply", "content": "Are you looking to buy, rent, or invest in a property?", "node": "node-1735264921453"}
+{"timestamp": 1776525817.7791479, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776525817.7825336, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776525819.4636292, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1735264921453"}
+{"timestamp": 1776525819.7801156, "event": "agent_reply", "content": "Got it, just to clarify \u2014 No problem.\nAre you looking to buy, rent, or invest in a property?", "node": "fallback_intent"}
+{"timestamp": 1776525825.05846, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776525825.0627391, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776525832.33382, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
+{"timestamp": 1776525832.655326, "event": "agent_reply", "content": "Is this a good time for a quick two-minute call about a property option?", "node": "node-1735264873079"}
+{"timestamp": 1776525844.5724282, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776525844.5756648, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776525860.1502614, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776525860.153285, "event": "agent_reply", "content": "Hello, this is Neha from the Real Estate AI team. Am I speaking with Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776525867.2542026, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
+{"timestamp": 1776525867.5474498, "event": "agent_reply", "content": "Is this a good time for a quick two-minute call about a property option?", "node": "node-1735264873079"}
+{"timestamp": 1776617453.0214365, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776617453.0273163, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776617464.2768703, "event": "user_reply", "content": "Yes.", "node": "node-1767592854176"}
+{"timestamp": 1776617464.7407842, "event": "agent_reply", "content": "Quick question \u2014 do you have two minutes right now?\nI came across something that might actually be relevant for you.", "node": "node-1735264873079"}
+{"timestamp": 1776617534.7598932, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776617534.764163, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776617549.494038, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776617549.500638, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776617565.2889104, "event": "user_reply", "content": "Yes.", "node": "node-1767592854176"}
+{"timestamp": 1776617565.5332966, "event": "agent_reply", "content": "Quick question \u2014 do you have two minutes right now?\nI came across something that might actually be relevant for you.", "node": "node-1735264873079"}

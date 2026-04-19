@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-from groq import APIError, APITimeoutError, Groq, RateLimitError
+from groq import AsyncGroq, APIError, APITimeoutError, RateLimitError
 
 from . import config as cfg
 
@@ -22,7 +22,7 @@ if not cfg.GROQ_API_KEY:
         "Or:  export GROQ_API_KEY='your_key_here'  (Linux/Mac)"
     )
 
-_client = Groq(api_key=cfg.GROQ_API_KEY, timeout=cfg.REQUEST_TIMEOUT_S)
+_client = AsyncGroq(api_key=cfg.GROQ_API_KEY, timeout=cfg.REQUEST_TIMEOUT_S)
 
 KNOWN_INTENTS = [
     "confirm_identity",
@@ -81,10 +81,10 @@ unclear_callback_time, unclear
 Rules:
 - Choose the single most specific intent
 - Confirmation words (yes, yeah, yep, correct, right, ok, okay, sure, go ahead) -> intent: "confirm"
-- Generic denial (no, nahi) without specific keywords -> intent: "deny"
+- Generic denial (no, nahi, nope, nah, not now, sorry no, no sorry) -> intent: "deny"
 - "wrong number", "wrong person", "not Prashant", "this is not" -> intent: "deny_identity"
-- "not interested", "no requirement", "don't need property" -> intent: "deny_interest"
-- "busy", "call later", "not now", "in a meeting" -> intent: "deny_time"
+- "not interested", "no requirement", "don't need property", "not really" -> intent: "deny_interest"
+- "busy", "call later", "not now", "in a meeting", "busy right now" -> intent: "deny_time"
 - "not this weekend", "busy this week", "can't this week" -> intent: "deny_visit_time"
 - Location suggestion questions like "suggest", "recommend", "which area", "best location",
   "good location", or "any options" -> intent: "ask_location_suggestion"
@@ -93,12 +93,14 @@ Rules:
   unclear intent when the user is hesitating about intent, location, budget, property type,
   site visit date/time, or callback time
 - Noise like "hmm", "uh", "ah", "ohh", ".", ",", "this", or "that" -> intent: "unclear"
-- All entity fields default to null if not present"""
+- All entity fields default to null if not present
+- CRITICAL: Never label a simple "No" or "No, sorry" as "unclear". These are "deny".
+- CRITICAL: "not really" or "no requirement" is "deny_interest"."""
 
 _EMPTY_INTENT = {"intent": "unclear", "entities": {}}
 
 
-def _call_groq_api(
+async def _async_call_groq_api(
     messages: list[dict[str, str]],
     *,
     max_tokens: int,
@@ -107,14 +109,13 @@ def _call_groq_api(
 ) -> str:
     """Call Groq with retry + exponential backoff. Returns raw content string.
 
-    Issue 13 fix: backoff uses time.sleep in this sync function (called via
-    run_in_executor so it does NOT block the async event loop).
+    Issue 13 fix: backoff uses asyncio.sleep instead of time.sleep to avoid blocking worker threads.
     """
     import random as _random
     for attempt in range(1, cfg.MAX_RETRIES + 1):
         try:
             t0 = time.time()
-            completion = _client.chat.completions.create(
+            completion = await _client.chat.completions.create(
                 model=cfg.MODEL_NAME,
                 messages=messages,
                 temperature=temperature,
@@ -129,19 +130,19 @@ def _call_groq_api(
             wait = (2 ** attempt) + _random.uniform(0, 0.5)   # jitter
             logger.warning("Groq rate limit hit (attempt %d/%d) — retrying in %.1fs", attempt, cfg.MAX_RETRIES, wait)
             if attempt < cfg.MAX_RETRIES:
-                time.sleep(wait)
+                await asyncio.sleep(wait)
         except APITimeoutError:
             logger.error("Groq request timed out (attempt %d/%d)", attempt, cfg.MAX_RETRIES)
             if attempt == cfg.MAX_RETRIES:
                 return ""
-            time.sleep(1.0)
+            await asyncio.sleep(1.0)
         except APIError as exc:
             logger.error("Groq API error (attempt %d/%d): %s", attempt, cfg.MAX_RETRIES, exc)
             return ""
     return ""
 
 
-def extract_intent(user_text: str) -> dict[str, Any]:
+async def extract_intent(user_text: str) -> dict[str, Any]:
     """
     Call Groq API for intent + entity extraction.
     Returns: {"intent": str, "entities": dict}
@@ -154,7 +155,7 @@ def extract_intent(user_text: str) -> dict[str, Any]:
         {"role": "system", "content": INTENT_EXTRACTION_SYSTEM_PROMPT},
         {"role": "user", "content": user_text.strip()},
     ]
-    raw_content = _call_groq_api(
+    raw_content = await _async_call_groq_api(
         messages,
         max_tokens=80,
         temperature=0.0,
@@ -217,7 +218,8 @@ def _build_phrase_constrained_system(phrase_bank: list[str]) -> str:
     """
     bank_text = "\n".join(f"- {p}" for p in phrase_bank)
     system = (
-        "You are Neha, a real estate assistant on a phone call.\n\n"
+        "You are Neha — a sharp, emotionally intelligent real estate expert on a phone call.\n"
+        "You speak like a high-performing human, not a script. Adapt your tone to the user's mood.\n\n"
         "## RESPONSE CONSTRUCTION RULES\n"
         "You MUST construct your response using ONLY words, phrases, and sentences "
         "from the PHRASE BANK below.\n"
@@ -231,8 +233,8 @@ def _build_phrase_constrained_system(phrase_bank: list[str]) -> str:
         "- Do NOT ask any question — the system will ask the next question automatically\n"
         "- Do NOT collect information like location, budget, or property type\n"
         "- Plain text only. No JSON. No markdown.\n"
-        "- Professional, conversational tone\n"
-        "- Avoid unnecessary filler words\n\n"
+        "- Conversational, human tone — never robotic or scripted\n"
+        "- No filler words like 'Certainly', 'Understood', 'Wonderful'\n\n"
         f"## PHRASE BANK\n{bank_text}\n"
     )
     if _PROMPT_RULES:
@@ -278,11 +280,11 @@ def generate_phrase_constrained_response(user_text: str, context: dict) -> str:
     logger.info("[LLM REASONING] Generating phrase-constrained response for: \"%s\"", user_text)
 
     try:
-        raw = _call_groq_api(
+        raw = asyncio.run(_async_call_groq_api(
             messages,
             max_tokens=cfg.PHRASE_RESPONSE_MAX_TOKENS,
             temperature=cfg.PHRASE_RESPONSE_TEMPERATURE,
-        )
+        ))
     except Exception as exc:
         logger.error("[LLM FALLBACK] API error — using static fallback: %s", exc)
         return _STATIC_FALLBACK
@@ -330,6 +332,6 @@ async def generate_response(
     if getattr(state_manager, "is_actionable", None) and not state_manager.is_actionable(user_text):
         return await asyncio.to_thread(state_manager.process_noise_turn, user_text)
 
-    intent_data = await asyncio.to_thread(extract_intent, user_text)
+    intent_data = await extract_intent(user_text)
 
     return await asyncio.to_thread(state_manager.process_turn, user_text, intent_data)
