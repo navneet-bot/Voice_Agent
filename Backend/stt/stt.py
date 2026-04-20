@@ -66,13 +66,7 @@ def _bytes_to_pcm16(audio_bytes: bytes) -> np.ndarray:
             return (np.clip(data, -1.0, 1.0) * 32767).astype(np.int16)
         return (data.astype(np.float32) * 32767).astype(np.int16)
 
-    if len(audio_bytes) % 4 == 0:
-        candidate = np.frombuffer(audio_bytes, dtype=np.float32)
-        if candidate.size > 0 and np.max(np.abs(candidate)) <= 1.0:
-            clipped = np.clip(candidate, -1.0, 1.0)
-            return (clipped * 32767).astype(np.int16)
-
-    # Default PCM16 fallback
+    # Always default to strict PCM16 encoding for raw payload (used by Next.js and frontend)
     return np.frombuffer(audio_bytes, dtype=np.int16)
 
 
