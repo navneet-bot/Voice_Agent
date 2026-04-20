@@ -45,6 +45,9 @@ _HALLUCINATIONS = {
     # Very common foreign-language hallucinations from multilingual Whisper
     "\uac10\uc0ac\ud569\ub2c8\ub2e4",     # Korean: gamsahamnida
     "\uac10\uc0ac\ud569\ub2c8\ub2e4.",    # Korean with period
+    "mbc 뉴스 김성현입니다.",               # Korean: MBC News Kim Seong-hyun
+    "mbc 뉴스 김성현입니다",
+    "mbc 뉴스",
     "\u3042\u308a\u304c\u3068\u3046",      # Japanese: arigatou
     "\u3042\u308a\u304c\u3068\u3046\u3054\u3056\u3044\u307e\u3059",  # Japanese: arigatou gozaimasu
     "\u0634\u0643\u0631\u0627",            # Arabic: shukran
