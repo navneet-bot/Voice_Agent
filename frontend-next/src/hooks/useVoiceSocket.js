@@ -47,7 +47,7 @@ export function useVoiceSocket(agentId, activeClient) {
     try {
       if (!isReconnect) setStatusText('Initialising audio...');
       
-      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const ctx = new (window.AudioContext || window.webkitAudioContext)(); // Use hardware rate for stability
       audioCtxRef.current = ctx;
       if (ctx.state === 'suspended') await ctx.resume();
 
@@ -72,6 +72,9 @@ export function useVoiceSocket(agentId, activeClient) {
       socket.onopen = async () => {
         setIsConnected(true);
         setStatusText('🔴 Listening — speak now');
+        
+        // Handshake: Tell server our hardware rate so STT works perfectly
+        socket.send(JSON.stringify({ type: 'mic_ready', sampleRate: ctx.sampleRate }));
         if (!isReconnect) {
           setTranscripts([]);
           setEvents([]);
@@ -138,6 +141,8 @@ export function useVoiceSocket(agentId, activeClient) {
         }
 
         const pcmData = new Int16Array(e.data, 4); // Start after 4-byte header
+        if (pcmData.length === 0) return; // Guard against empty audio chunks
+
         const floatData = new Float32Array(pcmData.length);
         for (let i = 0; i < pcmData.length; i++) floatData[i] = pcmData[i] / 32768;
         
@@ -157,10 +162,13 @@ export function useVoiceSocket(agentId, activeClient) {
         src.connect(ctx.destination);
         
         const ctxNow = ctx.currentTime;
-        // base delay + (variance * safety)
-        const adaptiveLead = Math.min(0.4, Math.max(0.04, (emaJitterRef.current / 1000) * 2.5));
+        // Increase lead time to 80ms minimum to prevent breaking/pops
+        const adaptiveLead = Math.min(0.5, Math.max(0.08, (emaJitterRef.current / 1000) * 3.0));
         
-        if (nextStartTimeRef.current < ctxNow) nextStartTimeRef.current = ctxNow + adaptiveLead;
+        if (nextStartTimeRef.current < ctxNow) {
+          nextStartTimeRef.current = ctxNow + adaptiveLead;
+        }
+        
         src.start(nextStartTimeRef.current);
         nextStartTimeRef.current += buf.duration;
       };

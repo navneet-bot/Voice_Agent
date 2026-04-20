@@ -442,9 +442,14 @@ class VoiceLiveSource(FrameProcessor):
         super().__init__()
         self._started = False
         self._terminated = False
+        self._sample_rate = 16000 # Default fallback
         # Limit buffer to ~200ms of audio (10 frames)
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=10)
         self._process_task = None
+
+    def set_sample_rate(self, rate: int):
+        self._sample_rate = rate
+        logger.info("VoiceLiveSource: Input sample rate set to %d", rate)
 
     async def _process_queue(self):
         while not self._started:
@@ -480,20 +485,18 @@ class VoiceLiveSource(FrameProcessor):
         if self._terminated:
             return
             
-        frame = AudioRawFrame(audio=data, sample_rate=16000, num_channels=1)
+        # Use the dynamically detected sample rate from the client
+        frame = AudioRawFrame(audio=data, sample_rate=self._sample_rate, num_channels=1)
         
         try:
             self._queue.put_nowait(frame)
         except asyncio.QueueFull:
-            # If full, drop the OLDEST frame to stay current
             try:
                 dropped = self._queue.get_nowait()
-                # NEVER drop control frames (if they were in queue, which shouldn't happen here but for safety)
                 if isinstance(dropped, (StartFrame, EndFrame)):
-                    self._queue.put_nowait(dropped) # put it back
+                    self._queue.put_nowait(dropped)
                     return 
                 self._queue.put_nowait(frame)
-                logger.debug("Backpressure: Dropped oldest audio frame to maintain latency.")
             except Exception:
                 pass
 
@@ -583,13 +586,22 @@ async def websocket_voice_live(websocket: WebSocket):
             while True:
                 msg = await websocket.receive()
                 if msg["type"] == "websocket.receive":
+                    text = msg.get("text")
+                    if text:
+                        try:
+                            # Handle dynamic sample rate handshake
+                            payload = json.loads(text)
+                            if payload.get("type") == "mic_ready":
+                                source.set_sample_rate(payload.get("sampleRate", 16000))
+                        except Exception:
+                            pass
+                        continue
+
                     data = msg.get("bytes") or b""
                     if data:
                         if data == b"ping":
-                            try:
-                                await websocket.send_bytes(b"pong")
-                            except Exception:
-                                pass
+                            try: await websocket.send_bytes(b"pong")
+                            except Exception: pass
                             continue
                         source.queue_audio(data)
                 elif msg["type"] == "websocket.disconnect":

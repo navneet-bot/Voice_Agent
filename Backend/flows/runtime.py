@@ -183,10 +183,8 @@ class RealEstateSTTProcessor(FrameProcessor):
         self.trailing_window_bytes = _ms_to_bytes(stt_cfg.TRAILING_SILENCE_MS, stt_cfg.TARGET_SAMPLE_RATE)
         self.last_emitted_text = ""
         self.last_emit_at = 0.0
-        self.is_speaking = False
-        
         # 6. ADAPTIVE VAD (Continuous Calibration)
-        self.noise_floor = stt_cfg.SILENCE_RMS_THRESHOLD
+        self.noise_floor = 0.010 # Start low and adapt
         self._rms_history = []
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
@@ -204,12 +202,13 @@ class RealEstateSTTProcessor(FrameProcessor):
         
         # Continuous Calibration: Track bottom 10% of energy as noise floor
         self._rms_history.append(chunk_rms)
-        if len(self._rms_history) > 100: # tracking ~2s window
+        if len(self._rms_history) > 50: # tracking ~1s window for faster startup
             self._rms_history.pop(0)
             self.noise_floor = float(np.percentile(self._rms_history, 10))
         
         # threshold = noise_floor + safety_margin
-        dynamic_threshold = max(stt_cfg.SILENCE_RMS_THRESHOLD, self.noise_floor + 0.015)
+        # Use a more sensitive safety margin (0.01) if floor is low
+        dynamic_threshold = self.noise_floor + 0.012
 
         if chunk_rms > dynamic_threshold and not self.is_speaking:
             self.is_speaking = True
