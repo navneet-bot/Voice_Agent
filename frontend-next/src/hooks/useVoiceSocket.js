@@ -59,6 +59,7 @@ export function useVoiceSocket(agentId, activeClient) {
         setIsConnected(true);
         setStatusText('🔴 Listening — speak now');
         setTranscripts([]);
+        setEvents([]);
 
         const mic = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }

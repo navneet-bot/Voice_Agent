@@ -131,8 +131,16 @@ def transcribe_audio(audio_chunk: bytes) -> str:
             text = transcription.text.strip()
 
             # ── Hallucination Filter (Fix #7) ───────────────────────────────────
-            # Exact-match common English + multilingual hallucinations
-            if text.lower() in _HALLUCINATIONS or text in _HALLUCINATIONS:
+            # Fuzzy-match common English + multilingual hallucinations
+            norm_text = text.lower().replace(" ", "")
+            is_hallucination = False
+            for h in _HALLUCINATIONS:
+                h_norm = h.lower().replace(" ", "")
+                if h_norm == norm_text or h_norm in norm_text:
+                    is_hallucination = True
+                    break
+            
+            if is_hallucination:
                 logger.info("STT (Groq Cloud) ignored hallucination: '%s'", text)
                 return ""
 
