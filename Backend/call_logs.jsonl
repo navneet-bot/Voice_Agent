@@ -128,3 +128,19 @@
 {"timestamp": 1776699972.7006567, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nJust to confirm \u2014 Hey, this is Neha \u2014 I'm with the Real Estate team.", "node": "node-1767592854176"}
 {"timestamp": 1776699974.5047355, "event": "user_reply", "content": "MBC \ub274\uc2a4 \uae40\uc131\ud604\uc785\ub2c8\ub2e4.", "node": "node-1767592854176"}
 {"timestamp": 1776699974.8367698, "event": "agent_reply", "content": "Sorry, I didn't catch that.\nJust to confirm \u2014 Hey, this is Neha \u2014 I'm with the Real Estate team.", "node": "node-1767592854176"}
+{"timestamp": 1776700613.8138716, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776700613.8179054, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776700642.2349591, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776700642.2377298, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776706927.586663, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776706927.5898523, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776707253.8455355, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776707253.8484526, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776707274.5575502, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776707274.5616946, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776707282.1250346, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776707282.1289916, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776707288.2114356, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776707288.214655, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}
+{"timestamp": 1776707293.313518, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1776707293.316438, "event": "agent_reply", "content": "Hey, this is Neha \u2014 I'm with the Real Estate team. Is this Prashant?", "node": "node-1767592854176"}

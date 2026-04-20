@@ -436,18 +436,20 @@ async def dashboard_ws_global(websocket: WebSocket):
 # ── VoiceLiveSource / VoiceLiveSink (shared by /api/voice-live and /api/voice-demo) ──
 
 class VoiceLiveSource(FrameProcessor):
-    """Bridges browser mic audio (via WS binary messages) into the Pipecat pipeline."""
+    """Bridges browser mic audio into the Pipecat pipeline with backpressure."""
 
     def __init__(self):
         super().__init__()
-        self._started      = False
-        self._queue: asyncio.Queue = asyncio.Queue()
+        self._started = False
+        self._terminated = False
+        # Limit buffer to ~200ms of audio (10 frames)
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=10)
         self._process_task = None
 
     async def _process_queue(self):
         while not self._started:
             await asyncio.sleep(0.05)
-        while True:
+        while not self._terminated:
             try:
                 frame = await self._queue.get()
                 await self.push_frame(frame, FrameDirection.DOWNSTREAM)
@@ -458,59 +460,90 @@ class VoiceLiveSource(FrameProcessor):
                 logger.error("VoiceLiveSource queue error: %s", e)
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
+        """Hard Session State Machine enforcement."""
         await super().process_frame(frame, direction)
-        await self.push_frame(frame, direction)
+        
         if isinstance(frame, StartFrame):
             self._started = True
+            logger.info("Session started handshake received.")
             if not self._process_task:
                 self._process_task = asyncio.create_task(self._process_queue())
+        
+        if isinstance(frame, EndFrame):
+            self._terminated = True
+            logger.info("Session terminated.")
+
+        await self.push_frame(frame, direction)
 
     def queue_audio(self, data: bytes):
-        self._queue.put_nowait(AudioRawFrame(audio=data, sample_rate=16000, num_channels=1))
+        """Intelligent Selective Backpressure (Senior Requirement)."""
+        if self._terminated:
+            return
+            
+        frame = AudioRawFrame(audio=data, sample_rate=16000, num_channels=1)
+        
+        try:
+            self._queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            # If full, drop the OLDEST frame to stay current
+            try:
+                dropped = self._queue.get_nowait()
+                # NEVER drop control frames (if they were in queue, which shouldn't happen here but for safety)
+                if isinstance(dropped, (StartFrame, EndFrame)):
+                    self._queue.put_nowait(dropped) # put it back
+                    return 
+                self._queue.put_nowait(frame)
+                logger.debug("Backpressure: Dropped oldest audio frame to maintain latency.")
+            except Exception:
+                pass
 
 
 class VoiceLiveSink(FrameProcessor):
-    """
-    Sends pipeline output back to the browser WebSocket.
-
-    Binary frames  → raw PCM16 audio → browser AudioContext plays it
-    AgentTextFrame → {"type":"transcript","speaker":"agent","text":"..."}
-    TextFrame      → {"type":"transcript","speaker":"user","text":"..."}
-
-    Fix Issue 9: speaker label is now always included.
-    """
+    """Sends pipeline output with Binary GenID Headers for client-side dropping."""
 
     def __init__(self, websocket: WebSocket, on_transcript=None):
         super().__init__()
-        self.ws            = websocket
-        self.on_transcript = on_transcript  # optional async callback(speaker, text)
+        self.ws = websocket
+        self.on_transcript = on_transcript
+        self._current_gen_id = 0
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
+        
+        # Track GenID changes (injected by LLM/TTS layer)
+        if hasattr(frame, "gen_id"):
+            self._current_gen_id = frame.gen_id
+
         if isinstance(frame, AudioRawFrame):
             try:
-                await self.ws.send_bytes(frame.audio)
+                # Prepend 4-byte Little Endian GenID
+                header = self._current_gen_id.to_bytes(4, byteorder='little')
+                await self.ws.send_bytes(header + frame.audio)
             except Exception:
                 pass
 
         elif isinstance(frame, TextFrame):
-            # AgentTextFrame is a subclass of TextFrame — distinguish speaker
             is_agent = isinstance(frame, AgentTextFrame)
             speaker  = "agent" if is_agent else "user"
             try:
-                await self.ws.send_text(json.dumps({
+                payload = {
                     "type":    "transcript",
                     "speaker": speaker,
                     "text":    frame.text,
-                }))
+                }
+                # If turn switched, notify client of new GenID
+                if is_agent:
+                    await self.ws.send_text(json.dumps({"type": "gen_id", "value": self._current_gen_id}))
+                
+                await self.ws.send_text(json.dumps(payload))
             except Exception:
                 pass
-            # Notify demo endpoint so it can fire dashboard events
+            
             if self.on_transcript:
                 try:
                     await self.on_transcript(speaker, frame.text)
-                except Exception as e:
-                    logger.warning("on_transcript callback error: %s", e)
+                except Exception:
+                    pass
 
         await self.push_frame(frame, direction)
 
@@ -542,30 +575,37 @@ async def websocket_voice_live(websocket: WebSocket):
     task        = PipelineTask(pipeline)
     runner_task = asyncio.create_task(runner.run(task))
 
+    # ENFORCE StartFrame Handshake immediately
+    await source.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
+
+    async def reader():
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg["type"] == "websocket.receive":
+                    data = msg.get("bytes") or b""
+                    if data:
+                        if data == b"ping":
+                            try:
+                                await websocket.send_bytes(b"pong")
+                            except Exception:
+                                pass
+                            continue
+                        source.queue_audio(data)
+                elif msg["type"] == "websocket.disconnect":
+                    break
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.error("Live Voice Reader Task Error: %s", e)
+
     try:
-        while True:
-            msg = await websocket.receive()
-            if msg["type"] == "websocket.receive":
-                data = msg.get("bytes") or b""
-                if data:
-                    if data == b"ping":
-                        try:
-                            await websocket.send_bytes(b"pong")
-                        except Exception:
-                            pass
-                        continue
-                    source.queue_audio(data)
-            elif msg["type"] == "websocket.disconnect":
-                break
-    except WebSocketDisconnect:
-        logger.info("Live Voice: Disconnected — agent=%s", agent_id)
-    except Exception as e:
-        logger.error("Live Voice error: %s", e)
+        await reader()
     finally:
         try:
             if source._process_task:
                 source._process_task.cancel()
-            await source.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+            await source.process_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             await asyncio.sleep(0.3)
             runner_task.cancel()
             await runner_task
@@ -725,36 +765,38 @@ async def websocket_voice_demo(websocket: WebSocket):
         pass
     logger.info("Voice Demo: Connected event sent — ready to receive audio")
 
+    # ENFORCE StartFrame Handshake immediately
+    await source.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
+
+    async def reader():
+        try:
+            while True:
+                msg = await websocket.receive()
+                if msg["type"] == "websocket.receive":
+                    data = msg.get("bytes") or b""
+                    if data:
+                        if data == b"ping":
+                            try:
+                                await websocket.send_bytes(b"pong")
+                            except Exception:
+                                pass
+                            continue
+                        source.queue_audio(data)
+                elif msg["type"] == "websocket.disconnect":
+                    break
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.error("Voice Demo Reader Task Error: %s", e)
+
     try:
-        while True:
-            # Use receive() not receive_bytes():
-            # receive_bytes() raises RuntimeError if it gets a text or ping frame
-            # (e.g. browser keepalive, or greeting transcript sent back before audio),
-            # which immediately tears down the session.
-            msg = await websocket.receive()
-            if msg["type"] == "websocket.receive":
-                data = msg.get("bytes") or b""
-                if data:
-                    if data == b"ping":
-                        try:
-                            await websocket.send_bytes(b"pong")
-                        except Exception:
-                            pass
-                        continue
-                    source.queue_audio(data)
-                # text frames (keepalive pings from browser) are silently ignored
-            elif msg["type"] == "websocket.disconnect":
-                break
-    except WebSocketDisconnect:
-        logger.info("Voice Demo: Disconnected — campaign=%s turns=%d", campaign_id, len(transcripts))
-    except Exception as e:
-        logger.error("Voice Demo error: %s", e)
+        await reader()
     finally:
         # Tear down pipeline
         try:
             if source._process_task:
                 source._process_task.cancel()
-            await source.push_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+            await source.process_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             await asyncio.sleep(0.3)
             runner_task.cancel()
             await runner_task

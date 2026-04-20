@@ -77,7 +77,7 @@ class AgentTextFrame(TextFrame):
 
 
 class RealEstateLLMProcessor(FrameProcessor):
-    """Turn user transcriptions into short, stable LLM responses and manage node states."""
+    """Turn user transcripts into LLM responses and manage node states with GenID sync."""
 
     def __init__(self):
         super().__init__()
@@ -88,40 +88,38 @@ class RealEstateLLMProcessor(FrameProcessor):
         self.last_user_at = 0.0
         self._booted = False
         self.state_manager = StateManager(STATE_SCHEMA_PATH)
+        self._current_gen_id = 0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
         await super().process_frame(frame, direction)
+        
         if isinstance(frame, StartFrame) and not self._booted:
             self._booted = True
             self.state_manager.reset_state()
             pipeline_logger.log_event("call_started", {"start_node": self.state_manager.start_node_id})
-            
-            # PUSH STARTFRAME DOWNSTREAM FIRST to strictly follow Pipecat protocol
             await self.push_frame(frame, direction)
 
             logger.info("[PIPELINE] LLM -> Received StartFrame. Triggering initial greeting...")
             try:
-                reply = await generate_response(
+                # 2. CIRCUIT BREAKER (Timeout)
+                reply = await asyncio.wait_for(generate_response(
                     user_text=CALL_CONNECTED_TRIGGER,
                     conversation_history=self.history,
                     language=self.current_language,
                     state_manager=self.state_manager,
                     allow_transition=False,
-                )
-                logger.info("[PIPELINE] LLM -> Greeting generated: %s", reply)
-            except Exception as e:
-                logger.error("[PIPELINE] LLM -> Greeting Failed: %s", e)
+                ), timeout=3.5)
+            except (asyncio.TimeoutError, Exception):
                 reply = "Hello, how can I help you today?"
 
             if reply:
                 self.history.append({"role": "assistant", "content": reply})
-                pipeline_logger.log_event("agent_reply", {"content": reply, "node": self.state_manager.current_node_id})
-                await self.push_frame(AgentTextFrame(reply, language=self.current_language), direction)
-            
+                frame_out = AgentTextFrame(reply, language=self.current_language)
+                frame_out.gen_id = self._current_gen_id
+                await self.push_frame(frame_out, direction)
             return
 
         if not isinstance(frame, TextFrame):
-            logger.info("[PIPELINE] LLM -> Passing control frame: %s", type(frame).__name__)
             await self.push_frame(frame, direction)
             return
 
@@ -129,50 +127,53 @@ class RealEstateLLMProcessor(FrameProcessor):
         if not user_text:
             return
 
+        # 1. INCREMENT GEN_ID on new valid user turn
+        self._current_gen_id += 1
+        logger.info("New User Turn: gen_id = %d", self._current_gen_id)
+
         user_analysis = analyze_user_text(user_text, fallback=self.current_language)
         if not user_analysis.actionable:
-            logger.info("Ignoring unclear transcript (%s): %s", user_analysis.reason, user_text)
             return
         user_text = user_analysis.cleaned_text
 
         now = time.monotonic()
         if _is_duplicate_text(user_text, self.last_user_text) and (now - self.last_user_at) < stt_cfg.DUPLICATE_TEXT_WINDOW_S:
-            logger.info("Skipping duplicate user turn: %s", user_text)
             return
 
         self.last_user_text = user_text
         self.last_user_at = now
         self.current_language, _ = self.language_tracker.observe(user_text)
-        logger.info("LLM received text (%s): %s", self.current_language, user_text)
         
-        pipeline_logger.log_event("user_reply", {"content": user_text, "node": self.state_manager.current_node_id})
-        
-        # PUSH the user's text frame downstream so the Sink sees it and sends to UI
+        # Sync User Text Frame with current GenID
+        frame.gen_id = self._current_gen_id
         await self.push_frame(frame, direction)
 
-        reply = await generate_response(
-            user_text,
-            self.history,
-            self.current_language,
-            state_manager=self.state_manager
-        )
-        self.history.append({"role": "user", "content": user_text})
-        if not reply:
-            if len(self.history) > 8:
-                self.history = self.history[-8:]
-            return
+        try:
+            # 2. CIRCUIT BREAKER (Timeout)
+            reply = await asyncio.wait_for(generate_response(
+                user_text,
+                self.history,
+                self.current_language,
+                state_manager=self.state_manager
+            ), timeout=4.0)
+        except asyncio.TimeoutError:
+            logger.warning("LLM Timeout — emitting system busy signal.")
+            reply = "Give me just one moment..."
+        except Exception:
+            reply = None
 
-        pipeline_logger.log_event("agent_reply", {"content": reply, "node": self.state_manager.current_node_id})
-        
-        self.history.append({"role": "assistant", "content": reply})
-        if len(self.history) > 8:
-            self.history = self.history[-8:]
-
-        await self.push_frame(AgentTextFrame(reply, language=self.current_language), direction)
+        if reply:
+            self.history.append({"role": "user", "content": user_text})
+            self.history.append({"role": "assistant", "content": reply})
+            if len(self.history) > 8: self.history = self.history[-8:]
+            
+            frame_out = AgentTextFrame(reply, language=self.current_language)
+            frame_out.gen_id = self._current_gen_id # TAG THE REPLY
+            await self.push_frame(frame_out, direction)
 
 
 class RealEstateSTTProcessor(FrameProcessor):
-    """Low-latency STT chunker with resampling and duplicate suppression."""
+    """Low-latency STT with Adaptive VAD (Noise Floor Calibration)."""
 
     def __init__(self):
         super().__init__()
@@ -180,26 +181,39 @@ class RealEstateSTTProcessor(FrameProcessor):
         self.min_chunk_bytes = _ms_to_bytes(stt_cfg.MIN_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
         self.max_chunk_bytes = _ms_to_bytes(stt_cfg.MAX_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
         self.trailing_window_bytes = _ms_to_bytes(stt_cfg.TRAILING_SILENCE_MS, stt_cfg.TARGET_SAMPLE_RATE)
-        self.trailing_window_bytes = _ms_to_bytes(stt_cfg.TRAILING_SILENCE_MS, stt_cfg.TARGET_SAMPLE_RATE)
         self.last_emitted_text = ""
         self.last_emit_at = 0.0
         self.is_speaking = False
+        
+        # 6. ADAPTIVE VAD (Continuous Calibration)
+        self.noise_floor = stt_cfg.SILENCE_RMS_THRESHOLD
+        self._rms_history = []
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
         await super().process_frame(frame, direction)
         if not isinstance(frame, AudioRawFrame):
-            logger.info("[PIPELINE] STT -> Passing control frame: %s", type(frame).__name__)
             await self.push_frame(frame, direction)
             return
 
         pcm16 = _ensure_pcm16(frame.audio, frame.sample_rate, stt_cfg.TARGET_SAMPLE_RATE)
-        if not pcm16:
-            return
+        if not pcm16: return
 
-        chunk_rms = np.sqrt(np.mean(np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)**2)) / 32768.0
-        if chunk_rms > stt_cfg.SILENCE_RMS_THRESHOLD and not self.is_speaking:
+        # Calculate current RMS
+        samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)
+        chunk_rms = float(np.sqrt(np.mean(samples**2)) / 32768.0)
+        
+        # Continuous Calibration: Track bottom 10% of energy as noise floor
+        self._rms_history.append(chunk_rms)
+        if len(self._rms_history) > 100: # tracking ~2s window
+            self._rms_history.pop(0)
+            self.noise_floor = float(np.percentile(self._rms_history, 10))
+        
+        # threshold = noise_floor + safety_margin
+        dynamic_threshold = max(stt_cfg.SILENCE_RMS_THRESHOLD, self.noise_floor + 0.015)
+
+        if chunk_rms > dynamic_threshold and not self.is_speaking:
             self.is_speaking = True
-            logger.info("[PIPELINE] STT -> User started speaking. Emitting CancelFrame upstream/downstream.")
+            logger.info("[PIPELINE] STT -> Voice Detected (RMS=%.4f, Floor=%.4f). Emitting CancelFrame.", chunk_rms, self.noise_floor)
             await self.push_frame(CancelFrame(), direction)
 
         self.audio_buffer.extend(pcm16)
@@ -209,15 +223,25 @@ class RealEstateSTTProcessor(FrameProcessor):
         if len(self.audio_buffer) < self.max_chunk_bytes and not _has_trailing_silence(
             self.audio_buffer,
             self.trailing_window_bytes,
-            stt_cfg.SILENCE_RMS_THRESHOLD,
+            dynamic_threshold,
         ):
             return
 
         chunk = bytes(self.audio_buffer)
         self.audio_buffer.clear()
         
-        async with _ml_semaphore:
-            text = await asyncio.get_running_loop().run_in_executor(_executor, transcribe_audio, chunk)
+        try:
+            # 2. CIRCUIT BREAKER (STT Timeout)
+            async with _ml_semaphore:
+                text = await asyncio.wait_for(
+                    asyncio.get_running_loop().run_in_executor(_executor, transcribe_audio, chunk),
+                    timeout=3.5
+                )
+        except asyncio.TimeoutError:
+            logger.error("STT Timeout (Skipping chunk)")
+            return
+        except Exception:
+            return
             
         normalized_text = _normalize_text(text)
         if not normalized_text or len(normalized_text) < stt_cfg.MIN_TRANSCRIPT_CHARS:
@@ -225,7 +249,6 @@ class RealEstateSTTProcessor(FrameProcessor):
 
         now = time.monotonic()
         if _is_duplicate_text(text, self.last_emitted_text) and (now - self.last_emit_at) < stt_cfg.DUPLICATE_TEXT_WINDOW_S:
-            logger.info("Skipping duplicate STT chunk: %s", text)
             return
 
         self.last_emitted_text = text
@@ -235,75 +258,76 @@ class RealEstateSTTProcessor(FrameProcessor):
 
 
 class RealEstateTTSProcessor(FrameProcessor):
-    """Turn assistant text into PCM audio with minimal extra latency."""
+    """Turn assistant text into speech, tagged with generation_id for client-side filtering."""
 
     def __init__(self):
         super().__init__()
         self.last_reply = ""
         self.last_reply_at = 0.0
         self._tts_task = None
+        self._active_gen_id = 0
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
         await super().process_frame(frame, direction)
         
-        from pipecat.frames.frames import CancelFrame
         if isinstance(frame, CancelFrame):
-            logger.info("[PIPELINE] TTS -> Caught CancelFrame. Stopping current synthesis.")
+            logger.info("[PIPELINE] TTS -> Caught CancelFrame. Stopping current task.")
             if self._tts_task and not self._tts_task.done():
                 self._tts_task.cancel()
             await self.push_frame(frame, direction)
             return
 
         if not isinstance(frame, TextFrame):
-            logger.info("[PIPELINE] TTS -> Passing control frame: %s", type(frame).__name__)
             await self.push_frame(frame, direction)
             return
 
+        # Read the gen_id injected by the LLM layer
+        gen_id = getattr(frame, "gen_id", 0)
+        self._active_gen_id = gen_id
+
         text = frame.text.strip()
         now = time.monotonic()
-        if not text:
-            return
-        if _is_duplicate_text(text, self.last_reply) and (now - self.last_reply_at) < 1.5:
+        if not text or (_is_duplicate_text(text, self.last_reply) and (now - self.last_reply_at) < 1.5):
             return
 
         preferred_language = getattr(frame, "language", None)
-        logger.info("[PIPELINE] TTS -> Synthesizing: %s", text)
+        logger.info("[PIPELINE] TTS -> gen_id=%d text=%s", gen_id, text)
         
-        # PUSH the agent's text frame downstream so the Sink sees it and sends to UI immediately
         await self.push_frame(frame, direction)
         
         if self._tts_task and not self._tts_task.done():
             self._tts_task.cancel()
             
-        self._tts_task = asyncio.create_task(self._run_tts(text, preferred_language, direction))
+        self._tts_task = asyncio.create_task(self._run_tts(text, preferred_language, gen_id, direction))
         
-    async def _run_tts(self, text: str, preferred_language, direction: FrameDirection):
-        speech_gen = generate_speech_stream(text, preferred_language)
-        if not speech_gen:
-            return
+    async def _run_tts(self, text, preferred_lang, gen_id, direction):
+        speech_gen = generate_speech_stream(text, preferred_lang)
+        if not speech_gen: return
 
         try:
-            now = time.monotonic()
             self.last_reply = text
-            self.last_reply_at = now
+            self.last_reply_at = time.monotonic()
             async with _ml_semaphore:
                 while True:
-                    # Use _safe_next — bare next() inside run_in_executor raises
-                    # RuntimeError (PEP 479), not StopIteration, so the except
-                    # StopIteration below would never fire.
-                    chunk_bytes = await asyncio.get_running_loop().run_in_executor(
-                        _executor, _safe_next, speech_gen
-                    )
+                    # 2. CIRCUIT BREAKER (Executor Timeout)
+                    try:
+                        chunk_bytes = await asyncio.wait_for(
+                            asyncio.get_running_loop().run_in_executor(_executor, _safe_next, speech_gen),
+                            timeout=3.0
+                        )
+                    except asyncio.TimeoutError:
+                        logger.error("TTS Generator Timeout (Timeout at source)")
+                        break
+
                     if chunk_bytes is _GENERATOR_SENTINEL:
                         break
                     if chunk_bytes:
-                        logger.debug("[PIPELINE] TTS -> Sending audio chunk to Sink")
-                        await self.push_frame(
-                            AudioRawFrame(audio=chunk_bytes, sample_rate=24000, num_channels=1),
-                            direction,
-                        )
+                        # 1. TAG AUDIO WITH GEN ID
+                        out_frame = AudioRawFrame(audio=chunk_bytes, sample_rate=24000, num_channels=1)
+                        out_frame.gen_id = gen_id
+                        await self.push_frame(out_frame, direction)
         except asyncio.CancelledError:
-            logger.info("[PIPELINE] TTS -> Synthesis task was safely cancelled mid-stream.")
+            pass
         except Exception as exc:
             logger.error("[PIPELINE] TTS -> Error: %s", exc)
 

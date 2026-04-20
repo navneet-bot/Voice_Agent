@@ -12,9 +12,9 @@ LANGUAGE: Optional[str] = None     # None = auto-detect (Hindi / Marathi / Engli
 
 # Runtime buffering tuned for low-latency local voice calls
 TARGET_SAMPLE_RATE: int = 16000
-MIN_CHUNK_MS: int = 450
-MAX_CHUNK_MS: int = 900
-TRAILING_SILENCE_MS: int = 180
+MIN_CHUNK_MS: int = 250
+MAX_CHUNK_MS: int = 800
+TRAILING_SILENCE_MS: int = 150
 SILENCE_RMS_THRESHOLD: float = 0.040
 MIN_TRANSCRIPT_CHARS: int = 1
 DUPLICATE_TEXT_WINDOW_S: float = 3.0
