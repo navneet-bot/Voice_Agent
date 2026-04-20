@@ -29,7 +29,7 @@ def _safe_next(gen):
 _ml_semaphore = asyncio.Semaphore(4)
 
 try:
-    from pipecat.frames.frames import AudioRawFrame, Frame, TextFrame
+    from pipecat.frames.frames import AudioRawFrame, Frame, TextFrame, CancelFrame
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 except ImportError:
     logging.error("pipecat-ai is not installed. Pipeline will fail.")
@@ -38,6 +38,7 @@ except ImportError:
     Frame = None
     TextFrame = None
     AudioRawFrame = None
+    CancelFrame = None
 
 from llm.llm import generate_response
 from llm.language_utils import LanguageTracker, analyze_user_text
@@ -145,6 +146,9 @@ class RealEstateLLMProcessor(FrameProcessor):
         logger.info("LLM received text (%s): %s", self.current_language, user_text)
         
         pipeline_logger.log_event("user_reply", {"content": user_text, "node": self.state_manager.current_node_id})
+        
+        # PUSH the user's text frame downstream so the Sink sees it and sends to UI
+        await self.push_frame(frame, direction)
 
         reply = await generate_response(
             user_text,
@@ -176,8 +180,10 @@ class RealEstateSTTProcessor(FrameProcessor):
         self.min_chunk_bytes = _ms_to_bytes(stt_cfg.MIN_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
         self.max_chunk_bytes = _ms_to_bytes(stt_cfg.MAX_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
         self.trailing_window_bytes = _ms_to_bytes(stt_cfg.TRAILING_SILENCE_MS, stt_cfg.TARGET_SAMPLE_RATE)
+        self.trailing_window_bytes = _ms_to_bytes(stt_cfg.TRAILING_SILENCE_MS, stt_cfg.TARGET_SAMPLE_RATE)
         self.last_emitted_text = ""
         self.last_emit_at = 0.0
+        self.is_speaking = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
         await super().process_frame(frame, direction)
@@ -189,6 +195,12 @@ class RealEstateSTTProcessor(FrameProcessor):
         pcm16 = _ensure_pcm16(frame.audio, frame.sample_rate, stt_cfg.TARGET_SAMPLE_RATE)
         if not pcm16:
             return
+
+        chunk_rms = np.sqrt(np.mean(np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)**2)) / 32768.0
+        if chunk_rms > stt_cfg.SILENCE_RMS_THRESHOLD and not self.is_speaking:
+            self.is_speaking = True
+            logger.info("[PIPELINE] STT -> User started speaking. Emitting CancelFrame upstream/downstream.")
+            await self.push_frame(CancelFrame(), direction)
 
         self.audio_buffer.extend(pcm16)
         if len(self.audio_buffer) < self.min_chunk_bytes:
@@ -218,6 +230,7 @@ class RealEstateSTTProcessor(FrameProcessor):
 
         self.last_emitted_text = text
         self.last_emit_at = now
+        self.is_speaking = False
         await self.push_frame(TextFrame(text), direction)
 
 
@@ -228,9 +241,19 @@ class RealEstateTTSProcessor(FrameProcessor):
         super().__init__()
         self.last_reply = ""
         self.last_reply_at = 0.0
+        self._tts_task = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
         await super().process_frame(frame, direction)
+        
+        from pipecat.frames.frames import CancelFrame
+        if isinstance(frame, CancelFrame):
+            logger.info("[PIPELINE] TTS -> Caught CancelFrame. Stopping current synthesis.")
+            if self._tts_task and not self._tts_task.done():
+                self._tts_task.cancel()
+            await self.push_frame(frame, direction)
+            return
+
         if not isinstance(frame, TextFrame):
             logger.info("[PIPELINE] TTS -> Passing control frame: %s", type(frame).__name__)
             await self.push_frame(frame, direction)
@@ -246,11 +269,21 @@ class RealEstateTTSProcessor(FrameProcessor):
         preferred_language = getattr(frame, "language", None)
         logger.info("[PIPELINE] TTS -> Synthesizing: %s", text)
         
+        # PUSH the agent's text frame downstream so the Sink sees it and sends to UI immediately
+        await self.push_frame(frame, direction)
+        
+        if self._tts_task and not self._tts_task.done():
+            self._tts_task.cancel()
+            
+        self._tts_task = asyncio.create_task(self._run_tts(text, preferred_language, direction))
+        
+    async def _run_tts(self, text: str, preferred_language, direction: FrameDirection):
         speech_gen = generate_speech_stream(text, preferred_language)
         if not speech_gen:
             return
 
         try:
+            now = time.monotonic()
             self.last_reply = text
             self.last_reply_at = now
             async with _ml_semaphore:
@@ -264,11 +297,13 @@ class RealEstateTTSProcessor(FrameProcessor):
                     if chunk_bytes is _GENERATOR_SENTINEL:
                         break
                     if chunk_bytes:
-                        logger.info("[PIPELINE] TTS -> Sending audio chunk to Sink")
+                        logger.debug("[PIPELINE] TTS -> Sending audio chunk to Sink")
                         await self.push_frame(
                             AudioRawFrame(audio=chunk_bytes, sample_rate=24000, num_channels=1),
                             direction,
                         )
+        except asyncio.CancelledError:
+            logger.info("[PIPELINE] TTS -> Synthesis task was safely cancelled mid-stream.")
         except Exception as exc:
             logger.error("[PIPELINE] TTS -> Error: %s", exc)
 
