@@ -16,6 +16,7 @@ Backend/sample_voice.wav
 # Database
 Backend/db/voice_platform.db
 Backend/db/workspace_logs.json
+Backend/work_log.md
 
 # IDEs
 .vscode/
