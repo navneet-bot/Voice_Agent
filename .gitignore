@@ -22,3 +22,5 @@ Backend/work_log.md
 .vscode/
 .idea/
 .DS_Store
+.graphify-out/
+.agent/
