@@ -21,6 +21,7 @@ export function useVoiceSocket(agentId, activeClient) {
   const emaJitterRef = useRef(50); // Default 50ms jitter estimate
   const activeGenIdRef = useRef(0);
   const expectsGenHeaderRef = useRef(false);
+  const lastMicStatsAtRef = useRef(0);
 
   const clearPlaybackReleaseTimer = useCallback(() => {
     if (playbackReleaseTimeoutRef.current) {
@@ -64,6 +65,25 @@ export function useVoiceSocket(agentId, activeClient) {
     }
     return i16.buffer;
   }, []);
+
+  const logMicChunkStats = useCallback((audioChunk) => {
+    const f32 = audioChunk instanceof Float32Array ? audioChunk : new Float32Array(audioChunk.buffer || audioChunk);
+    if (!f32.length) return;
+    let energy = 0;
+    for (let i = 0; i < f32.length; i++) energy += f32[i] * f32[i];
+    const rms = Math.sqrt(energy / f32.length);
+    const now = performance.now();
+    if (now - lastMicStatsAtRef.current >= 1000) {
+      console.debug('[VOICE] mic chunk', {
+        samples: f32.length,
+        rms: Number(rms.toFixed(4)),
+        sampleRate: audioCtxRef.current?.sampleRate || 0,
+        wsOpen: wsRef.current?.readyState === WebSocket.OPEN,
+        micBlocked: isMicInputBlocked(),
+      });
+      lastMicStatsAtRef.current = now;
+    }
+  }, [isMicInputBlocked]);
 
   const disconnect = useCallback(() => {
     shouldReconnectRef.current = false;
@@ -148,6 +168,7 @@ export function useVoiceSocket(agentId, activeClient) {
           source.connect(workletNode);
           workletNode.port.onmessage = (e) => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
+              logMicChunkStats(e.data);
               if (isMicInputBlocked()) return;
               wsRef.current.send(toPcm16Buffer(e.data));
             }
@@ -161,6 +182,7 @@ export function useVoiceSocket(agentId, activeClient) {
           processor.connect(silentGain);
           silentGain.connect(ctx.destination);
           processor.onaudioprocess = (e) => {
+            logMicChunkStats(e.inputBuffer.getChannelData(0));
             if (isMicInputBlocked()) return;
             const inp = e.inputBuffer.getChannelData(0);
             const i16 = new Int16Array(inp.length);
@@ -259,7 +281,7 @@ export function useVoiceSocket(agentId, activeClient) {
       setStatusText('Mic access denied or server unreachable.');
       disconnect();
     }
-  }, [agentId, activeClient, clearPlaybackReleaseTimer, disconnect, holdMicInput, isMicInputBlocked, scheduleMicResume, toPcm16Buffer]);
+  }, [agentId, activeClient, clearPlaybackReleaseTimer, disconnect, holdMicInput, isMicInputBlocked, logMicChunkStats, scheduleMicResume, toPcm16Buffer]);
 
   const clearTranscripts = () => setTranscripts([]);
 

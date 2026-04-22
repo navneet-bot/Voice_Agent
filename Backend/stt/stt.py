@@ -55,6 +55,7 @@ _HALLUCINATIONS = {
     # Noise/silence markers
     ".", "..", "...", "um", "uh", "hmm", "mm", "ah", "oh",
 }
+_SHORT_VALID_UTTERANCES = {"hello", "hi", "yeah", "yes", "no", "ok", "okay"}
 
 
 def _safe_log_text(text: str) -> str:
@@ -134,6 +135,10 @@ def transcribe_audio(audio_chunk: bytes) -> str:
             
             latency = time.perf_counter() - t0
             text = transcription.text.strip()
+            raw_norm_text = text.lower().replace(" ", "").replace(".", "").replace(",", "").replace("!", "").replace("?", "")
+            if raw_norm_text in _SHORT_VALID_UTTERANCES:
+                logger.info("STT (Groq Cloud) accepted short utterance '%s' in %.3fs", _safe_log_text(text), latency)
+                return text
 
             # ── Hallucination Filter (Fix #7) ───────────────────────────────────
             # Fuzzy-match common English + multilingual hallucinations
@@ -141,7 +146,7 @@ def transcribe_audio(audio_chunk: bytes) -> str:
             is_hallucination = False
             for h in _HALLUCINATIONS:
                 h_norm = h.lower().replace(" ", "")
-                if h_norm == norm_text or h_norm in norm_text:
+                if h_norm == norm_text:
                     is_hallucination = True
                     break
             

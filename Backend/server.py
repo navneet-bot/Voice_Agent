@@ -443,9 +443,13 @@ class VoiceLiveSource(FrameProcessor):
         self._started = False
         self._terminated = False
         self._sample_rate = 16000 # Default fallback
-        # Limit buffer to ~200ms of audio (10 frames)
-        self._queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+        # Keep a little extra headroom so short browser/network jitter does not drop speech.
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=32)
         self._process_task = None
+        self._frames_received = 0
+        self._frames_dropped = 0
+        self._stats_started_at = time.monotonic()
+        self._last_stats_log_at = 0.0
 
     def set_sample_rate(self, rate: int):
         self._sample_rate = rate
@@ -484,10 +488,28 @@ class VoiceLiveSource(FrameProcessor):
         """Intelligent Selective Backpressure (Senior Requirement)."""
         if self._terminated:
             return
+        if not data:
+            return
             
         # Use the dynamically detected sample rate from the client
         frame = AudioRawFrame(audio=data, sample_rate=self._sample_rate, num_channels=1)
         _ensure_frame_attrs(frame)
+        self._frames_received += 1
+        now = time.monotonic()
+        if (now - self._last_stats_log_at) >= 1.0:
+            queue_depth = self._queue.qsize()
+            frame_ms = (len(data) / 2 / max(self._sample_rate, 1)) * 1000.0
+            logger.info(
+                "VoiceLiveSource: frame_bytes=%d frame_ms=%.1f queue=%d/%d dropped=%d received=%d sample_rate=%d",
+                len(data),
+                frame_ms,
+                queue_depth,
+                self._queue.maxsize,
+                self._frames_dropped,
+                self._frames_received,
+                self._sample_rate,
+            )
+            self._last_stats_log_at = now
         
         try:
             self._queue.put_nowait(frame)
@@ -497,6 +519,7 @@ class VoiceLiveSource(FrameProcessor):
                 if isinstance(dropped, (StartFrame, EndFrame)):
                     self._queue.put_nowait(dropped)
                     return 
+                self._frames_dropped += 1
                 self._queue.put_nowait(frame)
             except Exception:
                 pass

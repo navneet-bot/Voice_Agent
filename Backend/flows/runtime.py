@@ -74,6 +74,7 @@ logger = logging.getLogger(__name__)
 _GARBAGE_SINGLE_WORDS = {
     "ah", "bb", "eh", "er", "hm", "hmm", "mm", "oh", "uh", "um",
 }
+_SHORT_VALID_UTTERANCES = {"hello", "hi", "yeah", "yes", "no", "ok", "okay"}
 _KNOWN_HALLUCINATION_PHRASES = (
     "if you have any questions please let me know",
     "mbc news",
@@ -250,6 +251,15 @@ class RealEstateSTTProcessor(FrameProcessor):
         samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)
         chunk_rms = float(np.sqrt(np.mean(samples**2)) / 32768.0)
         chunk_duration_ms = (len(samples) / stt_cfg.TARGET_SAMPLE_RATE) * 1000.0
+        if logger.isEnabledFor(logging.INFO) and chunk_rms > 0.005:
+            logger.info(
+                "[PIPELINE] STT <- Audio frame bytes=%d duration_ms=%.1f rms=%.4f speaking=%s blocked=%s",
+                len(pcm16),
+                chunk_duration_ms,
+                chunk_rms,
+                self.is_speaking,
+                bool(self.turn_state and self.turn_state.is_stt_blocked()),
+            )
         
         # Continuous Calibration: Track bottom 10% of energy as noise floor
         self._rms_history.append(chunk_rms)
@@ -291,6 +301,7 @@ class RealEstateSTTProcessor(FrameProcessor):
 
         chunk = bytes(self.audio_buffer)
         self.audio_buffer.clear()
+        logger.info("[PIPELINE] STT -> Sending chunk to transcription bytes=%d", len(chunk))
         
         try:
             # 2. CIRCUIT BREAKER (STT Timeout)
@@ -504,6 +515,8 @@ def _is_actionable_transcript(text: str) -> bool:
         return True
 
     word = words[0]
+    if word in _SHORT_VALID_UTTERANCES:
+        return True
     if word in _GARBAGE_SINGLE_WORDS:
         return False
     if len(word) <= 2 and word not in {"hi", "no", "ok"}:
