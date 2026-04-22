@@ -173,6 +173,17 @@ HOSTILE_TOKENS = [
     "fuck", "shit", "bitch", "ass", "damn", "screw you",
     "die", "kill", "bloody", "bastard", "crap",
 ]
+GOODBYE_PHRASES = (
+    "bye",
+    "bye bye",
+    "goodbye",
+    "good bye",
+    "good night",
+    "have a good night",
+    "have good night",
+    "see you",
+    "talk later",
+)
 
 
 def _log(tag: str, message: str) -> None:
@@ -1208,9 +1219,15 @@ class StateManager:
             signal in clean_words or clean_text == signal
             for signal in _NEGATIVE_SIGNALS
         )
+        has_goodbye = any(
+            phrase == clean_text or phrase in clean_text
+            for phrase in GOODBYE_PHRASES
+        )
 
         if has_negative:
             return "deny"
+        if has_goodbye:
+            return "deny_interest"
         if has_affirmative:
             return "confirm"
 

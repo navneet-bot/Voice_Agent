@@ -161,14 +161,18 @@ class RealEstateLLMProcessor(FrameProcessor):
             return
         logger.info("[PIPELINE] LLM <- User transcript: %s", user_text)
 
-        # 1. INCREMENT GEN_ID on new valid user turn
+        user_analysis = analyze_user_text(user_text, fallback=self.current_language)
+        if user_analysis.actionable:
+            user_text = user_analysis.cleaned_text
+        else:
+            logger.info(
+                "[PIPELINE] LLM -> Transcript classified non-actionable (%s). Routing through noise handler instead of dropping.",
+                user_analysis.reason,
+            )
+
+        # 1. INCREMENT GEN_ID on every non-empty user turn that reaches LLM
         self._current_gen_id += 1
         logger.info("New User Turn: gen_id = %d", self._current_gen_id)
-
-        user_analysis = analyze_user_text(user_text, fallback=self.current_language)
-        if not user_analysis.actionable:
-            return
-        user_text = user_analysis.cleaned_text
 
         now = time.monotonic()
         if _is_duplicate_text(user_text, self.last_user_text) and (now - self.last_user_at) < stt_cfg.DUPLICATE_TEXT_WINDOW_S:
@@ -176,7 +180,8 @@ class RealEstateLLMProcessor(FrameProcessor):
 
         self.last_user_text = user_text
         self.last_user_at = now
-        self.current_language, _ = self.language_tracker.observe(user_text)
+        if user_analysis.actionable:
+            self.current_language, _ = self.language_tracker.observe(user_text)
         
         # Sync User Text Frame with current GenID
         _ensure_frame_runtime_attrs(frame)

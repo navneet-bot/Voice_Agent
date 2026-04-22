@@ -21,6 +21,7 @@ from __future__ import annotations
 # Reconfigure BEFORE any import that might trigger logging.
 import sys
 import io as _io
+import time
 
 def _force_utf8_streams() -> None:
     for _stream_name in ("stdout", "stderr"):
