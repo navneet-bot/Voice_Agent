@@ -1885,6 +1885,34 @@
   let _activeAudioGenId = 0;
   let _expectsGenHeader = false;
   let _receivedTranscriptEvent = false;
+  let _micBlockedUntil = 0;
+  let _playbackReleaseTimer = null;
+
+  function _clearPlaybackReleaseTimer() {
+    if (_playbackReleaseTimer) {
+      clearTimeout(_playbackReleaseTimer);
+      _playbackReleaseTimer = null;
+    }
+  }
+
+  function _holdMicInput(holdMs = 0) {
+    const now = performance.now();
+    _micBlockedUntil = Math.max(_micBlockedUntil, now + holdMs);
+    _clearPlaybackReleaseTimer();
+  }
+
+  function _micInputBlocked() {
+    return performance.now() < _micBlockedUntil;
+  }
+
+  function _scheduleMicResume(nextStartTime, ctx, tailMs = 320) {
+    const queuedMs = Math.max(0, (nextStartTime - ctx.currentTime) * 1000);
+    const releaseAfterMs = queuedMs + tailMs;
+    _holdMicInput(releaseAfterMs);
+    _playbackReleaseTimer = setTimeout(() => {
+      if (performance.now() >= _micBlockedUntil) _micBlockedUntil = 0;
+    }, releaseAfterMs);
+  }
 
   function _disconnectMicNodes() {
     try { if (micSourceNode) micSourceNode.disconnect(); } catch (_) {}
@@ -2082,6 +2110,7 @@
           micSilentGainNode.connect(audioCtx.destination);
           micWorkletNode.port.onmessage = (ev) => {
             if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+              if (_micInputBlocked()) return;
               const f32 = ev.data;
               const i16 = new Int16Array(f32.length);
               for (let i = 0; i < f32.length; i++)
@@ -2099,6 +2128,7 @@
           micSilentGainNode.connect(audioCtx.destination);
           micProcessorNode.onaudioprocess = (e) => {
             if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+              if (_micInputBlocked()) return;
               const inp = e.inputBuffer.getChannelData(0);
               const i16 = new Int16Array(inp.length);
               for (let j = 0; j < inp.length; j++)
@@ -2122,6 +2152,7 @@
             if (msg.type === 'gen_id') {
               _expectsGenHeader = true;
               _activeAudioGenId = Number(msg.value) || 0;
+              _holdMicInput(250);
               return;
             }
             if (msg.type === 'transcript' && txArea) {
@@ -2175,6 +2206,7 @@
         if (nextStartTime < now) nextStartTime = now + JITTER_BUFFER_MS / 1000;
         src.start(nextStartTime);
         nextStartTime += buf.duration;
+        _scheduleMicResume(nextStartTime, audioCtx);
       };
 
       liveSocket.onerror  = () => showToast('Voice server error.');
@@ -2202,9 +2234,11 @@
     }
     if (livePingInterval) { clearInterval(livePingInterval); livePingInterval = null; }
     _disconnectMicNodes();
+    _clearPlaybackReleaseTimer();
     _activeAudioGenId = 0;
     _expectsGenHeader = false;
     _receivedTranscriptEvent = false;
+    _micBlockedUntil = 0;
     if (micStream)  { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
     if (audioCtx)   { audioCtx.close().catch(()=>{}); audioCtx = null; }
 

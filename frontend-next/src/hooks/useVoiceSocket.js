@@ -13,12 +13,43 @@ export function useVoiceSocket(agentId, activeClient) {
   const pingIntervalRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
   const shouldReconnectRef = useRef(false);
+  const playbackReleaseTimeoutRef = useRef(null);
+  const micBlockedUntilRef = useRef(0);
   
   // Statistical Jitter Tracking
   const lastPacketAtRef = useRef(0);
   const emaJitterRef = useRef(50); // Default 50ms jitter estimate
   const activeGenIdRef = useRef(0);
   const expectsGenHeaderRef = useRef(false);
+
+  const clearPlaybackReleaseTimer = useCallback(() => {
+    if (playbackReleaseTimeoutRef.current) {
+      clearTimeout(playbackReleaseTimeoutRef.current);
+      playbackReleaseTimeoutRef.current = null;
+    }
+  }, []);
+
+  const holdMicInput = useCallback((holdMs = 0) => {
+    const now = performance.now();
+    micBlockedUntilRef.current = Math.max(micBlockedUntilRef.current, now + holdMs);
+    clearPlaybackReleaseTimer();
+  }, [clearPlaybackReleaseTimer]);
+
+  const scheduleMicResume = useCallback((ctx, tailMs = 320) => {
+    const queuedMs = Math.max(0, (nextStartTimeRef.current - ctx.currentTime) * 1000);
+    const releaseAfterMs = queuedMs + tailMs;
+    holdMicInput(releaseAfterMs);
+    playbackReleaseTimeoutRef.current = setTimeout(() => {
+      const now = performance.now();
+      if (now >= micBlockedUntilRef.current) {
+        micBlockedUntilRef.current = 0;
+      }
+    }, releaseAfterMs);
+  }, [holdMicInput]);
+
+  const isMicInputBlocked = useCallback(() => (
+    performance.now() < micBlockedUntilRef.current
+  ), []);
 
   const disconnect = useCallback(() => {
     shouldReconnectRef.current = false;
@@ -39,12 +70,15 @@ export function useVoiceSocket(agentId, activeClient) {
     }
     if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
     if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+    clearPlaybackReleaseTimer();
     
     setIsConnected(false);
     setStatusText('Session ended');
     activeGenIdRef.current = 0;
     expectsGenHeaderRef.current = false;
-  }, []);
+    micBlockedUntilRef.current = 0;
+    nextStartTimeRef.current = 0;
+  }, [clearPlaybackReleaseTimer]);
 
   const connect = useCallback(async (isDemo = false, leadName = 'Demo User', isReconnect = false) => {
     if (!isReconnect) disconnect();
@@ -100,6 +134,7 @@ export function useVoiceSocket(agentId, activeClient) {
           source.connect(workletNode);
           workletNode.port.onmessage = (e) => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
+              if (isMicInputBlocked()) return;
               // Worklet emits Float32 samples; backend expects raw PCM16 bytes.
               const f32 = e.data;
               const i16 = new Int16Array(f32.length);
@@ -119,6 +154,7 @@ export function useVoiceSocket(agentId, activeClient) {
           processor.connect(silentGain);
           silentGain.connect(ctx.destination);
           processor.onaudioprocess = (e) => {
+            if (isMicInputBlocked()) return;
             const inp = e.inputBuffer.getChannelData(0);
             const i16 = new Int16Array(inp.length);
             for (let j = 0; j < inp.length; j++) i16[j] = Math.max(-32768, Math.min(32767, inp[j] * 32767));
@@ -142,6 +178,7 @@ export function useVoiceSocket(agentId, activeClient) {
             } else if (msg.type === 'gen_id') {
               activeGenIdRef.current = msg.value;
               expectsGenHeaderRef.current = true;
+              holdMicInput(250);
             } else if (msg.type?.startsWith('call_')) {
               setEvents(prev => [...prev, msg]);
             }
@@ -192,6 +229,7 @@ export function useVoiceSocket(agentId, activeClient) {
         
         src.start(nextStartTimeRef.current);
         nextStartTimeRef.current += buf.duration;
+        scheduleMicResume(ctx);
       };
 
       socket.onclose = () => {
@@ -214,7 +252,7 @@ export function useVoiceSocket(agentId, activeClient) {
       setStatusText('Mic access denied or server unreachable.');
       disconnect();
     }
-  }, [agentId, activeClient, disconnect]);
+  }, [agentId, activeClient, clearPlaybackReleaseTimer, disconnect, holdMicInput, isMicInputBlocked, scheduleMicResume]);
 
   const clearTranscripts = () => setTranscripts([]);
 

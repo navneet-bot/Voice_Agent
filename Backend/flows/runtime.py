@@ -71,6 +71,17 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_GARBAGE_SINGLE_WORDS = {
+    "ah", "bb", "eh", "er", "hm", "hmm", "mm", "oh", "uh", "um",
+}
+_KNOWN_HALLUCINATION_PHRASES = (
+    "if you have any questions please let me know",
+    "mbc news",
+    "please subscribe",
+    "thanks for watching",
+    "thank you for watching",
+)
+
 
 @dataclass
 class AgentTextFrame(TextFrame):
@@ -86,6 +97,14 @@ class VoiceTurnState:
 
     def is_stt_blocked(self) -> bool:
         return self.tts_active or time.monotonic() < self.tts_release_at
+
+    def mark_tts_started(self) -> None:
+        self.tts_active = True
+        self.tts_release_at = 0.0
+
+    def mark_tts_finished(self, cooldown_ms: int = stt_cfg.POST_TTS_STT_COOLDOWN_MS) -> None:
+        self.tts_active = False
+        self.tts_release_at = time.monotonic() + (cooldown_ms / 1000.0)
 
 
 class RealEstateLLMProcessor(FrameProcessor):
@@ -201,6 +220,7 @@ class RealEstateSTTProcessor(FrameProcessor):
         self.last_emit_at = 0.0
         self.is_speaking = False
         self._voice_hits = 0
+        self._voiced_ms = 0.0
         self._cooldown_until = 0.0
         self.turn_state = turn_state
         # 6. ADAPTIVE VAD (Continuous Calibration)
@@ -221,6 +241,7 @@ class RealEstateSTTProcessor(FrameProcessor):
             self.audio_buffer.clear()
             self.is_speaking = False
             self._voice_hits = 0
+            self._voiced_ms = 0.0
             return
         if time.monotonic() < self._cooldown_until:
             return
@@ -228,6 +249,7 @@ class RealEstateSTTProcessor(FrameProcessor):
         # Calculate current RMS
         samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)
         chunk_rms = float(np.sqrt(np.mean(samples**2)) / 32768.0)
+        chunk_duration_ms = (len(samples) / stt_cfg.TARGET_SAMPLE_RATE) * 1000.0
         
         # Continuous Calibration: Track bottom 10% of energy as noise floor
         self._rms_history.append(chunk_rms)
@@ -242,13 +264,16 @@ class RealEstateSTTProcessor(FrameProcessor):
         if not self.is_speaking:
             if chunk_rms <= dynamic_threshold:
                 self._voice_hits = 0
+                self._voiced_ms = 0.0
                 return
             self._voice_hits += 1
-            # Require two consecutive voiced chunks before entering speaking state.
-            if self._voice_hits < 2:
+            self._voiced_ms += chunk_duration_ms
+            # Require sustained speech before entering speaking state.
+            if self._voice_hits < 2 or self._voiced_ms < stt_cfg.MIN_VOICE_START_MS:
                 return
             self.is_speaking = True
             self._voice_hits = 0
+            self._voiced_ms = 0.0
             self.audio_buffer.clear()
             logger.info("[PIPELINE] STT -> Voice Detected (RMS=%.4f, Floor=%.4f). Emitting CancelFrame.", chunk_rms, self.noise_floor)
             await self.push_frame(CancelFrame(), direction)
@@ -281,7 +306,7 @@ class RealEstateSTTProcessor(FrameProcessor):
             return
             
         normalized_text = _normalize_text(text)
-        if not normalized_text or len(normalized_text) < stt_cfg.MIN_TRANSCRIPT_CHARS:
+        if not normalized_text or len(normalized_text) < stt_cfg.MIN_TRANSCRIPT_CHARS or not _is_actionable_transcript(text):
             self.is_speaking = False
             self._cooldown_until = time.monotonic() + 0.35
             return
@@ -322,8 +347,11 @@ class RealEstateTTSProcessor(FrameProcessor):
             if self._tts_task and not self._tts_task.done():
                 self._tts_task.cancel()
             if self.turn_state:
-                self.turn_state.tts_active = False
-                self.turn_state.tts_release_at = time.monotonic() + 0.25 if had_active_tts else 0.0
+                if had_active_tts:
+                    self.turn_state.mark_tts_finished()
+                else:
+                    self.turn_state.tts_active = False
+                    self.turn_state.tts_release_at = 0.0
             await self.push_frame(frame, direction)
             return
 
@@ -353,8 +381,7 @@ class RealEstateTTSProcessor(FrameProcessor):
         if self._tts_task and not self._tts_task.done():
             self._tts_task.cancel()
         if self.turn_state:
-            self.turn_state.tts_active = True
-            self.turn_state.tts_release_at = 0.0
+            self.turn_state.mark_tts_started()
             
         self._tts_task = asyncio.create_task(self._run_tts(text, preferred_language, gen_id, direction))
         
@@ -391,8 +418,7 @@ class RealEstateTTSProcessor(FrameProcessor):
             logger.error("[PIPELINE] TTS -> Error: %s", exc)
         finally:
             if self.turn_state:
-                self.turn_state.tts_active = False
-                self.turn_state.tts_release_at = time.monotonic() + 0.25
+                self.turn_state.mark_tts_finished()
 
 
 def _ms_to_bytes(duration_ms: int, sample_rate: int) -> int:
@@ -464,6 +490,27 @@ def _is_duplicate_text(current: str, previous: str) -> bool:
     if current_norm in previous_norm or previous_norm in current_norm:
         return True
     return SequenceMatcher(None, current_norm, previous_norm).ratio() >= 0.88
+
+
+def _is_actionable_transcript(text: str) -> bool:
+    normalized = _normalize_text(text)
+    if not normalized:
+        return False
+    if any(phrase in normalized for phrase in _KNOWN_HALLUCINATION_PHRASES):
+        return False
+
+    words = normalized.split()
+    if len(words) != 1:
+        return True
+
+    word = words[0]
+    if word in _GARBAGE_SINGLE_WORDS:
+        return False
+    if len(word) <= 2 and word not in {"hi", "no", "ok"}:
+        return False
+    if len(word) >= 2 and len(set(word)) == 1:
+        return False
+    return True
 
 
 def _ensure_frame_runtime_attrs(frame: Frame) -> None:
