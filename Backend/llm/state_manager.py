@@ -547,6 +547,50 @@ class StateManager:
         self._last_ack = ""
         self._session_ended = False
         self._fallback_counts = {}
+        self._whatsapp_sent = False
+
+    def _trigger_whatsapp_if_needed(self, intent: str, next_node: dict[str, Any]) -> None:
+        """Asynchronously triggers WhatsApp property details based on intent or node."""
+        node_id = next_node.get("id", "")
+        
+        # Trigger conditions
+        trigger_nodes = {"confirm_interest", "schedule_site_visit", "share_details", "send_property_details"}
+        trigger_intents = {"interested", "site_visit_requested"}
+        
+        is_trigger_node = node_id in trigger_nodes
+        is_trigger_name = next_node.get("name", "").replace(" ", "_").lower() in trigger_nodes
+        
+        if not (is_trigger_node or is_trigger_name or intent in trigger_intents):
+            return
+            
+        phone = self.conversation_data.get("phone")
+        if not phone:
+            _log("WHATSAPP", "Cannot send message: no phone number found in conversation data.")
+            return
+            
+        # Prevent duplicate sends in the same session
+        if getattr(self, "_whatsapp_sent", False):
+            return
+            
+        try:
+            import asyncio
+            import sys
+            from pathlib import Path
+            
+            # Ensure integrations can be imported
+            backend_dir = str(Path(__file__).resolve().parent.parent)
+            if backend_dir not in sys.path:
+                sys.path.append(backend_dir)
+                
+            from integrations.whatsapp import send_whatsapp_message, format_property_message, MOCK_PROPERTIES
+            
+            message = format_property_message(self.conversation_data, MOCK_PROPERTIES)
+            
+            _log("WHATSAPP", f"Triggering async background task to send details to {phone}")
+            asyncio.create_task(send_whatsapp_message(phone, message))
+            self._whatsapp_sent = True
+        except Exception as e:
+            _log("WHATSAPP", f"Error triggering WhatsApp integration: {e}")
 
     def get_current_node(self) -> Optional[dict[str, Any]]:
         return self.nodes.get(self.current_node_id)
@@ -697,6 +741,9 @@ class StateManager:
         self.current_node_id = next_node["id"]
         if next_node.get("type") != "fallback":
             self.visited_nodes.add(next_node["id"])
+
+        # Trigger WhatsApp integration if applicable
+        self._trigger_whatsapp_if_needed(intent, next_node)
 
         # ── Issue 6: fallback escalation ──
         if next_node.get("type") == "fallback":
