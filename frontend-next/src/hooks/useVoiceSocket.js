@@ -51,6 +51,20 @@ export function useVoiceSocket(agentId, activeClient) {
     performance.now() < micBlockedUntilRef.current
   ), []);
 
+  const toPcm16Buffer = useCallback((audioChunk) => {
+    if (audioChunk instanceof Int16Array) {
+      return audioChunk.buffer.slice(audioChunk.byteOffset, audioChunk.byteOffset + audioChunk.byteLength);
+    }
+
+    const f32 = audioChunk instanceof Float32Array ? audioChunk : new Float32Array(audioChunk);
+    const i16 = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      const s = Math.max(-1, Math.min(1, f32[i]));
+      i16[i] = s < 0 ? s * 32768 : s * 32767;
+    }
+    return i16.buffer;
+  }, []);
+
   const disconnect = useCallback(() => {
     shouldReconnectRef.current = false;
     if (wsRef.current) {
@@ -135,14 +149,7 @@ export function useVoiceSocket(agentId, activeClient) {
           workletNode.port.onmessage = (e) => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
               if (isMicInputBlocked()) return;
-              // Worklet emits Float32 samples; backend expects raw PCM16 bytes.
-              const f32 = e.data;
-              const i16 = new Int16Array(f32.length);
-              for (let i = 0; i < f32.length; i++) {
-                const s = Math.max(-1, Math.min(1, f32[i]));
-                i16[i] = s < 0 ? s * 32768 : s * 32767;
-              }
-              wsRef.current.send(i16.buffer);
+              wsRef.current.send(toPcm16Buffer(e.data));
             }
           };
         } else {
@@ -252,7 +259,7 @@ export function useVoiceSocket(agentId, activeClient) {
       setStatusText('Mic access denied or server unreachable.');
       disconnect();
     }
-  }, [agentId, activeClient, clearPlaybackReleaseTimer, disconnect, holdMicInput, isMicInputBlocked, scheduleMicResume]);
+  }, [agentId, activeClient, clearPlaybackReleaseTimer, disconnect, holdMicInput, isMicInputBlocked, scheduleMicResume, toPcm16Buffer]);
 
   const clearTranscripts = () => setTranscripts([]);
 
