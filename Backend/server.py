@@ -64,7 +64,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from flows.runtime import AgentTextFrame, RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
+from flows.runtime import AgentTextFrame, RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor, VoiceTurnState
 from llm.state_manager import StateManager
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -487,6 +487,7 @@ class VoiceLiveSource(FrameProcessor):
             
         # Use the dynamically detected sample rate from the client
         frame = AudioRawFrame(audio=data, sample_rate=self._sample_rate, num_channels=1)
+        _ensure_frame_attrs(frame)
         
         try:
             self._queue.put_nowait(frame)
@@ -499,6 +500,19 @@ class VoiceLiveSource(FrameProcessor):
                 self._queue.put_nowait(frame)
             except Exception:
                 pass
+
+
+def _ensure_frame_attrs(frame: Frame) -> None:
+    try:
+        if not hasattr(frame, "id") or getattr(frame, "id", None) is None:
+            frame.id = f"ws_{uuid.uuid4().hex[:12]}"
+    except Exception:
+        pass
+    try:
+        if not hasattr(frame, "broadcast_sibling_id"):
+            frame.broadcast_sibling_id = None
+    except Exception:
+        pass
 
 
 class VoiceLiveSink(FrameProcessor):
@@ -567,19 +581,17 @@ async def websocket_voice_live(websocket: WebSocket):
     logger.info("Live Voice: Connected — agent=%s schema=%s", agent_id, schema_path)
 
     source = VoiceLiveSource()
-    stt    = RealEstateSTTProcessor()
+    turn_state = VoiceTurnState()
+    stt    = RealEstateSTTProcessor(turn_state=turn_state)
     llm    = RealEstateLLMProcessor()
     llm.state_manager = StateManager(schema_path)
-    tts    = RealEstateTTSProcessor()
+    tts    = RealEstateTTSProcessor(turn_state=turn_state)
     sink   = VoiceLiveSink(websocket)
 
     pipeline    = Pipeline([source, stt, llm, tts, sink])
     runner      = PipelineRunner()
     task        = PipelineTask(pipeline)
     runner_task = asyncio.create_task(runner.run(task))
-
-    # ENFORCE StartFrame Handshake immediately
-    await source.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
 
     async def reader():
         try:
@@ -720,11 +732,6 @@ async def websocket_voice_demo(websocket: WebSocket):
                 "status": "Talking",
                 "snippet": text
             }))
-            await websocket.send_text(json.dumps({
-                "type": "transcript",
-                "speaker": speaker,
-                "text": text
-            }))
         except Exception:
             pass
 
@@ -734,11 +741,12 @@ async def websocket_voice_demo(websocket: WebSocket):
 
     try:
         source = VoiceLiveSource()
-        stt    = RealEstateSTTProcessor()
+        turn_state = VoiceTurnState()
+        stt    = RealEstateSTTProcessor(turn_state=turn_state)
         llm    = RealEstateLLMProcessor()
         llm.state_manager = StateManager(schema_path)
         llm_ref = llm  # capture ref BEFORE runner_task starts
-        tts    = RealEstateTTSProcessor()
+        tts    = RealEstateTTSProcessor(turn_state=turn_state)
         sink   = VoiceLiveSink(websocket, on_transcript=on_transcript)
         logger.info("Voice Demo: Pipeline components created")
 
@@ -777,14 +785,21 @@ async def websocket_voice_demo(websocket: WebSocket):
         pass
     logger.info("Voice Demo: Connected event sent — ready to receive audio")
 
-    # ENFORCE StartFrame Handshake immediately
-    await source.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
-
     async def reader():
         try:
             while True:
                 msg = await websocket.receive()
                 if msg["type"] == "websocket.receive":
+                    text = msg.get("text")
+                    if text:
+                        try:
+                            payload = json.loads(text)
+                            if payload.get("type") == "mic_ready":
+                                source.set_sample_rate(payload.get("sampleRate", 16000))
+                        except Exception:
+                            pass
+                        continue
+
                     data = msg.get("bytes") or b""
                     if data:
                         if data == b"ping":

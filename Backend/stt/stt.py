@@ -57,6 +57,11 @@ _HALLUCINATIONS = {
 }
 
 
+def _safe_log_text(text: str) -> str:
+    # Force ASCII-safe output for logging handlers bound to cp1252 consoles.
+    return (text or "").encode("ascii", errors="replace").decode("ascii", errors="replace")
+
+
 def _bytes_to_pcm16(audio_bytes: bytes) -> np.ndarray:
     """Convert raw audio bytes to a 16-bit PCM NumPy array.
     Supports WAV container, Float32, and raw PCM16 formats.
@@ -141,7 +146,7 @@ def transcribe_audio(audio_chunk: bytes) -> str:
                     break
             
             if is_hallucination:
-                logger.info("STT (Groq Cloud) ignored hallucination: '%s'", text)
+                logger.info("STT (Groq Cloud) ignored hallucination: '%s'", _safe_log_text(text))
                 return ""
 
             # Reject very short transcripts that are predominantly non-ASCII
@@ -153,7 +158,7 @@ def transcribe_audio(audio_chunk: bytes) -> str:
                     return ""
 
             if text:
-                safe_text = text.encode(sys.stdout.encoding or 'utf-8', errors='replace').decode(sys.stdout.encoding or 'utf-8') if sys.stdout else text.encode('ascii', 'replace').decode('ascii')
+                safe_text = _safe_log_text(text)
                 try:
                     logger.info("STT (Groq Cloud) produced '%s' in %.3fs", safe_text, latency)
                 except UnicodeEncodeError:

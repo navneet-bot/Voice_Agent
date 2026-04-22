@@ -12,13 +12,16 @@ export function useVoiceSocket(agentId, activeClient) {
   const nextStartTimeRef = useRef(0);
   const pingIntervalRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
+  const shouldReconnectRef = useRef(false);
   
   // Statistical Jitter Tracking
   const lastPacketAtRef = useRef(0);
   const emaJitterRef = useRef(50); // Default 50ms jitter estimate
   const activeGenIdRef = useRef(0);
+  const expectsGenHeaderRef = useRef(false);
 
   const disconnect = useCallback(() => {
+    shouldReconnectRef.current = false;
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.onerror = null;
@@ -39,6 +42,8 @@ export function useVoiceSocket(agentId, activeClient) {
     
     setIsConnected(false);
     setStatusText('Session ended');
+    activeGenIdRef.current = 0;
+    expectsGenHeaderRef.current = false;
   }, []);
 
   const connect = useCallback(async (isDemo = false, leadName = 'Demo User', isReconnect = false) => {
@@ -50,10 +55,12 @@ export function useVoiceSocket(agentId, activeClient) {
       const ctx = new (window.AudioContext || window.webkitAudioContext)(); // Use hardware rate for stability
       audioCtxRef.current = ctx;
       if (ctx.state === 'suspended') await ctx.resume();
+      let workletLoaded = false;
 
       // Implement AudioWorklet Load (REQUIRED for zero-stutter)
       try {
         await ctx.audioWorklet.addModule('/audio-worklet-processor.js');
+        workletLoaded = true;
       } catch (e) {
         console.warn("AudioWorklet failed, falling back to ScriptProcessor (Degraded)", e);
       }
@@ -68,6 +75,7 @@ export function useVoiceSocket(agentId, activeClient) {
       const socket = new WebSocket(wsUrl);
       socket.binaryType = 'arraybuffer';
       wsRef.current = socket;
+      shouldReconnectRef.current = true;
 
       socket.onopen = async () => {
         setIsConnected(true);
@@ -87,19 +95,29 @@ export function useVoiceSocket(agentId, activeClient) {
         
         const source = ctx.createMediaStreamSource(mic);
         
-        if (ctx.audioWorklet && ctx.audioWorklet.addModule) {
+        if (workletLoaded) {
           const workletNode = new AudioWorkletNode(ctx, 'mic-capture-processor');
           source.connect(workletNode);
           workletNode.port.onmessage = (e) => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
-              wsRef.current.send(e.data.buffer);
+              // Worklet emits Float32 samples; backend expects raw PCM16 bytes.
+              const f32 = e.data;
+              const i16 = new Int16Array(f32.length);
+              for (let i = 0; i < f32.length; i++) {
+                const s = Math.max(-1, Math.min(1, f32[i]));
+                i16[i] = s < 0 ? s * 32768 : s * 32767;
+              }
+              wsRef.current.send(i16.buffer);
             }
           };
         } else {
           // Fallback if worklet failed
           const processor = ctx.createScriptProcessor(2048, 1, 1);
+          const silentGain = ctx.createGain();
+          silentGain.gain.value = 0;
           source.connect(processor);
-          processor.connect(ctx.destination);
+          processor.connect(silentGain);
+          silentGain.connect(ctx.destination);
           processor.onaudioprocess = (e) => {
             const inp = e.inputBuffer.getChannelData(0);
             const i16 = new Int16Array(inp.length);
@@ -123,6 +141,7 @@ export function useVoiceSocket(agentId, activeClient) {
               setTranscripts(prev => [...prev, msg]);
             } else if (msg.type === 'gen_id') {
               activeGenIdRef.current = msg.value;
+              expectsGenHeaderRef.current = true;
             } else if (msg.type?.startsWith('call_')) {
               setEvents(prev => [...prev, msg]);
             }
@@ -130,17 +149,19 @@ export function useVoiceSocket(agentId, activeClient) {
           return;
         }
 
-        // Binary PCM from server (with 4-byte GenID header)
-        if (e.data.byteLength < 4) return;
-        const view = new DataView(e.data);
-        const incomingGenId = view.getInt32(0, true);
-        
-        // 5. ENFORCE GENERATION ID (Senior requirement)
-        if (incomingGenId < activeGenIdRef.current) {
-          return; // Drop stale audio
+        // Binary PCM from server (supports both with/without 4-byte GenID header).
+        if (e.data.byteLength < 2) return;
+        let payloadOffset = 0;
+        if (expectsGenHeaderRef.current && e.data.byteLength > 4) {
+          const view = new DataView(e.data);
+          const incomingGenId = view.getInt32(0, true);
+          if (incomingGenId < activeGenIdRef.current) return;
+          payloadOffset = 4;
         }
 
-        const pcmData = new Int16Array(e.data, 4); // Start after 4-byte header
+        const payloadBytes = e.data.byteLength - payloadOffset;
+        if (payloadBytes < 2) return;
+        const pcmData = new Int16Array(e.data, payloadOffset, Math.floor(payloadBytes / 2));
         if (pcmData.length === 0) return; // Guard against empty audio chunks
 
         const floatData = new Float32Array(pcmData.length);
@@ -175,6 +196,10 @@ export function useVoiceSocket(agentId, activeClient) {
 
       socket.onclose = () => {
         setIsConnected(false);
+        if (!shouldReconnectRef.current) {
+          setStatusText('Session ended');
+          return;
+        }
         setStatusText('Reconnecting...');
         reconnectTimeoutRef.current = setTimeout(() => connect(isDemo, leadName, true), 2000);
       };

@@ -1877,6 +1877,25 @@
   let audioCtx   = null;
   let micStream  = null;
   let _voiceSessionId = 0;  // incremented on each new session; captured in onclose closure to prevent stale callbacks
+  let livePingInterval = null;
+  let micSourceNode = null;
+  let micWorkletNode = null;
+  let micProcessorNode = null;
+  let micSilentGainNode = null;
+  let _activeAudioGenId = 0;
+  let _expectsGenHeader = false;
+  let _receivedTranscriptEvent = false;
+
+  function _disconnectMicNodes() {
+    try { if (micSourceNode) micSourceNode.disconnect(); } catch (_) {}
+    try { if (micWorkletNode) micWorkletNode.disconnect(); } catch (_) {}
+    try { if (micProcessorNode) micProcessorNode.disconnect(); } catch (_) {}
+    try { if (micSilentGainNode) micSilentGainNode.disconnect(); } catch (_) {}
+    micSourceNode = null;
+    micWorkletNode = null;
+    micProcessorNode = null;
+    micSilentGainNode = null;
+  }
 
   function showLiveTalkModal() {
     document.getElementById('modal-wrap').innerHTML = `
@@ -1909,6 +1928,8 @@
     // Bump session ID so any stale liveSocket.onclose won't call stopLiveVoice()
     _voiceSessionId++;
     if (liveSocket) { liveSocket.onclose = null; liveSocket.onerror = null; liveSocket.onmessage = null; liveSocket.close(); liveSocket = null; }
+    if (livePingInterval) { clearInterval(livePingInterval); livePingInterval = null; }
+    _disconnectMicNodes();
     if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
     // Note: do NOT call audioCtx.close() here — it's async and can race with the new session
     const p = clientProfile[activeClient];
@@ -2003,6 +2024,8 @@
   async function startLiveVoice(agentId, wsEndpoint) {
     agentId    = agentId    || 'default';
     wsEndpoint = wsEndpoint || `api/voice-live?agentId=${encodeURIComponent(agentId)}`;
+    const _mySessionId = ++_voiceSessionId;
+    _receivedTranscriptEvent = false;
 
     // Update UI elements — works from both Talk Live page and old modal
     const btn    = document.getElementById('tl-btn')        || document.getElementById('dm-btn')        || document.getElementById('btn-toggle-live');
@@ -2024,6 +2047,7 @@
       liveSocket.binaryType = 'arraybuffer';
 
       liveSocket.onopen = async () => {
+        if (_voiceSessionId !== _mySessionId) return;
         if (title)  title.textContent  = clientProfile[activeClient]?.agent || 'Agent';
         if (status) status.textContent = '🔴 Listening — speak now';
         if (btn)    { btn.textContent = 'End Conversation'; btn.disabled = false; btn.style.background = 'linear-gradient(135deg,#ef4444,#dc2626)'; }
@@ -2031,17 +2055,32 @@
         if (pulse)  { pulse.style.boxShadow = '0 0 0 14px rgba(99,102,241,0.2),0 0 0 28px rgba(99,102,241,0.08)'; }
         if (txArea && txArea.children.length <= 1) txArea.innerHTML = '';
 
+        if (livePingInterval) { clearInterval(livePingInterval); livePingInterval = null; }
+        livePingInterval = setInterval(() => {
+          if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+            const encoder = new TextEncoder();
+            liveSocket.send(encoder.encode('ping'));
+          }
+        }, 5000);
+
         micStream = await navigator.mediaDevices.getUserMedia({
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
-        const source = audioCtx.createMediaStreamSource(micStream);
+        _disconnectMicNodes();
+        micSourceNode = audioCtx.createMediaStreamSource(micStream);
+        if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
+          liveSocket.send(JSON.stringify({ type: 'mic_ready', sampleRate: Math.round(audioCtx.sampleRate || 16000) }));
+        }
         // Issue 1: AudioWorklet replaces deprecated ScriptProcessor
         try {
           await audioCtx.audioWorklet.addModule('/audio-worklet-processor.js');
-          const workletNode = new AudioWorkletNode(audioCtx, 'mic-capture-processor');
-          source.connect(workletNode);
-          workletNode.connect(audioCtx.destination);
-          workletNode.port.onmessage = (ev) => {
+          micWorkletNode = new AudioWorkletNode(audioCtx, 'mic-capture-processor');
+          micSilentGainNode = audioCtx.createGain();
+          micSilentGainNode.gain.value = 0;
+          micSourceNode.connect(micWorkletNode);
+          micWorkletNode.connect(micSilentGainNode);
+          micSilentGainNode.connect(audioCtx.destination);
+          micWorkletNode.port.onmessage = (ev) => {
             if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
               const f32 = ev.data;
               const i16 = new Int16Array(f32.length);
@@ -2052,10 +2091,13 @@
           };
         } catch (_) {
           // ScriptProcessor fallback for older browsers
-          const processor = audioCtx.createScriptProcessor(2048, 1, 1);
-          source.connect(processor);
-          processor.connect(audioCtx.destination);
-          processor.onaudioprocess = (e) => {
+          micProcessorNode = audioCtx.createScriptProcessor(2048, 1, 1);
+          micSilentGainNode = audioCtx.createGain();
+          micSilentGainNode.gain.value = 0;
+          micSourceNode.connect(micProcessorNode);
+          micProcessorNode.connect(micSilentGainNode);
+          micSilentGainNode.connect(audioCtx.destination);
+          micProcessorNode.onaudioprocess = (e) => {
             if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
               const inp = e.inputBuffer.getChannelData(0);
               const i16 = new Int16Array(inp.length);
@@ -2077,7 +2119,13 @@
         if (typeof e.data === 'string') {
           try {
             const msg = JSON.parse(e.data);
+            if (msg.type === 'gen_id') {
+              _expectsGenHeader = true;
+              _activeAudioGenId = Number(msg.value) || 0;
+              return;
+            }
             if (msg.type === 'transcript' && txArea) {
+              _receivedTranscriptEvent = true;
               const line  = document.createElement('div');
               const isAgt = msg.speaker === 'agent'; // Issue 9: speaker always set by server
               line.style.cssText    = 'padding:8px 10px;border-radius:8px;margin-bottom:6px;font-size:13px;line-height:1.5;animation:fadeIn 0.2s';
@@ -2088,14 +2136,34 @@
               txArea.appendChild(line);
               txArea.scrollTop = txArea.scrollHeight;
             }
+            // Fallback: if transcript events are missing, use call_talking snippets.
+            if (msg.type === 'call_talking' && txArea && !_receivedTranscriptEvent && msg.snippet) {
+              const line = document.createElement('div');
+              line.style.cssText = 'padding:8px 10px;border-radius:8px;margin-bottom:6px;font-size:13px;line-height:1.5;background:#ede9fe;color:#5b21b6;border-left:3px solid #7c3aed;animation:fadeIn 0.2s';
+              line.innerHTML = `<strong style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px">🤖 Agent</strong><br>${msg.snippet}`;
+              txArea.appendChild(line);
+              txArea.scrollTop = txArea.scrollHeight;
+            }
             // Pass call events to demo live feed panel
             if (msg.type && msg.type.startsWith('call_')) _handleDemoDashboardEvent(msg);
           } catch (_) {}
           return;
         }
 
-        // Binary events → audio playback
-        const pcmData  = new Int16Array(e.data);
+        // Binary events → audio playback.
+        // New backend sends 4-byte gen_id header; older backend sends raw PCM.
+        if (!(e.data instanceof ArrayBuffer) || e.data.byteLength < 2) return;
+        let payloadOffset = 0;
+        if (_expectsGenHeader && e.data.byteLength > 4) {
+          const headerView = new DataView(e.data);
+          const frameGenId = headerView.getUint32(0, true);
+          if (_activeAudioGenId && frameGenId !== _activeAudioGenId) return;
+          payloadOffset = 4;
+        }
+        const payloadBytes = e.data.byteLength - payloadOffset;
+        if (payloadBytes < 2) return;
+        const pcmData  = new Int16Array(e.data, payloadOffset, Math.floor(payloadBytes / 2));
+        if (!pcmData.length) return;
         const floatData = new Float32Array(pcmData.length);
         for (let i = 0; i < pcmData.length; i++) floatData[i] = pcmData[i] / 32768;
         const buf = audioCtx.createBuffer(1, floatData.length, 24000);
@@ -2110,21 +2178,9 @@
       };
 
       liveSocket.onerror  = () => showToast('Voice server error.');
-      
-      let pingInterval;
-      if (liveSocket) {
-        liveSocket.addEventListener('open', () => {
-           pingInterval = setInterval(() => {
-             if (liveSocket && liveSocket.readyState === WebSocket.OPEN) {
-                 const encoder = new TextEncoder();
-                 liveSocket.send(encoder.encode('ping'));
-             }
-           }, 5000);
-        });
-      }
 
       liveSocket.onclose  = () => {
-        if (pingInterval) clearInterval(pingInterval);
+        if (livePingInterval) { clearInterval(livePingInterval); livePingInterval = null; }
         if (_voiceSessionId === _mySessionId) stopLiveVoice(); // only if still current session
       };
 
@@ -2144,6 +2200,11 @@
       liveSocket.close();
       liveSocket = null;
     }
+    if (livePingInterval) { clearInterval(livePingInterval); livePingInterval = null; }
+    _disconnectMicNodes();
+    _activeAudioGenId = 0;
+    _expectsGenHeader = false;
+    _receivedTranscriptEvent = false;
     if (micStream)  { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
     if (audioCtx)   { audioCtx.close().catch(()=>{}); audioCtx = null; }
 
@@ -2193,6 +2254,8 @@
       liveSocket.close();
       liveSocket = null;
     }
+    if (livePingInterval) { clearInterval(livePingInterval); livePingInterval = null; }
+    _disconnectMicNodes();
     if (micStream) { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
     // Note: do NOT call audioCtx.close() here — it's async and races with the new session
 

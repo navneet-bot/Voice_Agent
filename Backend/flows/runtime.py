@@ -7,6 +7,7 @@ import logging
 import os
 import time
 import concurrent.futures
+import uuid
 
 import numpy as np
 import soundfile as sf
@@ -76,6 +77,17 @@ class AgentTextFrame(TextFrame):
     language: str = "en"
 
 
+class VoiceTurnState:
+    """Shared speaking state to prevent STT from transcribing agent playback/echo."""
+
+    def __init__(self):
+        self.tts_active = False
+        self.tts_release_at = 0.0
+
+    def is_stt_blocked(self) -> bool:
+        return self.tts_active or time.monotonic() < self.tts_release_at
+
+
 class RealEstateLLMProcessor(FrameProcessor):
     """Turn user transcripts into LLM responses and manage node states with GenID sync."""
 
@@ -115,6 +127,7 @@ class RealEstateLLMProcessor(FrameProcessor):
             if reply:
                 self.history.append({"role": "assistant", "content": reply})
                 frame_out = AgentTextFrame(reply, language=self.current_language)
+                _ensure_frame_runtime_attrs(frame_out)
                 frame_out.gen_id = self._current_gen_id
                 await self.push_frame(frame_out, direction)
             return
@@ -126,6 +139,7 @@ class RealEstateLLMProcessor(FrameProcessor):
         user_text = frame.text.strip()
         if not user_text:
             return
+        logger.info("[PIPELINE] LLM <- User transcript: %s", user_text)
 
         # 1. INCREMENT GEN_ID on new valid user turn
         self._current_gen_id += 1
@@ -145,6 +159,7 @@ class RealEstateLLMProcessor(FrameProcessor):
         self.current_language, _ = self.language_tracker.observe(user_text)
         
         # Sync User Text Frame with current GenID
+        _ensure_frame_runtime_attrs(frame)
         frame.gen_id = self._current_gen_id
         await self.push_frame(frame, direction)
 
@@ -168,6 +183,7 @@ class RealEstateLLMProcessor(FrameProcessor):
             if len(self.history) > 8: self.history = self.history[-8:]
             
             frame_out = AgentTextFrame(reply, language=self.current_language)
+            _ensure_frame_runtime_attrs(frame_out)
             frame_out.gen_id = self._current_gen_id # TAG THE REPLY
             await self.push_frame(frame_out, direction)
 
@@ -175,7 +191,7 @@ class RealEstateLLMProcessor(FrameProcessor):
 class RealEstateSTTProcessor(FrameProcessor):
     """Low-latency STT with Adaptive VAD (Noise Floor Calibration)."""
 
-    def __init__(self):
+    def __init__(self, turn_state: VoiceTurnState | None = None):
         super().__init__()
         self.audio_buffer = bytearray()
         self.min_chunk_bytes = _ms_to_bytes(stt_cfg.MIN_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
@@ -183,6 +199,10 @@ class RealEstateSTTProcessor(FrameProcessor):
         self.trailing_window_bytes = _ms_to_bytes(stt_cfg.TRAILING_SILENCE_MS, stt_cfg.TARGET_SAMPLE_RATE)
         self.last_emitted_text = ""
         self.last_emit_at = 0.0
+        self.is_speaking = False
+        self._voice_hits = 0
+        self._cooldown_until = 0.0
+        self.turn_state = turn_state
         # 6. ADAPTIVE VAD (Continuous Calibration)
         self.noise_floor = 0.010 # Start low and adapt
         self._rms_history = []
@@ -196,6 +216,15 @@ class RealEstateSTTProcessor(FrameProcessor):
         pcm16 = _ensure_pcm16(frame.audio, frame.sample_rate, stt_cfg.TARGET_SAMPLE_RATE)
         if not pcm16: return
 
+        # Ignore inbound mic audio while TTS is actively speaking (or in short post-TTS cooldown).
+        if self.turn_state and self.turn_state.is_stt_blocked():
+            self.audio_buffer.clear()
+            self.is_speaking = False
+            self._voice_hits = 0
+            return
+        if time.monotonic() < self._cooldown_until:
+            return
+
         # Calculate current RMS
         samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)
         chunk_rms = float(np.sqrt(np.mean(samples**2)) / 32768.0)
@@ -206,12 +235,21 @@ class RealEstateSTTProcessor(FrameProcessor):
             self._rms_history.pop(0)
             self.noise_floor = float(np.percentile(self._rms_history, 10))
         
-        # threshold = noise_floor + safety_margin
-        # Use a more sensitive safety margin (0.01) if floor is low
-        dynamic_threshold = self.noise_floor + 0.012
+        # Raise activation threshold to suppress speaker bleed + room noise.
+        dynamic_threshold = max(self.noise_floor + 0.020, 0.030)
 
-        if chunk_rms > dynamic_threshold and not self.is_speaking:
+        # Crucial: do not send silence/background chunks to cloud STT.
+        if not self.is_speaking:
+            if chunk_rms <= dynamic_threshold:
+                self._voice_hits = 0
+                return
+            self._voice_hits += 1
+            # Require two consecutive voiced chunks before entering speaking state.
+            if self._voice_hits < 2:
+                return
             self.is_speaking = True
+            self._voice_hits = 0
+            self.audio_buffer.clear()
             logger.info("[PIPELINE] STT -> Voice Detected (RMS=%.4f, Floor=%.4f). Emitting CancelFrame.", chunk_rms, self.noise_floor)
             await self.push_frame(CancelFrame(), direction)
 
@@ -244,40 +282,60 @@ class RealEstateSTTProcessor(FrameProcessor):
             
         normalized_text = _normalize_text(text)
         if not normalized_text or len(normalized_text) < stt_cfg.MIN_TRANSCRIPT_CHARS:
+            self.is_speaking = False
+            self._cooldown_until = time.monotonic() + 0.35
             return
 
         now = time.monotonic()
         if _is_duplicate_text(text, self.last_emitted_text) and (now - self.last_emit_at) < stt_cfg.DUPLICATE_TEXT_WINDOW_S:
+            self.is_speaking = False
+            self._cooldown_until = now + 0.35
             return
 
         self.last_emitted_text = text
         self.last_emit_at = now
         self.is_speaking = False
-        await self.push_frame(TextFrame(text), direction)
+        self._cooldown_until = now + 0.10
+        logger.info("[PIPELINE] STT -> Emitting transcript: %s", text)
+        text_frame = TextFrame(text)
+        _ensure_frame_runtime_attrs(text_frame)
+        await self.push_frame(text_frame, direction)
 
 
 class RealEstateTTSProcessor(FrameProcessor):
     """Turn assistant text into speech, tagged with generation_id for client-side filtering."""
 
-    def __init__(self):
+    def __init__(self, turn_state: VoiceTurnState | None = None):
         super().__init__()
         self.last_reply = ""
         self.last_reply_at = 0.0
         self._tts_task = None
         self._active_gen_id = 0
+        self.turn_state = turn_state
 
     async def process_frame(self, frame: Frame, direction: FrameDirection = None):  # type: ignore
         await super().process_frame(frame, direction)
         
         if isinstance(frame, CancelFrame):
             logger.info("[PIPELINE] TTS -> Caught CancelFrame. Stopping current task.")
+            had_active_tts = bool(self._tts_task and not self._tts_task.done())
             if self._tts_task and not self._tts_task.done():
                 self._tts_task.cancel()
+            if self.turn_state:
+                self.turn_state.tts_active = False
+                self.turn_state.tts_release_at = time.monotonic() + 0.25 if had_active_tts else 0.0
             await self.push_frame(frame, direction)
             return
 
         if not isinstance(frame, TextFrame):
             await self.push_frame(frame, direction)
+            return
+
+        # Always forward transcript frames so the frontend transcript updates live.
+        await self.push_frame(frame, direction)
+
+        # Synthesize audio only for assistant replies.
+        if not isinstance(frame, AgentTextFrame):
             return
 
         # Read the gen_id injected by the LLM layer
@@ -291,11 +349,12 @@ class RealEstateTTSProcessor(FrameProcessor):
 
         preferred_language = getattr(frame, "language", None)
         logger.info("[PIPELINE] TTS -> gen_id=%d text=%s", gen_id, text)
-        
-        await self.push_frame(frame, direction)
-        
+
         if self._tts_task and not self._tts_task.done():
             self._tts_task.cancel()
+        if self.turn_state:
+            self.turn_state.tts_active = True
+            self.turn_state.tts_release_at = 0.0
             
         self._tts_task = asyncio.create_task(self._run_tts(text, preferred_language, gen_id, direction))
         
@@ -323,12 +382,17 @@ class RealEstateTTSProcessor(FrameProcessor):
                     if chunk_bytes:
                         # 1. TAG AUDIO WITH GEN ID
                         out_frame = AudioRawFrame(audio=chunk_bytes, sample_rate=24000, num_channels=1)
+                        _ensure_frame_runtime_attrs(out_frame)
                         out_frame.gen_id = gen_id
                         await self.push_frame(out_frame, direction)
         except asyncio.CancelledError:
             pass
         except Exception as exc:
             logger.error("[PIPELINE] TTS -> Error: %s", exc)
+        finally:
+            if self.turn_state:
+                self.turn_state.tts_active = False
+                self.turn_state.tts_release_at = time.monotonic() + 0.25
 
 
 def _ms_to_bytes(duration_ms: int, sample_rate: int) -> int:
@@ -336,11 +400,35 @@ def _ms_to_bytes(duration_ms: int, sample_rate: int) -> int:
 
 
 def _ensure_pcm16(audio: bytes, source_rate: int, target_rate: int) -> bytes:
-    samples = np.frombuffer(audio, dtype=np.int16)
+    # Guard: some browser clients may accidentally send Float32 PCM frames.
+    # Detect that pattern and convert to Int16 before any resampling.
+    if len(audio) >= 8 and len(audio) % 4 == 0:
+        try:
+            f32 = np.frombuffer(audio, dtype=np.float32)
+            if f32.size:
+                finite_mask = np.isfinite(f32)
+                finite_ratio = float(np.mean(finite_mask))
+                if finite_ratio > 0.98:
+                    finite_vals = f32[finite_mask]
+                    peak = float(np.max(np.abs(finite_vals))) if finite_vals.size else 0.0
+                    if 0.001 < peak <= 1.25:
+                        as_i16 = np.clip(f32, -1.0, 1.0)
+                        samples = (as_i16 * 32767.0).astype(np.int16)
+                    else:
+                        samples = np.frombuffer(audio, dtype=np.int16)
+                else:
+                    samples = np.frombuffer(audio, dtype=np.int16)
+            else:
+                samples = np.frombuffer(audio, dtype=np.int16)
+        except Exception:
+            samples = np.frombuffer(audio, dtype=np.int16)
+    else:
+        samples = np.frombuffer(audio, dtype=np.int16)
+
     if samples.size == 0:
         return b""
     if source_rate == target_rate:
-        return audio
+        return samples.tobytes()
 
     gcd = np.gcd(source_rate, target_rate)
     up = target_rate // gcd
@@ -376,3 +464,17 @@ def _is_duplicate_text(current: str, previous: str) -> bool:
     if current_norm in previous_norm or previous_norm in current_norm:
         return True
     return SequenceMatcher(None, current_norm, previous_norm).ratio() >= 0.88
+
+
+def _ensure_frame_runtime_attrs(frame: Frame) -> None:
+    """Pipecat observers in some builds expect id/broadcast_sibling_id on every frame."""
+    try:
+        if not hasattr(frame, "id") or getattr(frame, "id", None) is None:
+            frame.id = f"local_{uuid.uuid4().hex[:12]}"
+    except Exception:
+        pass
+    try:
+        if not hasattr(frame, "broadcast_sibling_id"):
+            frame.broadcast_sibling_id = None
+    except Exception:
+        pass
