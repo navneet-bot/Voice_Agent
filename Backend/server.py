@@ -60,7 +60,7 @@ from agent_runner import run_campaign
 from telephony.provider_registry import get_provider, list_providers
 
 # Pipecat imports for live voice WebSocket
-from pipecat.frames.frames import AudioRawFrame, EndFrame, Frame, StartFrame, TextFrame
+from pipecat.frames.frames import AudioRawFrame, CancelFrame, EndFrame, Frame, StartFrame, TextFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineTask
@@ -540,28 +540,42 @@ def _ensure_frame_attrs(frame: Frame) -> None:
 
 
 class VoiceLiveSink(FrameProcessor):
-    """Sends pipeline output with Binary GenID Headers for client-side dropping."""
+    """Sends pipeline output back to the browser WebSocket."""
 
     def __init__(self, websocket: WebSocket, on_transcript=None):
         super().__init__()
         self.ws = websocket
         self.on_transcript = on_transcript
-        self._current_gen_id = 0
 
     async def process_frame(self, frame, direction):
-        await super().process_frame(frame, direction)
-        
-        # Track GenID changes (injected by LLM/TTS layer)
-        if hasattr(frame, "gen_id"):
-            self._current_gen_id = frame.gen_id
+        frame_type = type(frame).__name__
+        if isinstance(frame, CancelFrame):
+            logger.info("[PIPELINE] SINK <- CancelFrame")
+            await self.push_frame(frame, direction)
+            return
+
+        try:
+            await super().process_frame(frame, direction)
+        except BaseException as exc:
+            logger.error("[PIPELINE] SINK -> super().process_frame failed for type=%s: %s", frame_type, exc)
+            if not isinstance(frame, (AudioRawFrame, TextFrame)):
+                return
 
         if isinstance(frame, AudioRawFrame):
+            print("SINK RECEIVED AUDIO")
+            logger.info(
+                "[PIPELINE] SINK <- AudioRawFrame bytes=%d",
+                len(frame.audio),
+            )
             try:
-                # Prepend 4-byte Little Endian GenID
-                header = self._current_gen_id.to_bytes(4, byteorder='little')
-                await self.ws.send_bytes(header + frame.audio)
-            except Exception:
-                pass
+                # Send raw PCM16 audio bytes directly to the browser.
+                await self.ws.send_bytes(frame.audio)
+                logger.info(
+                    "[PIPELINE] SINK -> Sent audio bytes=%d",
+                    len(frame.audio),
+                )
+            except Exception as exc:
+                logger.error("[PIPELINE] SINK -> Failed sending audio: %s", exc)
 
         elif isinstance(frame, TextFrame):
             is_agent = isinstance(frame, AgentTextFrame)
@@ -572,19 +586,15 @@ class VoiceLiveSink(FrameProcessor):
                     "speaker": speaker,
                     "text":    frame.text,
                 }
-                # If turn switched, notify client of new GenID
-                if is_agent:
-                    await self.ws.send_text(json.dumps({"type": "gen_id", "value": self._current_gen_id}))
-                
                 await self.ws.send_text(json.dumps(payload))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("[PIPELINE] SINK -> Failed sending transcript payload: %s", exc)
             
             if self.on_transcript:
                 try:
                     await self.on_transcript(speaker, frame.text)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.error("[PIPELINE] SINK -> on_transcript callback failed: %s", exc)
 
         await self.push_frame(frame, direction)
 

@@ -123,9 +123,9 @@ UNCERTAIN_PHRASES = (
 )
 
 # ── Behavioral refinement configuration ──────────────────────────────────────
-BRIDGE_ENABLED           = True
-VAGUE_DETECTION_ENABLED  = True
-HOSTILE_DETECTION_ENABLED = True
+BRIDGE_ENABLED           = False
+VAGUE_DETECTION_ENABLED  = False
+HOSTILE_DETECTION_ENABLED = False
 
 # Bridge words are ONLY used for unclear / fallback / noise situations.
 # Normal flow responses are returned verbatim from the JSON schema.
@@ -183,6 +183,19 @@ GOODBYE_PHRASES = (
     "have good night",
     "see you",
     "talk later",
+)
+PURPOSE_CLARIFICATION_PHRASES = (
+    "who is this",
+    "who are you",
+    "what is this about",
+    "what is it about",
+    "whats this about",
+    "what's this about",
+    "why are you calling",
+    "why did you call",
+    "purpose of call",
+    "kya hai",
+    "kis baare",
 )
 
 
@@ -404,20 +417,18 @@ def _resolve_response(node: dict[str, Any], data: dict[str, Any], user_text: str
             if isinstance(override, str) and override.strip():
                 template = override
     if template is None:
-        template = node.get("instruction", {}).get("text", "") or "I can help with real estate."
+        template = node.get("instruction", {}).get("text", "")
 
     def fill(match: re.Match[str]) -> str:
         key = match.group(1)
         val = data.get(key)
         if val:
             return str(val)
-        if key == "property_type":
-            return ""
-        return "that"
+        return ""
 
     resolved = re.sub(r"\{\{(\w+)\}\}", fill, template).strip()
     resolved = re.sub(r" +", " ", resolved)
-    return resolved or "I can help with real estate."
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -626,7 +637,7 @@ class StateManager:
             self.current_node_id = next_node["id"]
             if next_node.get("type") != "fallback":
                 self.visited_nodes.add(next_node["id"])
-            _log("STATE", f"→ {next_node['id']}")
+            _log("STATE", f"-> {next_node['id']}")
             return True
 
         logger.warning("Invalid edge_id %s requested from node %s", edge_id, self.current_node_id)
@@ -639,7 +650,20 @@ class StateManager:
     def is_actionable(self, text: str) -> bool:
         return _is_actionable(text)
 
+    def _reactivate_if_needed(self, user_text: str) -> None:
+        if not self._session_ended:
+            return
+        if not _is_actionable(user_text or ""):
+            return
+        _log("SESSION ENDED", "Reactivating session for new user input")
+        self._session_ended = False
+        current = self.get_current_node()
+        if current and current.get("type") == "end":
+            self.current_node_id = self.start_node_id
+            self._last_node_id = self.current_node_id
+
     def process_noise_turn(self, user_text: str) -> str:
+        self._reactivate_if_needed(user_text)
         if self._session_ended:
             _log("SESSION ENDED", "Ignoring further input")
             return ""
@@ -656,6 +680,7 @@ class StateManager:
         return response
 
     def next_step(self, user_text: str = "", allow_transition: bool = True) -> str:
+        self._reactivate_if_needed(user_text)
         if self._session_ended:
             _log("SESSION ENDED", "Ignoring further input")
             return ""
@@ -669,6 +694,7 @@ class StateManager:
         return response
 
     def process_turn(self, user_text: str, intent_data: Optional[dict[str, Any]]) -> str:
+        self._reactivate_if_needed(user_text)
         if self._session_ended:
             _log("SESSION ENDED", "Ignoring further input")
             return ""
@@ -676,11 +702,10 @@ class StateManager:
         self._last_user_text = user_text or ""
         _log("STT", f"\"{user_text}\"")
 
-        # ── Refinement 1: STT normalisation ──
         original_text = user_text or ""
         user_text = _normalise_stt(original_text)
         if user_text != original_text:
-            _log("STT CLEAN", f'"{original_text}" → "{user_text}"')
+            _log("STT CLEAN", f'"{original_text}" -> "{user_text}"')
 
         current_node = self.get_current_node()
         if not current_node:
@@ -689,11 +714,14 @@ class StateManager:
         if current_node.get("type") == "end":
             _log("END NODE REACHED", "Conversation terminated gracefully.")
             self._session_ended = True
-            raise KeyboardInterrupt
+            final_response = _resolve_response(current_node, self.conversation_data, self._last_user_text)
+            self._last_node_id = self.current_node_id
+            _log("RESPONSE", f'[JSON] "{final_response}"')
+            _log("FINAL RESPONSE", f'"{final_response}"')
+            return final_response.strip()
 
-        # ── Refinement 4: hostile input detection ──
         if HOSTILE_DETECTION_ENABLED and _is_hostile(user_text):
-            _log("TONE", "Hostile input detected — applying de-escalation response")
+            _log("TONE", "Hostile input detected - applying de-escalation response")
             response = DEESCALATION_RESPONSES[self._deescalation_index]
             self._deescalation_index = (self._deescalation_index + 1) % len(DEESCALATION_RESPONSES)
             self._last_node_id = self.current_node_id
@@ -702,7 +730,6 @@ class StateManager:
         if intent_data is None:
             return self.process_noise_turn(user_text)
 
-        # ── Phase 1: intent extraction & normalization ──
         intent = str(intent_data.get("intent") or "unclear").strip() or "unclear"
         entities = intent_data.get("entities") or {}
         if not isinstance(entities, dict):
@@ -719,195 +746,107 @@ class StateManager:
         _log("INTENT", self._format_intent_log(intent, entities))
         self._merge_entities(entities, intent=intent)
 
-        # ── Refinement 2: vague answer detection ──
         if VAGUE_DETECTION_ENABLED:
             collect_slots = self._collect_slots(current_node)
             for slot in collect_slots:
                 if self.conversation_data.get(slot):
-                    continue  # slot already filled — don't offer guidance for it
+                    continue
                 if _is_vague_answer(user_text, slot):
                     response = _get_guidance_response(slot)
-                    _log("VAGUE", f"Vague answer for '{slot}' — offering guidance")
+                    _log("VAGUE", f"Vague answer for '{slot}' - offering guidance")
                     self._last_node_id = self.current_node_id
                     return response
 
-        # ── Phase 2: node resolution ──
-        supplemental = ""  # optional LLM informational reply
-        stayed_on_current = False
-
         if intent in {"confirm"} or intent in ALL_DENY_INTENTS:
-            _log("STATE", "Confirmation handled via edge — not intent index")
+            _log("STATE", "Confirmation handled via edge")
             next_node, bypass_guard = self._handle_confirmation(current_node, intent)
         else:
-            next_node = self._resolve_by_intent(current_node, intent)
+            next_node = self._resolve_by_intent(current_node, intent, raw_intent=raw_intent)
             bypass_guard = False
 
         if not bypass_guard:
             next_node = self._apply_forward_guard(next_node or current_node)
 
-        # Detect whether the state actually moved
-        if next_node["id"] == current_node["id"]:
-            stayed_on_current = True
-
         self.current_node_id = next_node["id"]
         if next_node.get("type") != "fallback":
             self.visited_nodes.add(next_node["id"])
 
-        # Trigger WhatsApp integration if applicable
         self._trigger_whatsapp_if_needed(intent, next_node)
 
-        # ── Issue 6: fallback escalation ──
         if next_node.get("type") == "fallback":
             node_id = next_node["id"]
             self._fallback_counts[node_id] = self._fallback_counts.get(node_id, 0) + 1
             _log("FALLBACK COUNT", f"{node_id} = {self._fallback_counts[node_id]}")
 
-        # ── Phase 3: phrase-constrained LLM fallback (only when no node matched) ──
-        if stayed_on_current and _is_informational_query(user_text, raw_intent):
-            from .llm import generate_phrase_constrained_response
-            supplemental = generate_phrase_constrained_response(
-                user_text, self.conversation_data
-            )
-            _log("LLM FALLBACK", f'"{supplemental}"')
+        final_response = _resolve_response(next_node, self.conversation_data, self._last_user_text)
+        _log("RESPONSE", f'[JSON] "{final_response}"')
 
-        # ── Phase 4: resolve JSON response (always present) ──
-        json_response = _resolve_response(
-            next_node, self.conversation_data, self._last_user_text
-        )
-
-        # ── Issue 6: substitute escalation response if fallback exceeded ──
-        if (next_node.get("type") == "fallback"
-                and self._fallback_counts.get(next_node["id"], 0) > MAX_FALLBACK_ATTEMPTS):
-            escalation = FALLBACK_ESCALATION.get(next_node["id"])
-            if escalation:
-                json_response = escalation
-                _log("FALLBACK ESCALATE", f'{next_node["id"]} → "{escalation}"')
-
-        # ── Refinement 5: flow continuity — same node as last turn ──
-        # Suppress when:
-        #   - state actually moved (confirm edge followed correctly)
-        #   - intent was a deny type
-        #   - fallback escalation is active
-        #   - a supplemental LLM response was generated
-        state_moved = next_node["id"] != current_node["id"]
-        is_genuine_repeat = (
-            not state_moved                         # node did NOT change this turn
-            and self._last_node_id == self.current_node_id  # AND it didn't change last turn either
-            and intent not in {"confirm", *ALL_DENY_INTENTS}  # AND it wasn't a handled confirm/deny
-        )
-        is_fallback_escalated = (
-            next_node.get("type") == "fallback"
-            and self._fallback_counts.get(next_node["id"], 0) > MAX_FALLBACK_ATTEMPTS
-        )
-        if (is_genuine_repeat
-                and not supplemental
-                and not is_fallback_escalated):
-            json_response = f"Just to confirm \u2014 {json_response}"
-            _log("REPEAT NODE", 'Prepending "Just to confirm \u2014" \u2014 genuine repeat node (no transition)')
-
-        # ── Phase 5: combine supplemental + JSON ──
-        if supplemental:
-            final_response = f"{supplemental} {json_response}"
-            _log("RESPONSE", f'[FALLBACK + JSON] "{final_response}"')
-        else:
-            final_response = json_response
-
-            # ── Refinement 3: bridge phrase injection ──
-            # Bridges are ONLY added for unclear / fallback situations.
-            # Normal-flow responses are returned exactly as the JSON schema
-            # defines them — no filler words, no extra latency.
-            is_fallback_node = next_node.get("type") == "fallback"
-            is_unclear_intent = intent.startswith("unclear")
-            if BRIDGE_ENABLED and (is_fallback_node or is_unclear_intent):
-                bridge = _get_bridge(intent)
-                if bridge:
-                    final_response = f"{bridge} {final_response}"
-                    _log("BRIDGE", f'Added bridge: "{bridge}"')
-
-            _log("RESPONSE", f'[JSON] "{final_response}"')
-
-        # ── Structured logging: [JSON PHRASES USED] ──
         matched = _match_phrases_used(final_response, _PHRASE_BANK)
         if matched:
             _log("JSON PHRASES USED", "; ".join(f'"{p}"' for p in matched[:5]))
 
-        # ── Issue 4: truncate response for TTS latency ──
-        final_response = _truncate_response(final_response)
         _log("FINAL RESPONSE", f'"{final_response}"')
 
-        # ── Issue 5: check if we just arrived at an end node ──
         if next_node.get("type") == "end":
             _log("END NODE REACHED", "Conversation terminated gracefully.")
             self._session_ended = True
             self._last_node_id = self.current_node_id
             return final_response.strip()
 
-        # ── Auto-advance through skip edges to reach end nodes ──
         if next_node["id"] in AUTO_ADVANCE_NODES:
             terminal = self._auto_advance_skip_edges(next_node)
             if terminal and terminal["id"] != next_node["id"]:
                 self.current_node_id = terminal["id"]
                 self.visited_nodes.add(terminal["id"])
                 if terminal.get("type") == "end":
-                    _log("END NODE REACHED", f"Auto-advanced through skip edges → {terminal['id']}")
+                    _log("END NODE REACHED", f"Auto-advanced through skip edges -> {terminal['id']}")
                     self._session_ended = True
                     self._last_node_id = self.current_node_id
                     return final_response.strip()
 
-        # ── Track last node for Refinement 5 ──
         self._last_node_id = self.current_node_id
-
         return final_response.strip()
 
-    def _resolve_by_intent(self, current_node: dict[str, Any], intent: str) -> dict[str, Any]:
-        candidate = find_node_by_intent(intent)
-        
-        if candidate and candidate.get("type") == "fallback":
-            expected = candidate.get("expected_input_type")
-            if expected and self.conversation_data.get(expected):
-                _log("SKIP FALLBACK", f"{candidate['id']} ignored because '{expected}' is already collected")
-                candidate = None
-
-        if not candidate:
-            _log("STATE", f"No node for intent '{intent}' — staying on {current_node['id']}")
+    def _resolve_by_intent(self, current_node: dict[str, Any], intent: str, raw_intent: str = "") -> dict[str, Any]:
+        """Resolve next node strictly from current node edges."""
+        edges = current_node.get("edges", []) or []
+        if not edges:
+            _log("STATE", f"No outgoing edges from {current_node['id']} - staying on current node")
             return current_node
 
-        if current_node["id"] == candidate["id"]:
-            next_node = self._advance_from_node(current_node)
-            _log("STATE", f"→ {next_node['id']}  (intent: {intent})")
-            return next_node
+        intents_to_match = [intent]
+        if raw_intent and raw_intent not in intents_to_match:
+            intents_to_match.append(raw_intent)
 
-        path = self._find_path(current_node["id"], candidate["id"])
-        if path:
-            for node_id in path[1:-1]:
-                node = self.nodes.get(node_id)
-                if not node:
-                    continue
-                if self._should_skip_node(node):
-                    _log("SKIP", f"{node['id']} — {self._skip_reason(node)}")
-                    continue
-                _log("STATE", f"→ {node['id']}  (intent: {intent})")
-                return node
-            next_node = self._advance_from_node(candidate)
-            _log("STATE", f"→ {next_node['id']}  (intent: {intent})")
-            return next_node
+        for edge in edges:
+            destination_id = edge.get("destination_node_id")
+            if not destination_id:
+                continue
+            destination = self.nodes.get(destination_id)
+            if not destination:
+                continue
 
-        if self._should_skip_node(current_node):
-            next_node = self._advance_from_node(current_node)
-            _log("STATE", f"→ {next_node['id']}  (intent: {intent})")
-            return next_node
+            destination_triggers = destination.get("intent_triggers") or []
+            if any(i in destination_triggers for i in intents_to_match):
+                if destination.get("type") == "fallback":
+                    expected = destination.get("expected_input_type")
+                    if expected and self.conversation_data.get(expected):
+                        _log("SKIP FALLBACK", f"{destination['id']} ignored because '{expected}' is already collected")
+                        continue
+                _log(
+                    "STATE",
+                    f"{current_node['id']} -> {destination['id']} (intent={intent}, edge='{edge.get('condition', '')}')",
+                )
+                return destination
 
-        _log("STATE", f"Intent '{intent}' is not reachable from {current_node['id']} — staying on current node")
+        _log(
+            "STATE",
+            f"No matching edge from {current_node['id']} for intent '{intent}' - staying on current node",
+        )
         return current_node
 
     def _handle_confirmation(self, current_node: dict[str, Any], intent: str) -> tuple[dict[str, Any], bool]:
         """Returns (next_node, bypass_forward_guard)."""
-        # ── Context-aware deny routing (overrides edge matching) ──
-        if intent in ALL_DENY_INTENTS:
-            override = self._route_deny_subtype(current_node, intent)
-            if override:
-                return override, True  # bypass forward guard
-
         edge = self._select_confirmation_edge(current_node, intent)
 
         if not edge:
@@ -916,9 +855,8 @@ class StateManager:
         destination = self.nodes.get(destination_id)
         if not destination:
             return current_node, False
-        next_node = self._advance_from_node(destination)
-        _log("STATE", f"→ {next_node['id']}")
-        return next_node, False
+        _log("STATE", f"{current_node['id']} -> {destination['id']} (confirm edge)")
+        return destination, False
 
     def _route_deny_subtype(
         self, current_node: dict[str, Any], intent: str
@@ -953,21 +891,21 @@ class StateManager:
         if intent == "deny_identity":
             target = self.nodes.get(WRONG_PERSON_END_NODE_ID)
             if target:
-                _log("DENY ROUTE", f"deny_identity → {target['id']} (wrong person)")
+                _log("DENY ROUTE", f"deny_identity -> {target['id']} (wrong person)")
                 return target
 
         # deny_time → callback scheduling
         if intent == "deny_time":
             target = self.nodes.get(CALLBACK_SCHEDULING_NODE_ID)
             if target:
-                _log("DENY ROUTE", f"deny_time → {target['id']} (busy/not available)")
+                _log("DENY ROUTE", f"deny_time -> {target['id']} (busy/not available)")
                 return target
 
         # deny_interest → polite end
         if intent == "deny_interest":
             target = self.nodes.get(POLITE_END_NODE_ID)
             if target:
-                _log("DENY ROUTE", f"deny_interest → {target['id']} (not interested)")
+                _log("DENY ROUTE", f"deny_interest -> {target['id']} (not interested)")
                 return target
 
         # deny_visit_time → offer alternate date
@@ -976,7 +914,7 @@ class StateManager:
             if not target:
                 target = self.nodes.get(CALLBACK_SCHEDULING_NODE_ID)
             if target:
-                _log("DENY ROUTE", f"deny_visit_time → {target['id']} (offering alternate)")
+                _log("DENY ROUTE", f"deny_visit_time -> {target['id']} (offering alternate)")
                 return target
 
         return None  # no contextual override
@@ -1032,7 +970,7 @@ class StateManager:
         current = node
         seen: set[str] = set()
         while self._should_skip_node(current):
-            _log("SKIP", f"{current['id']} — {self._skip_reason(current)}")
+            _log("SKIP", f"{current['id']} - {self._skip_reason(current)}")
             next_id = self._first_destination(current)
             if not next_id or next_id in seen:
                 return current
@@ -1066,14 +1004,7 @@ class StateManager:
         return []
 
     def _apply_forward_guard(self, next_node: dict[str, Any]) -> dict[str, Any]:
-        current = self.get_current_node()
-        if next_node.get("type") == "fallback":
-            return next_node
-        if current and current.get("type") == "fallback":
-            return next_node
-        if next_node["id"] in self.visited_nodes and next_node["id"] != self.current_node_id:
-            _log("STATE", "Backward transition blocked")
-            return current or next_node
+        # Strict flow mode: always honor the edge-selected destination node.
         return next_node
 
     def _merge_entities(self, entities: dict[str, Any], intent: str = "") -> None:
@@ -1092,7 +1023,7 @@ class StateManager:
                 )
                 if not is_explicit_provide and not is_stale_timeline:
                     continue
-                _log("ENTITY OVERWRITE", f"{key}: \"{existing}\" → \"{value}\"")
+                _log("ENTITY OVERWRITE", f"{key}: \"{existing}\" -> \"{value}\"")
             cleaned = self._clean_entity_value(key, value)
             if cleaned is None:
                 _log("ENTITY SKIPPED", f'{key}="{value}"')
@@ -1143,6 +1074,20 @@ class StateManager:
         clean_text = re.sub(r'[^\w\s]', ' ', text).strip()
         clean_text = re.sub(r'\s+', ' ', clean_text)
         clean_words = clean_text.split()
+        asks_call_purpose = any(phrase in clean_text for phrase in PURPOSE_CLARIFICATION_PHRASES)
+        asks_call_purpose = asks_call_purpose or (
+            ("what" in clean_words or "why" in clean_words or "who" in clean_words)
+            and ("about" in clean_words or "call" in clean_words or "calling" in clean_words)
+        )
+
+        # Flow-safe purpose clarification handling:
+        # - At greeting: route to availability-check edge (confirm_identity destination)
+        # - At availability check: route to re-engage edge (busy/reject-now destination)
+        node_id = current_node.get("id")
+        if asks_call_purpose and node_id == "node-1767592854176":
+            return "confirm_identity"
+        if asks_call_purpose and node_id == "node-1735264873079":
+            return "deny_time"
 
 
         if entities.get("location") and not intent.startswith("provide"):
@@ -1401,7 +1346,7 @@ class StateManager:
                     dest = self.nodes.get(dest_id) if dest_id else None
                     if not dest or dest["id"] in seen:
                         return current
-                    _log("SKIP EDGE", f"{current['id']} → {dest['id']}")
+                    _log("SKIP EDGE", f"{current['id']} -> {dest['id']}")
                     seen.add(dest["id"])
                     self.visited_nodes.add(dest["id"])
                     current = dest
