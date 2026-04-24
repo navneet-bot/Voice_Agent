@@ -1,39 +1,15 @@
-faster-whisper
-numpy
-scipy
-sounddevice
-groq
-python-dotenv
 fastapi
 uvicorn
 gunicorn
-websockets
-pipecat-ai[local]
-spacy
-
-# HTTP client for Exotel and other provider REST APIs
 httpx
+python-dotenv
+websockets
 
-# Twilio SDK — optional, only needed for real Twilio calls
-# Install with: pip install twilio
-# twilio
+# AI APIs
+groq
 
-# System dependency (install separately):
-# Ubuntu/Debian: sudo apt install ffmpeg
-# macOS:         brew install ffmpeg
-
-# TTS — Edge-TTS (Cloud)
+# TTS (cloud)
 edge-tts
+
+# lightweight audio handling (optional)
 miniaudio
-
-# TTS — Kokoro-82M (Local)
-torch
-soundfile
-# numpy — already listed above
-# scipy — already listed above
-
-# System dependency for Kokoro / misaki G2P:
-# Ubuntu/Debian: sudo apt install espeak-ng
-# macOS:         brew install espeak-ng
-
-sounddevice
