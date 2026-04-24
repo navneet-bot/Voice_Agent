@@ -286,14 +286,14 @@ class RealEstateSTTProcessor(FrameProcessor):
         self.min_chunk_bytes = _ms_to_bytes(stt_cfg.MIN_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
         # Keep larger chunks so sentences are finalized after a real pause, not mid-thought.
         self.max_chunk_bytes = _ms_to_bytes(max(stt_cfg.MAX_CHUNK_MS, 5000), stt_cfg.TARGET_SAMPLE_RATE)
-        self.trailing_window_bytes = _ms_to_bytes(max(stt_cfg.TRAILING_SILENCE_MS, 800), stt_cfg.TARGET_SAMPLE_RATE)
+        self.trailing_window_bytes = _ms_to_bytes(max(stt_cfg.TRAILING_SILENCE_MS, 1200), stt_cfg.TARGET_SAMPLE_RATE)
         self.last_emitted_text = ""
         self.last_emit_at = 0.0
         self.is_speaking = False
         self._voice_hits = 0
         self._voiced_ms = 0.0
         self._last_voice_at = 0.0
-        self._speech_end_silence_ms = float(max(stt_cfg.TRAILING_SILENCE_MS, 800))
+        self._speech_end_silence_ms = float(max(stt_cfg.TRAILING_SILENCE_MS, 1200))
         self._barge_in_min_ms = 550.0
         self._barge_in_sent = False
         self._cooldown_until = 0.0

@@ -197,13 +197,22 @@ OPENING_NODE_RESPONSES = {
 }
 
 BUSY_TIME_HINTS = (
-    "busy",
-    "meeting",
-    "call later",
-    "not now",
-    "later",
-    "driving",
-    "occupied",
+    # Core
+    "busy", "meeting", "call later", "not now", "later", "driving", "occupied",
+    # Extended busy signals
+    "in a meeting", "on a call", "at work", "at office", "working",
+    "cant talk", "can't talk", "cant speak", "can't speak",
+    "not a good time", "bad time", "wrong time", "bad moment",
+    "call back", "call me back", "call me later", "ring me later",
+    "travelling", "traveling", "in traffic", "on the way",
+    "eating", "having lunch", "having dinner", "having breakfast",
+    "sleeping", "resting", "tired", "not free", "not available",
+    "hospital", "doctor", "emergency", "out of station",
+    "thoda time de", "baad mein", "abhi nahi", "baad mein call karo",
+    "give me some time", "give me a minute", "two minutes", "five minutes",
+    "little busy", "bit busy", "slightly busy", "kinda busy",
+    "weekend", "evening", "tonight", "tomorrow",
+    "in a rush", "rushing", "hurrying", "very busy", "super busy",
 )
 
 NOT_INTERESTED_HINTS = (
@@ -216,14 +225,21 @@ NOT_INTERESTED_HINTS = (
 )
 
 INTERESTED_HINTS = (
-    "yes",
-    "yeah",
-    "sure",
-    "go ahead",
-    "tell me",
-    "interested",
-    "ok",
-    "okay",
+    # Core
+    "yes", "yeah", "sure", "go ahead", "tell me", "interested", "ok", "okay",
+    # Extended available/interested signals
+    "yep", "yup", "of course", "absolutely", "definitely", "certainly",
+    "please", "please tell me", "i'm free", "i am free", "free now",
+    "available", "available now", "speak now", "go on", "continue",
+    "what is it", "what did you want", "what's it about", "what is it about",
+    "haan", "haan bolo", "bolo", "batao", "theek hai", "bilkul",
+    "i have time", "have two minutes", "have a minute", "have some time",
+    "few minutes", "two minutes", "couple minutes", "quick call is fine",
+    "good time", "perfect time", "right time",
+    "hi yes", "yes hi", "speaking", "yes speaking", "yes this is",
+    "it's me", "its me", "that's me", "thats me", "yes it is", "yes i am",
+    "fine go ahead", "alright go ahead", "sure go ahead",
+    "not busy", "not in a meeting", "i'm available", "i'm listening",
 )
 
 CALLBACK_PART_OF_DAY_WINDOWS = {
@@ -890,6 +906,30 @@ class StateManager:
 
     def _resolve_by_intent(self, current_node: dict[str, Any], intent: str, raw_intent: str = "") -> dict[str, Any]:
         """Resolve next node strictly from current node edges."""
+        node_id = current_node.get("id", "")
+
+        # ── Intent shortcut from Ask Intent or fallback_intent ──────────────────
+        # When user gives a valid intent (buy/invest/rent/sell) on either the Ask
+        # Intent node OR its fallback, skip intermediate steps and jump directly
+        # to the correct destination.
+        if node_id in {"node-1735264921453", "fallback_intent"}:
+            if intent == "provide_intent":
+                target = self.nodes.get("node-1735267546732")  # Ask Location & Budget
+                if target:
+                    _log("STATE", f"{node_id} -> {target['id']} (provide_intent shortcut)")
+                    return target
+            if intent == "seller_interest":
+                target = self.nodes.get("node-1736510533232")  # Seller Flow Start
+                if target:
+                    _log("STATE", f"{node_id} -> {target['id']} (seller shortcut)")
+                    return target
+            if intent in {"deny_interest", "not_looking_now"}:
+                target = self.nodes.get("node-objection-not-looking")
+                if target:
+                    _log("STATE", f"{node_id} -> {target['id']} (objection shortcut)")
+                    return target
+
+
         edges = current_node.get("edges", []) or []
         if not edges:
             _log("STATE", f"No outgoing edges from {current_node['id']} - staying on current node")
@@ -1202,6 +1242,91 @@ class StateManager:
         if asks_call_purpose and node_id == "node-1735264873079":
             return "deny_time"
 
+        # ── buyer_requirements_ready: auto-transition when both location+budget collected ──
+        if node_id == "node-1735267546732":
+            loc_ready = self.conversation_data.get("location") or entities.get("location")
+            bud_ready = self.conversation_data.get("budget") or entities.get("budget")
+            
+            def is_valid_val(v):
+                if not v or not isinstance(v, str): return False
+                s = v.lower().strip()
+                if s in ("", "null", "none", "preference", "no preference", "anywhere", "flexible", "open"): return False
+                return True
+                
+            if is_valid_val(loc_ready) and is_valid_val(bud_ready):
+                _log("INTENT NORMALIZED", "Both location+budget collected -> buyer_requirements_ready")
+                return "buyer_requirements_ready"
+
+        # ── Ask Intent node: map purchase/investment answers to provide_intent ──────
+        # The LLM sometimes returns confirm_identity/unclear for "for myself",
+        # "investment", "personal use" etc. We intercept here to keep the flow moving.
+        if node_id in {"node-1735264921453", "fallback_intent"}:
+            _BUY_SIGNALS = (
+                # Personal use
+                "for myself", "myself", "personal use", "own use", "personal",
+                "self use", "for self", "for me", "my own", "own home",
+                "end use", "end-use", "residential", "to live", "to stay",
+                "to reside", "living", "my family", "my wife", "my husband",
+                "for us", "for our family", "for staying", "to settle",
+                "primary residence", "primary home", "first home",
+                "to move in", "we want to buy", "i want to buy",
+                "buying for myself", "buying for us", "purchase",
+                "apne liye", "khud ke liye", "ghar chahiye", "rehne ke liye",
+                "own house", "want a house", "need a house", "need a home",
+                "flat for myself", "flat for us", "apartment for myself",
+                "house for myself", "villa for myself", "2bhk for myself",
+                "3bhk for myself", "buying it", "buy it", "want to buy",
+                "looking to buy", "planning to buy", "planning to purchase",
+                "self occupied", "self-occupied", "owner occupied",
+                "not investment", "not for rent", "not for renting",
+            )
+            _INVEST_SIGNALS = (
+                # Investment / rental
+                "investment", "invest", "as an investment", "for investment",
+                "rental income", "rental", "renting out", "to rent",
+                "for rent", "as rental", "rental property", "yield",
+                "returns", "return on investment", "roi", "passive income",
+                "for tenants", "for renting", "tenant", "lease out",
+                "nikivesh", "nivesh", "kiraya", "rent ke liye",
+                "buy to let", "buy to rent", "rental yield", "commercial use",
+                "not for myself", "not to stay", "to let out", "to give out",
+                "portfolio", "real estate portfolio", "property investment",
+                "second property", "additional property",
+            )
+            _SELL_SIGNALS = (
+                # Seller signals
+                "sell", "selling", "want to sell", "seller", "i am selling",
+                "i'm selling", "my property", "selling my flat",
+                "selling my house", "selling my property", "want to sell my",
+                "looking to sell", "planning to sell", "list my property",
+                "bechna hai", "bechna chahta", "apna ghar bechna",
+                "property for sale", "sale my flat", "sell my apartment",
+            )
+            _RENT_SIGNALS = (
+                "for rent", "to rent", "looking to rent", "renting",
+                "need on rent", "want to rent", "rental home",
+                "rent a flat", "rent an apartment", "on lease",
+                "lease", "rented accommodation", "rented flat",
+                "kiraaye pe", "rent pe lena", "kiraya par lena",
+            )
+            if any(sig in clean_text for sig in _BUY_SIGNALS):
+                if not entities.get("intent_value"):
+                    entities["intent_value"] = "buy"
+                _log("INTENT NORMALIZED", "Ask Intent: buy/personal detected -> provide_intent")
+                return "provide_intent"
+            if any(sig in clean_text for sig in _INVEST_SIGNALS):
+                if not entities.get("intent_value"):
+                    entities["intent_value"] = "invest"
+                _log("INTENT NORMALIZED", "Ask Intent: investment detected -> provide_intent")
+                return "provide_intent"
+            if any(sig in clean_text for sig in _RENT_SIGNALS):
+                if not entities.get("intent_value"):
+                    entities["intent_value"] = "rent"
+                _log("INTENT NORMALIZED", "Ask Intent: rent detected -> provide_intent")
+                return "provide_intent"
+            if any(sig in clean_text for sig in _SELL_SIGNALS):
+                _log("INTENT NORMALIZED", "Ask Intent: seller detected -> seller_interest")
+                return "seller_interest"
 
         if entities.get("location") and not intent.startswith("provide"):
             return "provide_location"
@@ -1248,13 +1373,16 @@ class StateManager:
                 return "confirm"
 
         uncertain = {
-            "i don't know",
-            "dont know",
-            "don't know",
-            "not sure",
-            "maybe",
-            "not certain",
-            "unsure",
+            "i don't know", "dont know", "don't know", "not sure", "maybe",
+            "not certain", "unsure", "i'm not sure", "im not sure",
+            "hard to say", "hard to tell", "difficult to say", "can't say",
+            "cant say", "no idea", "have no idea", "not really sure",
+            "haven't decided", "havent decided", "still thinking",
+            "still deciding", "not decided yet", "yet to decide",
+            "pata nahi", "abhi pata nahi", "soch raha hoon", "socha nahi",
+            "not fixed", "not finalized", "not finalised", "open",
+            "anywhere", "anything", "whatever", "don't mind",
+            "dont mind", "no specific preference", "not particular",
         }
         if any(phrase in text for phrase in uncertain):
             if current_node["id"] == "node-1735264921453":
@@ -1276,12 +1404,30 @@ class StateManager:
 
         # ── Catch-all: signals ───────────────────────────────────────────
         _AFFIRMATIVE_SIGNALS = {
+            # English
             "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "alright",
             "correct", "right", "go ahead", "fine", "sounds good", "of course",
+            "absolutely", "definitely", "certainly", "exactly", "precisely",
+            "that is correct", "thats right", "thats correct", "yes indeed",
+            "indeed", "affirmative", "agreed", "i agree", "i do", "of course yes",
+            "please", "please do", "yes please", "sure please",
+            "speaking", "yes speaking", "yes this is", "yes i am", "yes it is",
+            "it is", "it's me", "its me", "thats me", "thats right",
+            # Hindi / Indian English
             "haan", "han", "ha", "ji", "theek", "bilkul", "zaroor",
+            "theek hai", "haan ji", "bilkul theek", "haan bilkul",
+            "sahi hai", "sahi baat", "zaroor karo", "haan karo",
         }
         _NEGATIVE_SIGNALS = {
-            "no", "nope", "nah", "never", "not", "nahi", "na", "nako", "sorry no", "no sorry",
+            # English
+            "no", "nope", "nah", "never", "not", "sorry no", "no sorry",
+            "no thanks", "no thank you", "i dont", "i don't", "i do not",
+            "not really", "not at all", "absolutely not", "definitely not",
+            "certainly not", "no way", "nah thanks",
+            # Hindi / Indian English
+            "nahi", "na", "nako", "nai", "nahi ji", "bilkul nahi",
+            "nahi chahiye", "nahi kar sakta", "nahi hoga", "nahi karunga",
+            "mat karo", "band karo",
         }
         
         has_affirmative = any(
@@ -1292,6 +1438,20 @@ class StateManager:
             signal in clean_words or clean_text == signal
             for signal in _NEGATIVE_SIGNALS
         )
+        
+        # Immediate hang-up routing for real world scenarios
+        HANGUP_PHRASES = (
+            "cut the call", "hang up", "hanging up", "phone rakh", "call cut",
+            "disconnect", "do not call", "don't call me", "stop calling", "stop talking",
+            "i am driving", "driving right now", "call later", "call me back later",
+            "busy right now", "i am busy", "dont have time", "don't have time"
+        )
+        if any(phrase in clean_text for phrase in HANGUP_PHRASES):
+            target = self.nodes.get("node-universal-disconnect")
+            if target:
+                from flows.runtime import _log
+                _log("INTENT NORMALIZED", "Universal disconnect triggered by user")
+                return target
         has_goodbye = any(
             phrase == clean_text or phrase in clean_text
             for phrase in GOODBYE_PHRASES
@@ -1299,6 +1459,7 @@ class StateManager:
 
         # ── No-preference detection for location/budget (must come before generic deny) ──
         _NO_LOCATION_PREFERENCE_PHRASES = (
+            # Core no-preference
             "no preference", "no preference in city", "no preference for city",
             "don't have any preference", "dont have any preference",
             "no preference in area", "no preference for area",
@@ -1307,18 +1468,48 @@ class StateManager:
             "open to any", "flexible on location", "no specific area",
             "not considering any area", "not particular about area",
             "no area preference",
+            # Extended no-preference
+            "anywhere", "anywhere is fine", "anywhere works", "any location works",
+            "no fixed location", "no specific location", "no particular area",
+            "not specific about", "not particular about", "not fixed on",
+            "open to all", "open to any area", "open to all areas",
+            "you can suggest", "you suggest", "suggest me", "whatever you suggest",
+            "as per your suggestion", "whatever is available", "whatever suits",
+            "not bothered about location", "not fussy about area",
+            "no location preference", "no city preference",
+            "koi bhi area", "koi bhi jagah", "kahi bhi",
+            "not tied to any area", "not fixed on area", "not restricted to area",
+            "flexible", "flexible location", "flexible about location",
+            "any locality", "any suburb", "any neighbourhood", "any neighborhood",
+            "not particular", "no particular place", "no particular city",
+            "doesn't matter to me", "does not matter to me",
+            "not considering", "no consideration for area",
+            "i'll consider anywhere", "will consider anywhere",
         )
         _NO_BUDGET_PREFERENCE_PHRASES = (
+            # Core no-budget
             "no budget preference", "no preference for budget", "flexible budget",
             "any budget", "no fixed budget", "doesn't matter budget",
             "not sure about budget",
+            # Extended
+            "budget flexible", "budget is flexible", "i am flexible on budget",
+            "flexible on budget", "no strict budget", "no hard budget",
+            "open on budget", "open to budget", "depends on property",
+            "depends on the property", "depends what's available",
+            "can discuss", "can talk about it", "let's discuss",
+            "will adjust", "can adjust budget", "adjustable budget",
+            "no limit", "no particular budget", "no specific budget",
+            "budget nahi pata", "budget fix nahi hai", "abhi pata nahi",
+            "not sure yet", "haven't decided on budget", "still deciding",
+            "budget toh discuss kar lete", "baat karte hai",
+            "price toh dekh lete", "price dekh lete", "cost dekh lenge",
         )
         if node_id in {"node-1735267546732", "fallback_location", "fallback_budget"}:
             has_no_loc_pref = any(phrase in clean_text for phrase in _NO_LOCATION_PREFERENCE_PHRASES)
             has_no_budget_pref = any(phrase in clean_text for phrase in _NO_BUDGET_PREFERENCE_PHRASES)
             if has_no_loc_pref and not self.conversation_data.get("location"):
-                _log("INTENT NORMALIZED", "No location preference detected -> ask_location_suggestion")
-                return "ask_location_suggestion"
+                _log("INTENT NORMALIZED", "No location preference detected -> unclear_location")
+                return "unclear_location"
             if has_no_budget_pref and not self.conversation_data.get("budget"):
                 _log("INTENT NORMALIZED", "No budget preference detected -> unclear_budget")
                 return "unclear_budget"

@@ -18,8 +18,7 @@ from tts.config import EDGE_SPEECH_RATE
 
 logger = logging.getLogger(__name__)
 
-# The user requested a charismatic Indian female voice that can speak English/Hindi
-DEFAULT_VOICE = "en-IN-NeerjaNeural"
+DEFAULT_VOICE = "en-IN-NeerjaExpressiveNeural"
 
 def generate_speech_stream(text: str, preferred_language: str | None = None):
     """

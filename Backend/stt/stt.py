@@ -124,7 +124,8 @@ def transcribe_audio(audio_chunk: bytes) -> str:
             kwargs = {
                 "file": (buffer.name, buffer.read()),
                 "model": "whisper-large-v3-turbo",
-                "response_format": "json"
+                "response_format": "json",
+                "prompt": "Real estate properties in Wakad, Hinjewadi, Baner, Kharadi. Buy, rent, invest, seller, buyer, budget, lakhs, crores, rupees, preference."
             }
             
             # Lock language ONLY if strictly set in config, otherwise auto-detect for code-mixing
