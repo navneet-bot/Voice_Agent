@@ -27,7 +27,6 @@ edge-tts
 miniaudio
 
 # TTS — Kokoro-82M (Local)
-kokoro>=0.9.4
 torch
 soundfile
 # numpy — already listed above
