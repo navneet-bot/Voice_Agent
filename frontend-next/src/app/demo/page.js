@@ -120,16 +120,7 @@ export default function DemoCampaign() {
               </button>
               <div className="small text-muted mt-3">Allow mic access when prompted</div>
             </div>
-            <div className="card-footer bg-light border-0 p-4" style={{ borderRadius: '0 0 12px 12px' }}>
-              <div className="small text-muted text-uppercase fw-bold mb-2" style={{ letterSpacing: '0.5px' }}>How it works</div>
-              <div className="small text-secondary" style={{ lineHeight: '2' }}>
-                🔴 You speak → STT (Groq Whisper)<br/>
-                🤖 LLM generates agent reply<br/>
-                🔊 TTS plays back in your speakers<br/>
-                📊 Live Feed updates each turn<br/>
-                💾 Saved to Call Results at end
-              </div>
-            </div>
+
           </div>
         </div>
 

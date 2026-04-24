@@ -6,6 +6,7 @@ import logging
 import uuid
 import os
 import re
+import random
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -184,6 +185,54 @@ GOODBYE_PHRASES = (
     "see you",
     "talk later",
 )
+
+OPENING_NODE_RESPONSES = {
+    # Step 1: identity confirmation
+    "node-1767592854176": "Hey, this is Neha — am I speaking with {{name}}?",
+    # Step 2: availability check
+    "node-1735264873079": "Is this a good time to speak?",
+    # Step 3 + Step 4: context + intent discovery
+    "node-1735264921453": "I actually came across your interest in property. Are you exploring for yourself or as an investment?",
+    "node-1736567518748": "Thank you, we'll call you around {{timeline}}. Have a great day!",
+}
+
+BUSY_TIME_HINTS = (
+    "busy",
+    "meeting",
+    "call later",
+    "not now",
+    "later",
+    "driving",
+    "occupied",
+)
+
+NOT_INTERESTED_HINTS = (
+    "not interested",
+    "not looking",
+    "no requirement",
+    "dont need",
+    "don't need",
+    "not now",
+)
+
+INTERESTED_HINTS = (
+    "yes",
+    "yeah",
+    "sure",
+    "go ahead",
+    "tell me",
+    "interested",
+    "ok",
+    "okay",
+)
+
+CALLBACK_PART_OF_DAY_WINDOWS = {
+    "morning": (10 * 60 + 15, 11 * 60 + 45),      # 10:15 AM - 11:45 AM
+    "afternoon": (14 * 60 + 15, 16 * 60 + 45),    # 2:15 PM - 4:45 PM
+    "evening": (18 * 60 + 15, 20 * 60 + 45),      # 6:15 PM - 8:45 PM
+    "night": (20 * 60 + 15, 21 * 60 + 45),        # 8:15 PM - 9:45 PM
+}
+
 PURPOSE_CLARIFICATION_PHRASES = (
     "who is this",
     "who are you",
@@ -405,7 +454,8 @@ def _resolve_response(node: dict[str, Any], data: dict[str, Any], user_text: str
     Never returns an empty string.
     """
     del user_text
-    template = node.get("response")
+    node_id = str(node.get("id") or "")
+    template = OPENING_NODE_RESPONSES.get(node_id, node.get("response"))
     missing_slot_responses = node.get("missing_slot_responses")
     if isinstance(missing_slot_responses, dict):
         collects = node.get("collects")
@@ -421,7 +471,10 @@ def _resolve_response(node: dict[str, Any], data: dict[str, Any], user_text: str
 
     def fill(match: re.Match[str]) -> str:
         key = match.group(1)
-        val = data.get(key)
+        if key == "name":
+            val = data.get("name") or data.get("lead_name") or data.get("lead") or "Prashant"
+        else:
+            val = data.get(key)
         if val:
             return str(val)
         return ""
@@ -674,6 +727,25 @@ class StateManager:
         if not current_node:
             return ""
 
+        # Recover callback scheduling even when intent extraction is unavailable.
+        node_id = current_node.get("id")
+        if node_id in {"node-1736492391269", "fallback_callback_time"}:
+            clean_text = re.sub(r"[^\w:\s]", " ", (user_text or "").lower())
+            callback_time_keywords = (
+                "morning", "afternoon", "evening", "night",
+                "am", "pm", "after", "post", "around",
+                "later", "tomorrow", "today",
+            )
+            has_callback_time_hint = any(re.search(rf"\b{kw}\b", clean_text) for kw in callback_time_keywords)
+            has_callback_number = any(char.isdigit() for char in clean_text)
+            if has_callback_time_hint or has_callback_number:
+                timeline = self._synthesize_callback_timeline((user_text or "").strip())
+                _log("NOISE RECOVERY", f'Callback time detected in low-confidence turn -> "{timeline}"')
+                return self.process_turn(
+                    user_text,
+                    {"intent": "provide_timeline", "entities": {"timeline": timeline}},
+                )
+
         _log("NOISE FILTERED", f"\"{user_text}\"")
         response = _resolve_response(current_node, self.conversation_data, user_text)
         self._log_response(current_node, response)
@@ -745,6 +817,15 @@ class StateManager:
 
         _log("INTENT", self._format_intent_log(intent, entities))
         self._merge_entities(entities, intent=intent)
+
+        # If the user provided a callback time while on callback fallback,
+        # re-enter callback scheduling and resolve immediately in the same turn.
+        if current_node.get("id") == "fallback_callback_time" and intent == "provide_timeline":
+            resume_node_id = self._first_destination(current_node)
+            resume_node = self.nodes.get(resume_node_id) if resume_node_id else None
+            if resume_node:
+                _log("STATE", f"{current_node['id']} -> {resume_node['id']} (resume callback with provided time)")
+                current_node = resume_node
 
         if VAGUE_DETECTION_ENABLED:
             collect_slots = self._collect_slots(current_node)
@@ -843,6 +924,35 @@ class StateManager:
             "STATE",
             f"No matching edge from {current_node['id']} for intent '{intent}' - staying on current node",
         )
+
+        # Callback scheduling should still progress once timeline exists.
+        if current_node.get("id") in {"node-1736492391269", "fallback_callback_time"} and self.conversation_data.get("timeline"):
+            for edge in edges:
+                destination_id = edge.get("destination_node_id")
+                destination = self.nodes.get(destination_id) if destination_id else None
+                if destination and "provide_timeline" in (destination.get("intent_triggers") or []):
+                    _log("STATE", f"{current_node['id']} -> {destination['id']} (timeline recovery)")
+                    return destination
+
+        # Never stall on unclear intents: prefer a connected fallback edge from current node.
+        if intent.startswith("unclear") or raw_intent.startswith("unclear") or intent == "ask_off_topic":
+            for edge in edges:
+                destination_id = edge.get("destination_node_id")
+                destination = self.nodes.get(destination_id) if destination_id else None
+                if destination and destination.get("type") == "fallback":
+                    _log("STATE", f"{current_node['id']} -> {destination['id']} (unclear fallback edge)")
+                    return destination
+
+            # Availability node has no fallback edge; move to re-engage path instead of stalling.
+            if current_node.get("id") == "node-1735264873079":
+                for edge in edges:
+                    condition = (edge.get("condition", "") or "").lower()
+                    if "busy" in condition or "reject" in condition:
+                        destination_id = edge.get("destination_node_id")
+                        destination = self.nodes.get(destination_id) if destination_id else None
+                        if destination:
+                            _log("STATE", f"{current_node['id']} -> {destination['id']} (unclear -> re-engage)")
+                            return destination
         return current_node
 
     def _handle_confirmation(self, current_node: dict[str, Any], intent: str) -> tuple[dict[str, Any], bool]:
@@ -928,6 +1038,7 @@ class StateManager:
             "correct person",
             "correct",
             "user is free",
+            "user is",
             "agrees",
             "agree",
             "hear more",
@@ -935,6 +1046,8 @@ class StateManager:
             "finished confirmation",
             "done",
             "speak",
+            "confirms identity",
+            "confirms",
         )
         negative_markers = (
             "wrong person",
@@ -1115,6 +1228,21 @@ class StateManager:
                         entities["timeline"] = user_text.strip()
                     return "provide_visit_datetime"
 
+        # Callback scheduling accepts broad natural time expressions and normalizes
+        # them into a specific callback time so we don't loop on fallback prompts.
+        if node_id in {"node-1736492391269", "fallback_callback_time"}:
+            callback_time_keywords = [
+                "morning", "afternoon", "evening", "night",
+                "am", "pm", "after", "post", "around",
+                "later", "tomorrow", "today",
+            ]
+            has_callback_time_hint = any(re.search(rf"\b{kw}\b", clean_text) for kw in callback_time_keywords)
+            has_callback_number = any(char.isdigit() for char in clean_text)
+            if entities.get("timeline") or has_callback_time_hint or has_callback_number:
+                timeline_raw = str(entities.get("timeline") or user_text).strip()
+                entities["timeline"] = self._synthesize_callback_timeline(timeline_raw)
+                return "provide_timeline"
+
         if clean_text in {"ok", "okay", "alright", "fine", "cool", "great", "sure", "thanks", "thank you", "done"}:
             if intent.startswith("unclear"):
                 return "confirm"
@@ -1169,12 +1297,49 @@ class StateManager:
             for phrase in GOODBYE_PHRASES
         )
 
+        # ── No-preference detection for location/budget (must come before generic deny) ──
+        _NO_LOCATION_PREFERENCE_PHRASES = (
+            "no preference", "no preference in city", "no preference for city",
+            "don't have any preference", "dont have any preference",
+            "no preference in area", "no preference for area",
+            "any area", "any location", "any city", "any place",
+            "doesn't matter", "does not matter", "doesn't matter where",
+            "open to any", "flexible on location", "no specific area",
+            "not considering any area", "not particular about area",
+            "no area preference",
+        )
+        _NO_BUDGET_PREFERENCE_PHRASES = (
+            "no budget preference", "no preference for budget", "flexible budget",
+            "any budget", "no fixed budget", "doesn't matter budget",
+            "not sure about budget",
+        )
+        if node_id in {"node-1735267546732", "fallback_location", "fallback_budget"}:
+            has_no_loc_pref = any(phrase in clean_text for phrase in _NO_LOCATION_PREFERENCE_PHRASES)
+            has_no_budget_pref = any(phrase in clean_text for phrase in _NO_BUDGET_PREFERENCE_PHRASES)
+            if has_no_loc_pref and not self.conversation_data.get("location"):
+                _log("INTENT NORMALIZED", "No location preference detected -> ask_location_suggestion")
+                return "ask_location_suggestion"
+            if has_no_budget_pref and not self.conversation_data.get("budget"):
+                _log("INTENT NORMALIZED", "No budget preference detected -> unclear_budget")
+                return "unclear_budget"
+
         if has_negative:
             return "deny"
         if has_goodbye:
             return "deny_interest"
         if has_affirmative:
             return "confirm"
+
+        # Prevent unclear stalls at opening/availability:
+        # busy -> callback path, interested -> continue, neutral -> clarify/re-engage.
+        if (intent.startswith("unclear") or intent == "ask_off_topic") and node_id == "node-1735264873079":
+            if any(hint in clean_text for hint in BUSY_TIME_HINTS):
+                return "deny_time"
+            if any(hint in clean_text for hint in NOT_INTERESTED_HINTS):
+                return "deny_time"
+            if any(hint in clean_text for hint in INTERESTED_HINTS):
+                return "confirm_identity"
+            return "deny_time"
 
         if intent.startswith("unclear") or intent == "ask_off_topic":
             if current_node["id"] in ("node-1735265209472", "node-1736567518748", "node-1736492485610"):
@@ -1198,7 +1363,7 @@ class StateManager:
         if intent in {"provide_timeline", "provide_visit_datetime"}:
             if current_node["id"] in {"node-1735265015507", "node-1736323961832"}:
                 return "provide_visit_datetime"
-            if current_node["id"] == "node-1736492391269":
+            if current_node["id"] in {"node-1736492391269", "fallback_callback_time"}:
                 return "provide_timeline"
 
         return intent
@@ -1307,6 +1472,66 @@ class StateManager:
             return re.sub(r"\bpast\b", "upcoming", value, flags=re.IGNORECASE)
             
         return value
+
+    def _synthesize_callback_timeline(self, value: str) -> str:
+        """
+        Convert loose callback time phrases into a concrete, friendly time.
+        Examples:
+          - "post 6 PM" -> "6:45 PM" (randomized after 6 PM)
+          - "evening"   -> random time in evening window
+        """
+        text = value.strip()
+        lowered = text.lower()
+        normalized_lowered = re.sub(r"\b([ap])\s*\.?\s*m\.?\b", r"\1m", lowered)
+
+        # Pattern: after/post <hour>[:minute] <am/pm>
+        m = re.search(r"\b(?:after|post)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", normalized_lowered)
+        if m:
+            hour = int(m.group(1))
+            minute = int(m.group(2) or 0)
+            meridiem = (m.group(3) or "").lower()
+            base_minutes = self._to_24h_minutes(hour, minute, meridiem, normalized_lowered)
+            # Pick a random slot after mentioned time.
+            delta = random.choice([15, 30, 45, 60, 75, 90])
+            return self._format_minutes_12h(base_minutes + delta)
+
+        # If user gave part-of-day only, pick a random concrete time in that window.
+        for part, (start_min, end_min) in CALLBACK_PART_OF_DAY_WINDOWS.items():
+            if re.search(rf"\b{part}\b", normalized_lowered):
+                return self._format_minutes_12h(random.randint(start_min, end_min))
+
+        # Extract explicit times from a longer sentence (e.g. "6 p.m. would work").
+        explicit_time = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", normalized_lowered)
+        if explicit_time:
+            hour = int(explicit_time.group(1))
+            minute = int(explicit_time.group(2) or 0)
+            meridiem = explicit_time.group(3)
+            return self._format_minutes_12h(self._to_24h_minutes(hour, minute, meridiem, normalized_lowered))
+
+        return text
+
+    def _to_24h_minutes(self, hour: int, minute: int, meridiem: str, context_text: str) -> int:
+        hour = max(0, min(hour, 23))
+        minute = max(0, min(minute, 59))
+        if meridiem == "pm" and hour < 12:
+            hour += 12
+        elif meridiem == "am" and hour == 12:
+            hour = 0
+        elif not meridiem:
+            # Infer PM for common callback evening contexts.
+            if ("evening" in context_text or "night" in context_text or "post" in context_text or "after" in context_text) and hour <= 11:
+                hour += 12
+        return (hour * 60) + minute
+
+    def _format_minutes_12h(self, total_minutes: int) -> str:
+        total_minutes %= (24 * 60)
+        hour_24 = total_minutes // 60
+        minute = total_minutes % 60
+        meridiem = "AM" if hour_24 < 12 else "PM"
+        hour_12 = hour_24 % 12
+        if hour_12 == 0:
+            hour_12 = 12
+        return f"{hour_12}:{minute:02d} {meridiem}"
 
     def _is_valid_timeline(self, value: str) -> bool:
         lowered = value.strip().lower()

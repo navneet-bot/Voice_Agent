@@ -453,6 +453,11 @@ class DatabaseManager:
                 import uuid as _uuid
                 rid = str(_uuid.uuid4())
                 lead_data_json = json.dumps(result.get("lead_data", {}))
+                callback_value = (
+                    result.get("callback")
+                    or result.get("timeline")
+                    or result.get("callback_time")
+                )
                 
                 # Check if lead_data column exists, if not add it dynamically for backwards compat
                 try:
@@ -470,7 +475,7 @@ class DatabaseManager:
                         result.get("calledAt"), result.get("duration"),
                         result.get("status", "Connected"), result.get("outcome"),
                         result.get("interested"), result.get("budget"),
-                        result.get("callback"), json.dumps(result.get("transcription", [])),
+                        callback_value, json.dumps(result.get("transcription", [])),
                         result.get("provider", "demo"), 1 if result.get("processed") else 0,
                         lead_data_json
                     )
@@ -495,6 +500,26 @@ class DatabaseManager:
                         d["transcription"] = json.loads(d.get("transcription") or "[]")
                     except Exception:
                         d["transcription"] = []
+                    lead_data = d.get("lead_data")
+                    if isinstance(lead_data, str):
+                        try:
+                            lead_data = json.loads(lead_data)
+                        except Exception:
+                            lead_data = {}
+                    elif not isinstance(lead_data, dict):
+                        lead_data = {}
+                    callback_value = (
+                        d.get("callback")
+                        or d.get("timeline")
+                        or d.get("callback_time")
+                        or lead_data.get("timeline")
+                        or "—"
+                    )
+                    # Normalize DB snake_case row keys to frontend camelCase keys.
+                    d["name"] = d.get("name") or d.get("lead_name") or "—"
+                    d["calledAt"] = d.get("calledAt") or d.get("called_at") or "—"
+                    d["callback"] = callback_value
+                    d["timeline"] = callback_value
                     result.append(d)
                 return result
             finally:

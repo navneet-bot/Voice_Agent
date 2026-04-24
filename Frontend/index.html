@@ -666,7 +666,6 @@
       <div class="sidebar-section">
         <div class="sidebar-label">My Agent</div>
         <div class="sidebar-item" id="sidebar-myagent"  onclick="navTo('myagent')">◎ Agent Details</div>
-        <div class="sidebar-item" id="sidebar-talklive" onclick="navTo('talklive')">🎙️ Talk Live</div>
         <div class="sidebar-item" id="sidebar-demo"     onclick="navTo('demo')">🎬 Demo Campaign</div>
       </div>
       <div class="sidebar-section">
@@ -1027,7 +1026,7 @@
       activeCampaignPolling = null;
     }
     // Stop live voice when leaving voice tabs
-    if (tab !== 'talklive' && tab !== 'demo' && liveSocket) stopLiveVoice();
+    if (tab !== 'demo' && liveSocket) stopLiveVoice();
 
     const fns = {
       overview:  renderClientOverview,
@@ -1035,7 +1034,6 @@
       upload:    renderUpload,
       results:   renderResults,
       myagent:   renderMyAgent,
-      talklive:  renderClientTalkLive,
       demo:      renderClientDemo,
       numbers:   renderClientNumbers
     };

@@ -611,6 +611,7 @@ async def websocket_voice_live(websocket: WebSocket):
     await websocket.accept()
 
     agent_id    = websocket.query_params.get("agentId", "default")
+    lead_name   = websocket.query_params.get("leadName", "Prashant")
     schema_path = _resolve_schema(agent_id)
     logger.info("Live Voice: Connected — agent=%s schema=%s", agent_id, schema_path)
 
@@ -619,6 +620,8 @@ async def websocket_voice_live(websocket: WebSocket):
     stt    = RealEstateSTTProcessor(turn_state=turn_state)
     llm    = RealEstateLLMProcessor()
     llm.state_manager = StateManager(schema_path)
+    llm.state_manager.conversation_data["name"] = lead_name
+    llm.state_manager.conversation_data["lead_name"] = lead_name
     tts    = RealEstateTTSProcessor(turn_state=turn_state)
     sink   = VoiceLiveSink(websocket)
 
@@ -779,6 +782,8 @@ async def websocket_voice_demo(websocket: WebSocket):
         stt    = RealEstateSTTProcessor(turn_state=turn_state)
         llm    = RealEstateLLMProcessor()
         llm.state_manager = StateManager(schema_path)
+        llm.state_manager.conversation_data["name"] = lead_name
+        llm.state_manager.conversation_data["lead_name"] = lead_name
         llm_ref = llm  # capture ref BEFORE runner_task starts
         tts    = RealEstateTTSProcessor(turn_state=turn_state)
         sink   = VoiceLiveSink(websocket, on_transcript=on_transcript)
@@ -874,6 +879,7 @@ async def websocket_voice_demo(websocket: WebSocket):
 
         interested = "Yes" if (conv_data.get("intent_value") or conv_data.get("location")) else "No"
 
+        callback_value = conv_data.get("timeline", "—")
         result = {
             "name":          lead_name,
             "phone":         "browser-mic",
@@ -883,7 +889,8 @@ async def websocket_voice_demo(websocket: WebSocket):
             "interested":    interested,
             "budget":        conv_data.get("budget", "—"),
             "location":      conv_data.get("location", "—"),
-            "timeline":      conv_data.get("timeline", "—"),
+            "timeline":      callback_value,
+            "callback":      callback_value,
             "property_type": conv_data.get("property_type", "—"),
             "transcription": transcripts,
             "provider":      "demo_mic",

@@ -21,7 +21,6 @@ export default function DashboardLayout({ children }) {
 
   const clientMenu = [
     { label: 'Dashboard', path: '/client-dashboard', icon: '🏠' },
-    { label: 'Talk Live (Testing)', path: '/talk-live', icon: '🎙️' },
     { label: 'Demo Campaign', path: '/demo', icon: '🎬' },
     { label: 'Call Results', path: '/results', icon: '📊' },
     { label: 'My Phone Numbers', path: '/numbers', icon: '☎' }
