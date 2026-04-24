@@ -41,19 +41,19 @@ def format_property_message(customer_data: dict, property_list: list) -> str:
 
 async def send_whatsapp_message(phone_number: str, message: str) -> None:
     """Asynchronously send a WhatsApp message using the configured provider API."""
-    enabled = os.environ.get("WHATSAPP_ENABLED", "true").lower() == "true"
+    enabled = os.getenv("WHATSAPP_ENABLED", "true").lower() == "true"
     if not enabled:
         logger.info("WhatsApp integration is disabled (WHATSAPP_ENABLED != true).")
         return
         
-    api_url = os.environ.get("WHATSAPP_API_URL")
-    token = os.environ.get("WHATSAPP_TOKEN")
+    api_url = os.getenv("WHATSAPP_API_URL")
+    token = os.getenv("WHATSAPP_TOKEN")
     
     if not api_url or not token:
         logger.warning("WhatsApp API credentials missing. Skipping message send.")
         return
         
-    timeout_seconds = int(os.environ.get("WHATSAPP_TIMEOUT_SECONDS", "5"))
+    timeout_seconds = int(os.getenv("WHATSAPP_TIMEOUT_SECONDS", "5"))
     
     headers = {
         "Authorization": f"Bearer {token}",

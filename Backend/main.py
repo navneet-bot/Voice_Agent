@@ -49,6 +49,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 
@@ -126,6 +127,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+os.makedirs("recordings", exist_ok=True)
+app.mount("/recordings", StaticFiles(directory="recordings"), name="recordings")
+
 
 # ── Pydantic Models ───────────────────────────────────────────────────────────
 class AgentCreate(BaseModel):
@@ -193,13 +197,13 @@ async def health():
     }
 
 
-# ── Frontend ──────────────────────────────────────────────────────────────────
-@app.get("/", response_class=HTMLResponse)
+# ── Frontend / Health ─────────────────────────────────────────────────────────
+@app.get("/")
 async def serve_frontend():
     frontend_path = os.path.join(os.path.dirname(__file__), "..", "Frontend", "index.html")
     if os.path.exists(frontend_path):
         return FileResponse(frontend_path)
-    return HTMLResponse("<h1>Frontend not found</h1>", status_code=404)
+    return {"status": "ok", "message": "Voice Agent Backend is running."}
 
 @app.get("/audio-worklet-processor.js")
 async def serve_audio_worklet():
@@ -947,4 +951,5 @@ def _resolve_schema(agent_id: str) -> str:
 # ── Entry Point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    PORT = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=False)
