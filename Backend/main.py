@@ -60,13 +60,18 @@ from demo_runner import DemoCallEngine
 from agent_runner import run_campaign
 from telephony.provider_registry import get_provider, list_providers
 
-# Pipecat imports for live voice WebSocket
-from pipecat.frames.frames import AudioRawFrame, CancelFrame, EndFrame, Frame, StartFrame, TextFrame
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineTask
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
-from flows.runtime import AgentTextFrame, RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor, VoiceTurnState
+try:
+    from pipecat.frames.frames import AudioRawFrame, CancelFrame, EndFrame, Frame, StartFrame, TextFrame
+    from pipecat.pipeline.pipeline import Pipeline
+    from pipecat.pipeline.runner import PipelineRunner
+    from pipecat.pipeline.task import PipelineTask
+    from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+    from flows.runtime import AgentTextFrame, RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor, VoiceTurnState
+except ImportError as e:
+    import logging
+    logging.getLogger("server").warning(f"Skipping pipecat/flows imports: {e}")
+    class FrameProcessor: pass
+
 from llm.state_manager import StateManager
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -92,7 +97,7 @@ _PLATFORM_API_KEY = os.getenv("PLATFORM_API_KEY", "")
 _api_key_header   = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
-async def require_auth(key: str | None = Depends(_api_key_header)) -> None:
+async def require_auth(key: Optional[str] = Depends(_api_key_header)) -> None:
     """Dependency: validates X-API-Key header on write endpoints.
     If PLATFORM_API_KEY is not set in .env, auth is skipped (development mode).
     """
