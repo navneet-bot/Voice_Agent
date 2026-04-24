@@ -13,8 +13,9 @@ export default function AdminMonitor() {
   const wsRef = useRef(null);
 
   useEffect(() => {
-    // Connect to global dashboard WebSocket over pure 8000
-    const wsUrl = `ws://${window.location.hostname}:8000/ws/dashboard`;
+    // Connect to global dashboard WebSocket over configured API URL
+    const API = process.env.NEXT_PUBLIC_API_URL || `http://${window.location.hostname}:8000`;
+    const wsUrl = `${API.replace(/^http/, 'ws')}/ws/dashboard`;
     wsRef.current = new WebSocket(wsUrl);
 
     wsRef.current.onmessage = (event) => {

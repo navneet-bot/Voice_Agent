@@ -17,7 +17,8 @@ export default function MyNumbers() {
     const fetchNumbers = async () => {
       setLoading(true);
       try {
-        const res = await fetch(`/api/telephony/numbers?client_id=${encodeURIComponent(activeClient)}`);
+        const API = process.env.NEXT_PUBLIC_API_URL || '';
+        const res = await fetch(`${API}/api/telephony/numbers?client_id=${encodeURIComponent(activeClient)}`);
         const json = await res.json();
         if (active) {
           setNumbers(json);
@@ -34,7 +35,8 @@ export default function MyNumbers() {
   const handleSearch = async () => {
     setSearching(true);
     try {
-      const res = await fetch(`/api/telephony/numbers/search?provider=${searchProvider}&country_code=${searchCountry}`, { method: 'POST' });
+      const API = process.env.NEXT_PUBLIC_API_URL || '';
+      const res = await fetch(`${API}/api/telephony/numbers/search?provider=${searchProvider}&country_code=${searchCountry}`, { method: 'POST' });
       const json = await res.json();
       setSearchResults(json);
     } catch (e) {

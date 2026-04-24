@@ -16,7 +16,8 @@ export default function CallResults() {
     // Function to ping server API for demo results matching index.html
     const fetchResults = async () => {
       try {
-        const res = await fetch(`/api/campaigns/default/results`);
+        const API = process.env.NEXT_PUBLIC_API_URL || '';
+        const res = await fetch(`${API}/api/campaigns/default/results`);
         const json = await res.json();
         if (active) {
           setLeads(json);

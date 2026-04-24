@@ -139,7 +139,8 @@ export function useVoiceSocket(agentId, activeClient) {
         ? `api/voice-demo?agentId=${encodeURIComponent(agentId)}&clientId=${clientId}&leadName=${encodedLead}`
         : `api/voice-live?agentId=${encodeURIComponent(agentId)}`;
 
-      const wsUrl = `ws://${window.location.hostname}:8000/${endpoint}`;
+      const API = process.env.NEXT_PUBLIC_API_URL || `http://${window.location.hostname}:8000`;
+      const wsUrl = `${API.replace(/^http/, 'ws')}/${endpoint}`;
       const socket = new WebSocket(wsUrl);
       socket.binaryType = 'arraybuffer';
       wsRef.current = socket;
