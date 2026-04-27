@@ -158,7 +158,7 @@ export default function CampaignsPage() {
                       <label className="form-label small fw-bold">Select Agent</label>
                       <select className="form-select" required value={formData.agentId} onChange={e => setFormData({...formData, agentId: e.target.value})}>
                         <option value="">-- Select Agent --</option>
-                        {agents.map(a => <option key={a.agent_id} value={a.agent_id}>{a.name}</option>)}
+                        {agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                         <option value="default">Default Agent</option>
                       </select>
                     </div>

@@ -93,8 +93,8 @@ export default function AgentsPage() {
         </div>
       ) : (
         <div className="row g-4">
-          {agents.map((agent) => (
-            <div key={agent.agent_id} className="col-md-4">
+          {agents.map((agent, index) => (
+            <div key={agent.id || index} className="col-md-4">
               <div className="card border-0 shadow-sm h-100">
                 <div className="card-body">
                   <div className="d-flex justify-content-between align-items-start mb-3">
@@ -112,9 +112,8 @@ export default function AgentsPage() {
                       ))}
                     </div>
                   </div>
-                </div>
                 <div className="card-footer bg-white border-top py-3">
-                  <small className="text-muted">ID: {agent.agent_id.substring(0,8)}...</small>
+                  <small className="text-muted">ID: {(agent.id || agent.agent_id || '').substring(0,8)}...</small>
                 </div>
               </div>
             </div>
