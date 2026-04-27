@@ -112,6 +112,7 @@ export default function AgentsPage() {
                       ))}
                     </div>
                   </div>
+                </div>
                 <div className="card-footer bg-white border-top py-3">
                   <small className="text-muted">ID: {(agent.id || agent.agent_id || '').substring(0,8)}...</small>
                 </div>
