@@ -1,15 +1,25 @@
 'use client';
-import { useAuth, adminUser, clientProfile } from '../context/AuthContext';
+import { useAuth, clientProfile } from '../context/AuthContext';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 
 export default function DashboardLayout({ children }) {
-  const { currentRole, activeClient, setActiveClient, logout } = useAuth();
+  const { currentRole, activeClient, setActiveClient, logout, user, loading } = useAuth();
   const pathname = usePathname();
+  const router = useRouter();
 
-  if (!currentRole) return null; // Or a loading state
+  useEffect(() => {
+    if (!loading && !currentRole) router.push('/');
+  }, [loading, currentRole, router]);
 
-  const user = currentRole === 'admin' ? adminUser : clientProfile[activeClient];
+  if (loading || !currentRole || !user) return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#f3f4f6' }}>
+      <div style={{ width: '32px', height: '32px', border: '3px solid #e5e7eb', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
 
   const adminMenu = [
     { label: 'Live Monitor', path: '/monitor', icon: '📊' },
@@ -37,9 +47,9 @@ export default function DashboardLayout({ children }) {
         </div>
         <div className="d-flex align-items-center gap-3">
           {currentRole === 'admin' && (
-            <select 
-              className="form-select form-select-sm shadow-none" 
-              value={activeClient} 
+            <select
+              className="form-select form-select-sm shadow-none"
+              value={activeClient}
               onChange={(e) => setActiveClient(e.target.value)}
               style={{ width: '200px' }}
             >
@@ -49,9 +59,21 @@ export default function DashboardLayout({ children }) {
             </select>
           )}
           <div className="d-flex align-items-center gap-2 px-3 py-1 bg-light rounded text-dark">
-            <div className="rounded-circle bg-primary text-white d-flex justify-content-center align-items-center" style={{ width: '32px', height: '32px', fontSize: '14px', fontWeight: 'bold' }}>
-              {user.initials}
-            </div>
+            {user.photoURL ? (
+              <img
+                src={user.photoURL}
+                alt={user.name}
+                referrerPolicy="no-referrer"
+                style={{ width: '32px', height: '32px', borderRadius: '50%', objectFit: 'cover' }}
+              />
+            ) : (
+              <div
+                className="rounded-circle bg-primary text-white d-flex justify-content-center align-items-center"
+                style={{ width: '32px', height: '32px', fontSize: '14px', fontWeight: 'bold' }}
+              >
+                {user.initials}
+              </div>
+            )}
             <div className="d-flex flex-column">
               <span className="fw-semibold" style={{ fontSize: '13px' }}>{user.name}</span>
               <span className="text-muted" style={{ fontSize: '11px', textTransform: 'capitalize' }}>{currentRole} Access</span>
@@ -70,9 +92,9 @@ export default function DashboardLayout({ children }) {
             {menu.map(item => {
               const isActive = pathname === item.path;
               return (
-                <Link 
-                  key={item.path} 
-                  href={item.path} 
+                <Link
+                  key={item.path}
+                  href={item.path}
                   className={`d-flex align-items-center p-2 mb-1 text-decoration-none rounded ${isActive ? 'bg-primary text-white shadow-sm' : 'text-secondary hover-bg-light'}`}
                   style={{ gap: '10px', fontSize: '14px', fontWeight: isActive ? '600' : '500' }}
                 >
