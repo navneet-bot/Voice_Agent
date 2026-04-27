@@ -2,14 +2,7 @@ fastapi
 uvicorn
 gunicorn
 httpx
+groq
+edge-tts
 python-dotenv
 websockets
-
-# AI APIs
-groq
-
-# TTS (cloud)
-edge-tts
-
-# lightweight audio handling (optional)
-miniaudio
