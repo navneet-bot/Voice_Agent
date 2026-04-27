@@ -8,12 +8,12 @@ import {
 
 // ─── ADMIN EMAILS ─────────────────────────────────────────────────────────────
 // Add any email that should have admin access here.
-const ADMIN_EMAILS = ['admin@cosmicchameleon.ai', 'vishnu@cosmicchameleon.ai'];
+const ADMIN_EMAILS = ['navneet@jobjockey.in', 'vishnu@jobjockey.in', 'parth@jobjockey.in', 'maniarasan@jobjockey.in'];
 
 // ─── CLIENT PROFILES (unchanged) ──────────────────────────────────────────────
 export const clientProfile = {
   'realty-demo': { name: 'Realty Pro', agent: 'Neha', agentId: 'real-estate-demo', role: 'client', initials: 'RP' },
-  'finserv':     { name: 'FinServ Plus', agent: 'Arjun', agentId: 'insurance-renewal', role: 'client', initials: 'FS' },
+  'finserv': { name: 'FinServ Plus', agent: 'Arjun', agentId: 'insurance-renewal', role: 'client', initials: 'FS' },
 };
 
 // ─── ADMIN USER SHAPE (for DashboardLayout compatibility) ─────────────────────
@@ -62,17 +62,17 @@ export const AuthProvider = ({ children }) => {
 
   // Kept for backward-compat (page.js used to call login(role) directly)
   // Now it's a no-op because Firebase onAuthStateChanged handles state.
-  const login = () => {};
+  const login = () => { };
 
   // Build the user shape that DashboardLayout expects
   const user = firebaseUser
     ? {
-        name:     firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
-        email:    firebaseUser.email,
-        role:     currentRole,
-        initials: getInitials(firebaseUser.displayName, firebaseUser.email),
-        photoURL: firebaseUser.photoURL,
-      }
+      name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'User',
+      email: firebaseUser.email,
+      role: currentRole,
+      initials: getInitials(firebaseUser.displayName, firebaseUser.email),
+      photoURL: firebaseUser.photoURL,
+    }
     : null;
 
   return (
