@@ -23,4 +23,4 @@ COPY . /app/
 EXPOSE 3000
 
 # Run the server from the Backend directory
-CMD ["python", "server.py"]
+CMD ["python", "main.py"]
