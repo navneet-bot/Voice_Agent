@@ -214,8 +214,16 @@ export function useVoiceSocket(agentId, activeClient) {
               holdMicInput(250);
             } else if (msg.type?.startsWith('call_')) {
               setEvents(prev => [...prev, msg]);
+            } else if (msg.type === 'ping') {
+              // Server keepalive — reply with pong so the backend knows we're alive
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: 'pong' }));
+              }
             }
-          } catch (_) {}
+            // all other types (pong, etc.) are silently ignored
+          } catch (_) {
+            // plain text (e.g. "pong") — ignore silently
+          }
           return;
         }
 

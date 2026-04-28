@@ -60,6 +60,7 @@ from demo_runner import DemoCallEngine
 from agent_runner import run_campaign
 from telephony.provider_registry import get_provider, list_providers
 
+_PIPECAT_AVAILABLE = False
 try:
     from pipecat.frames.frames import AudioRawFrame, CancelFrame, EndFrame, Frame, StartFrame, TextFrame
     from pipecat.pipeline.pipeline import Pipeline
@@ -67,10 +68,11 @@ try:
     from pipecat.pipeline.task import PipelineTask
     from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
     from flows.runtime import AgentTextFrame, RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor, VoiceTurnState
-except ImportError as e:
+    _PIPECAT_AVAILABLE = True
+except (ImportError, Exception) as e:
     import logging
     logging.getLogger("server").warning(f"Skipping pipecat/flows imports: {e}")
-    class FrameProcessor: pass
+    class FrameProcessor: pass  # type: ignore[no-redef]
 
 from llm.state_manager import StateManager
 
@@ -854,68 +856,105 @@ async def websocket_voice_demo(websocket: WebSocket):
 
     # Keep a reference to the LLM processor so we can read extracted conversation
     # data (budget, location, etc.) from the StateManager after the call ends.
-    llm_ref = None
+    llm_ref   = None
+    source    = None
+    runner_task = None
+    pipeline_ok = False
 
     recorder = SessionRecorder()
-    try:
-        source = VoiceLiveSource(recorder=recorder)
-        turn_state = VoiceTurnState()
-        stt    = RealEstateSTTProcessor(turn_state=turn_state)
-        llm    = RealEstateLLMProcessor()
-        llm.state_manager = StateManager(schema_path)
-        llm.state_manager.conversation_data["name"] = lead_name
-        llm.state_manager.conversation_data["lead_name"] = lead_name
-        llm_ref = llm  # capture ref BEFORE runner_task starts
-        tts    = RealEstateTTSProcessor(turn_state=turn_state)
-        sink   = VoiceLiveSink(websocket, on_transcript=on_transcript, recorder=recorder)
-        logger.info("Voice Demo: Pipeline components created")
-
-        pipeline    = Pipeline([source, stt, llm, tts, sink])
-        runner      = PipelineRunner()
-        task        = PipelineTask(pipeline)
-        runner_task = asyncio.create_task(runner.run(task))
-        logger.info("Voice Demo: Pipeline running")
-    except Exception as _pipe_err:
-        logger.exception("Voice Demo: Pipeline creation FAILED — %s", _pipe_err)
+    if _PIPECAT_AVAILABLE:
         try:
-            await websocket.close(code=1011, reason="Pipeline error")
-        except Exception:
-            pass
-        return
+            source = VoiceLiveSource(recorder=recorder)
+            turn_state = VoiceTurnState()
+            stt    = RealEstateSTTProcessor(turn_state=turn_state)
+            llm    = RealEstateLLMProcessor()
+            llm.state_manager = StateManager(schema_path)
+            llm.state_manager.conversation_data["name"] = lead_name
+            llm.state_manager.conversation_data["lead_name"] = lead_name
+            llm_ref = llm  # capture ref BEFORE runner_task starts
+            tts    = RealEstateTTSProcessor(turn_state=turn_state)
+            sink   = VoiceLiveSink(websocket, on_transcript=on_transcript, recorder=recorder)
+            logger.info("Voice Demo: Pipeline components created")
 
-    # Emit "Connected" once pipeline is wired
+            pipeline    = Pipeline([source, stt, llm, tts, sink])
+            runner      = PipelineRunner()
+            task        = PipelineTask(pipeline)
+            runner_task = asyncio.create_task(runner.run(task))
+            logger.info("Voice Demo: Pipeline running")
+            pipeline_ok = True
+        except Exception as _pipe_err:
+            logger.exception("Voice Demo: Pipeline creation FAILED — %s", _pipe_err)
+            # Do NOT close — fall through to keep-alive fallback loop below
+            pipeline_ok = False
+    else:
+        logger.warning("Voice Demo: pipecat not available — running in keep-alive mode (no AI pipeline)")
+
+    # Emit "Connected" once pipeline is wired (or fallback mode)
     await ws_manager.send_call_event(
         "call_connected",
         campaign_id=campaign_id,
         lead_id=lead_uid,
         lead_name=lead_name,
         status="Connected",
-        snippet="Speaking with agent...",
+        snippet="Speaking with agent..." if pipeline_ok else "[No AI pipeline — keep-alive mode]",
         provider="demo_mic",
         client_id=client_id,
     )
     try:
         await websocket.send_text(json.dumps({
-            "type": "call_connected",
+            "type":        "call_connected",
             "campaign_id": campaign_id,
-            "leadId": lead_uid,
-            "status": "Connected"
+            "leadId":      lead_uid,
+            "status":      "Connected",
+            "pipeline":    "active" if pipeline_ok else "unavailable",
         }))
     except Exception:
         pass
-    logger.info("Voice Demo: Connected event sent — ready to receive audio")
+    logger.info("Voice Demo: Connected event sent — pipeline_ok=%s", pipeline_ok)
+    print("Loop running")
+
+    # ── HEARTBEAT TASK ─────────────────────────────────────────────────────────
+    # Railway's reverse proxy drops idle WebSocket connections after ~30 s.
+    # Send a JSON ping every 15 s to keep the connection alive regardless of
+    # whether the AI pipeline is active.
+    _hb_stop = asyncio.Event()
+
+    async def _heartbeat():
+        """Server-side keepalive — fires every 15 s."""
+        while not _hb_stop.is_set():
+            try:
+                await asyncio.wait_for(_hb_stop.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
+            if _hb_stop.is_set():
+                break
+            try:
+                await websocket.send_text(json.dumps({"type": "ping"}))
+                print("Heartbeat sent")
+            except Exception:
+                break  # WS already closed
+
+    heartbeat_task = asyncio.create_task(_heartbeat())
 
     async def reader():
         try:
             while True:
+                print("Loop running")
                 msg = await websocket.receive()
-                print("Received message")
                 if msg["type"] == "websocket.receive":
+                    print("Message received")
                     text = msg.get("text")
                     if text:
+                        # Handle ping/pong from frontend
+                        if text == "ping" or text == "PING":
+                            try:
+                                await websocket.send_text("pong")
+                            except Exception:
+                                pass
+                            continue
                         try:
                             payload = json.loads(text)
-                            if payload.get("type") == "mic_ready":
+                            if payload.get("type") == "mic_ready" and source is not None:
                                 source.set_sample_rate(payload.get("sampleRate", 16000))
                         except Exception:
                             pass
@@ -929,7 +968,8 @@ async def websocket_voice_demo(websocket: WebSocket):
                             except Exception:
                                 pass
                             continue
-                        source.queue_audio(data)
+                        if source is not None:
+                            source.queue_audio(data)
                 elif msg["type"] == "websocket.disconnect":
                     break
         except WebSocketDisconnect:
@@ -941,6 +981,12 @@ async def websocket_voice_demo(websocket: WebSocket):
     try:
         await reader()
     finally:
+        _hb_stop.set()
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except (asyncio.CancelledError, Exception):
+            pass
         print("Closing connection")
         # Tear down pipeline
         try:
