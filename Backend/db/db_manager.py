@@ -135,7 +135,9 @@ def _init_schema() -> None:
             callback_time   TEXT,
             transcription   TEXT,          -- JSON array of {role, content} turns
             provider        TEXT,
-            processed       INTEGER DEFAULT 0
+            processed       INTEGER DEFAULT 0,
+            recording_url   TEXT,
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS live_call_state (
@@ -154,6 +156,14 @@ def _init_schema() -> None:
             agent_id    TEXT REFERENCES agents(id)
         );
         """)
+        try:
+            conn.execute("ALTER TABLE call_results ADD COLUMN recording_url TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE call_results ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         logger.info("DB schema initialized at %s", DB_PATH)
     finally:
@@ -497,9 +507,12 @@ class DatabaseManager:
                 for r in rows:
                     d = dict(r)
                     try:
-                        d["transcription"] = json.loads(d.get("transcription") or "[]")
+                        transcript = json.loads(d.get("transcription") or "[]")
+                        d["has_transcript"] = len(transcript) > 0
                     except Exception:
-                        d["transcription"] = []
+                        d["has_transcript"] = False
+                    d.pop("transcription", None)
+                    d["has_recording"] = bool(d.get("recording_url"))
                     lead_data = d.get("lead_data")
                     if isinstance(lead_data, str):
                         try:
@@ -522,6 +535,26 @@ class DatabaseManager:
                     d["timeline"] = callback_value
                     result.append(d)
                 return result
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
+
+    async def get_transcript_for_lead(self, lead_id: str) -> list[dict]:
+        def _sync():
+            conn = _get_connection()
+            try:
+                row = conn.execute(
+                    "SELECT transcription FROM call_results WHERE lead_id=? OR id=? ORDER BY called_at DESC LIMIT 1",
+                    (lead_id, lead_id)
+                ).fetchone()
+                if row and row["transcription"]:
+                    import json
+                    try:
+                        return json.loads(row["transcription"])
+                    except Exception:
+                        return []
+                return []
             finally:
                 conn.close()
         return await run_in_executor(_sync)
@@ -649,6 +682,34 @@ class DatabaseManager:
 
     # ── Clients & Assignments ────────────────────────────────────────────────
 
+    async def list_clients(self) -> list[dict]:
+        def _sync():
+            conn = _get_connection()
+            try:
+                rows = conn.execute("SELECT * FROM clients ORDER BY created_at DESC").fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
+    async def create_client(self, client_id: str, data: dict) -> dict:
+        def _sync():
+            conn = _get_connection()
+            try:
+                conn.execute(
+                    """INSERT OR REPLACE INTO clients (id, name, email, plan, created_at)
+                       VALUES (?,?,?,?,?)""",
+                    (
+                        client_id, data.get("name"), data.get("email"),
+                        data.get("plan", "free"), datetime.now().isoformat()
+                    )
+                )
+                conn.commit()
+                return {**data, "id": client_id}
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
     async def get_assignment(self, client_id: str) -> Optional[str]:
         def _sync():
             conn = _get_connection()
@@ -684,11 +745,15 @@ class DatabaseManager:
                 total_calls = conn.execute("SELECT COUNT(*) FROM call_results").fetchone()[0]
                 active_agents = conn.execute("SELECT COUNT(*) FROM agents").fetchone()[0]
                 total_clients = conn.execute("SELECT COUNT(*) FROM clients").fetchone()[0]
+
+                connected = conn.execute("SELECT COUNT(*) FROM call_results WHERE status='Connected'").fetchone()[0]
+                connect_rate = (connected / total_calls * 100) if total_calls > 0 else 38.5
+
                 return {
-                    "totalClients": total_clients or 3,
-                    "activeAgents": active_agents or 3,
-                    "calls": total_calls or 570,
-                    "connectRate": 38.5,
+                    "totalClients": total_clients,
+                    "activeAgents": active_agents,
+                    "calls": total_calls,
+                    "connectRate": round(connect_rate, 1),
                 }
             finally:
                 conn.close()

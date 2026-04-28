@@ -8,6 +8,11 @@ export default function LogsPage() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
 
+  // Transcripts lazy loading state
+  const [expandedRow, setExpandedRow] = useState(null);
+  const [transcriptsCache, setTranscriptsCache] = useState({});
+  const [loadingTranscript, setLoadingTranscript] = useState(false);
+
   const API = process.env.NEXT_PUBLIC_API_URL || `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
 
   useEffect(() => {
@@ -24,7 +29,7 @@ export default function LogsPage() {
         console.error(e);
         setLoading(false);
       });
-  }, []);
+  }, [API]);
 
   useEffect(() => {
     if (!selectedCampaign) return;
@@ -39,7 +44,29 @@ export default function LogsPage() {
         console.error(e);
         setLoading(false);
       });
-  }, [selectedCampaign]);
+  }, [selectedCampaign, API]);
+
+  const toggleTranscript = async (leadId) => {
+    if (expandedRow === leadId) {
+      setExpandedRow(null);
+      return;
+    }
+    
+    setExpandedRow(leadId);
+    
+    if (!transcriptsCache[leadId]) {
+      setLoadingTranscript(true);
+      try {
+        const res = await fetch(`${API}/api/results/${leadId}/transcript`);
+        const data = await res.json();
+        setTranscriptsCache(prev => ({ ...prev, [leadId]: data }));
+      } catch (e) {
+        console.error("Failed to load transcript", e);
+      } finally {
+        setLoadingTranscript(false);
+      }
+    }
+  };
 
   return (
     <DashboardLayout>
@@ -82,7 +109,7 @@ export default function LogsPage() {
       ) : (
         <div className="card border-0 shadow-sm">
           <div className="table-responsive">
-            <table className="table table-hover align-middle mb-0">
+            <table className="table table-hover align-middle mb-0 text-nowrap">
               <thead className="table-light text-muted small">
                 <tr>
                   <th className="py-3 px-4">Lead Name</th>
@@ -90,16 +117,16 @@ export default function LogsPage() {
                   <th className="py-3">Outcome</th>
                   <th className="py-3">Interested</th>
                   <th className="py-3">Duration</th>
-                  <th className="py-3 text-end px-4">Actions</th>
+                  <th className="py-3 text-end px-4">Recording & QA</th>
                 </tr>
               </thead>
               <tbody>
-                {logs.map((log) => (
+                {logs.map((log, i) => (
                   <tr key={log.id || log.lead_id}>
-                    <td className="px-4 py-3 fw-medium">{log.lead_name || 'Unknown'}</td>
+                    <td className="px-4 py-3 fw-medium">{log.name || log.lead_name || 'Unknown'}</td>
                     <td className="py-3">{log.phone || '—'}</td>
                     <td className="py-3">
-                      <span className={`badge ${log.status === 'completed' ? 'bg-success' : 'bg-warning'}`}>
+                      <span className={`badge ${log.status === 'Connected' ? 'bg-success-subtle text-success border border-success-subtle' : 'bg-light text-secondary border'}`}>
                         {log.outcome || log.status || 'unknown'}
                       </span>
                     </td>
@@ -114,10 +141,72 @@ export default function LogsPage() {
                     </td>
                     <td className="py-3 text-muted small">{log.duration || '—'}</td>
                     <td className="py-3 px-4 text-end">
-                      <button className="btn btn-sm btn-light border shadow-sm">QA Review</button>
+                      <div className="d-flex align-items-center justify-content-end gap-2">
+                        {log.has_recording ? (
+                          <audio 
+                            src={`${API}${log.recording_url}`} 
+                            controls 
+                            preload="metadata" 
+                            style={{ height: '32px', width: '200px' }} 
+                          />
+                        ) : null}
+                        
+                        <button 
+                          className={`btn btn-sm ${expandedRow === (log.lead_id || log.id) ? 'btn-secondary' : 'btn-outline-secondary'}`}
+                          onClick={() => toggleTranscript(log.lead_id || log.id)}
+                          disabled={!log.has_transcript}
+                        >
+                          📄 {expandedRow === (log.lead_id || log.id) ? 'Hide' : 'Transcript'}
+                        </button>
+                      </div>
                     </td>
                   </tr>
-                ))}
+                )).reduce((acc, tr, i) => {
+                  const log = logs[i];
+                  const leadId = log.lead_id || log.id;
+                  acc.push(tr);
+                  
+                  if (expandedRow === leadId) {
+                    const transcript = transcriptsCache[leadId] || [];
+                    acc.push(
+                      <tr key={`exp-${leadId}`} className="bg-light">
+                        <td colSpan="6" className="p-0 border-bottom-0">
+                          <div className="p-4 border-start border-4 border-secondary m-3 bg-white rounded shadow-sm text-start">
+                            <h6 className="fw-bold mb-3 d-flex align-items-center gap-2">
+                              <span>💬 Conversation Transcript</span>
+                              {loadingTranscript && !transcriptsCache[leadId] && (
+                                <div className="spinner-border spinner-border-sm text-secondary" role="status"></div>
+                              )}
+                            </h6>
+                            
+                            <div className="transcript-chat" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                              {transcript.length === 0 && !loadingTranscript ? (
+                                <div className="text-muted small italic">No conversation data available.</div>
+                              ) : (
+                                <div className="d-flex flex-column gap-2 pe-2">
+                                  {transcript.map((msg, idx) => (
+                                    <div key={idx} className={`d-flex ${msg.speaker === 'user' ? 'justify-content-end' : 'justify-content-start'}`}>
+                                      <div 
+                                        className={`px-3 py-2 rounded-3 ${msg.speaker === 'user' ? 'bg-primary text-white' : 'bg-light border'}`}
+                                        style={{ maxWidth: '75%', fontSize: '0.9rem' }}
+                                      >
+                                        <div className={`small fw-bold mb-1 ${msg.speaker === 'user' ? 'text-white-50' : 'text-secondary'}`} style={{ fontSize: '0.7rem' }}>
+                                          {msg.speaker === 'user' ? (log.name || log.lead_name || 'User') : 'AI Agent'}
+                                        </div>
+                                        <div>{msg.text || msg.content}</div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
+                  return acc;
+                }, [])}
               </tbody>
             </table>
           </div>

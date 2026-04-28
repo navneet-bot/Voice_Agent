@@ -179,6 +179,14 @@ class PhoneNumberAssign(BaseModel):
     numberId: str
     clientId: str
 
+class ClientCreate(BaseModel):
+    id: str
+    name: str
+    email: Optional[str] = None
+    plan: Optional[str] = "free"
+    agentName: Optional[str] = None
+    agentId: Optional[str] = None
+
 
 # ── Health Check ──────────────────────────────────────────────────────────────
 @app.get("/health")
@@ -297,6 +305,10 @@ async def start_campaign(data: CampaignStart, background_tasks: BackgroundTasks)
 async def get_results(campaign_id: str):
     return await db.get_results_for_campaign(campaign_id)
 
+@app.get("/api/results/{lead_id}/transcript")
+async def get_transcript(lead_id: str):
+    return await db.get_transcript_for_lead(lead_id)
+
 @app.get("/api/campaigns/{campaign_id}/live")
 async def get_live_state(campaign_id: str):
     return await db.get_live_state(campaign_id)
@@ -336,6 +348,21 @@ async def start_demo(data: DemoStart, background_tasks: BackgroundTasks):
         background_tasks.add_task(engine.run_demo_campaign, campaign_id, agent_schema_path, client_id)
 
     return {"status": "demo_started", "campaign_id": campaign_id}
+
+
+# ── Clients ───────────────────────────────────────────────────────────────────
+@app.get("/api/clients")
+async def list_clients():
+    return await db.list_clients()
+
+@app.post("/api/clients", dependencies=[Depends(require_auth)])
+async def create_client(client: ClientCreate):
+    client_data = client.dict()
+    # If agent info is provided, also set the assignment
+    result = await db.create_client(client.id, client_data)
+    if client.agentId:
+        await db.set_assignment(client.id, client.agentId)
+    return result
 
 
 # ── Assignments ───────────────────────────────────────────────────────────────
@@ -442,11 +469,52 @@ async def dashboard_ws_global(websocket: WebSocket):
 
 # ── VoiceLiveSource / VoiceLiveSink (shared by /api/voice-live and /api/voice-demo) ──
 
+
+import wave
+import time
+
+class SessionRecorder:
+    def __init__(self, sample_rate=16000):
+        self.sample_rate = sample_rate
+        self.user_buffer = bytearray()
+        self.agent_buffer = bytearray()
+        
+    def add_user_audio(self, pcm_data: bytes):
+        self.user_buffer.extend(pcm_data)
+        
+    def add_agent_audio(self, pcm_data: bytes):
+        self.agent_buffer.extend(pcm_data)
+        
+    def finalize(self, filepath: str) -> float:
+        max_len = max(len(self.user_buffer), len(self.agent_buffer))
+        # Ensure even length (16-bit = 2 bytes)
+        if max_len % 2 != 0:
+            max_len += 1
+            
+        user_pad = self.user_buffer + bytearray(max_len - len(self.user_buffer))
+        agent_pad = self.agent_buffer + bytearray(max_len - len(self.agent_buffer))
+        
+        stereo = bytearray(max_len * 2)
+        # Fast interleave
+        stereo[0::4] = user_pad[0::2]
+        stereo[1::4] = user_pad[1::2]
+        stereo[2::4] = agent_pad[0::2]
+        stereo[3::4] = agent_pad[1::2]
+            
+        with wave.open(filepath, "wb") as wf:
+            wf.setnchannels(2)
+            wf.setsampwidth(2)
+            wf.setframerate(self.sample_rate)
+            wf.writeframes(stereo)
+            
+        return max_len / (self.sample_rate * 2) # duration in seconds
+
 class VoiceLiveSource(FrameProcessor):
     """Bridges browser mic audio into the Pipecat pipeline with backpressure."""
 
-    def __init__(self):
+    def __init__(self, recorder=None):
         super().__init__()
+        self.recorder = recorder
         self._started = False
         self._terminated = False
         self._sample_rate = 16000 # Default fallback
@@ -520,6 +588,8 @@ class VoiceLiveSource(FrameProcessor):
         
         try:
             self._queue.put_nowait(frame)
+            if self.recorder:
+                self.recorder.add_user_audio(data)
         except asyncio.QueueFull:
             try:
                 dropped = self._queue.get_nowait()
@@ -548,10 +618,11 @@ def _ensure_frame_attrs(frame: Frame) -> None:
 class VoiceLiveSink(FrameProcessor):
     """Sends pipeline output back to the browser WebSocket."""
 
-    def __init__(self, websocket: WebSocket, on_transcript=None):
+    def __init__(self, websocket: WebSocket, on_transcript=None, recorder=None):
         super().__init__()
         self.ws = websocket
         self.on_transcript = on_transcript
+        self.recorder = recorder
 
     async def process_frame(self, frame, direction):
         frame_type = type(frame).__name__
@@ -576,6 +647,8 @@ class VoiceLiveSink(FrameProcessor):
             try:
                 # Send raw PCM16 audio bytes directly to the browser.
                 await self.ws.send_bytes(frame.audio)
+                if self.recorder:
+                    self.recorder.add_agent_audio(frame.audio)
                 logger.info(
                     "[PIPELINE] SINK -> Sent audio bytes=%d",
                     len(frame.audio),
@@ -782,8 +855,9 @@ async def websocket_voice_demo(websocket: WebSocket):
     # data (budget, location, etc.) from the StateManager after the call ends.
     llm_ref = None
 
+    recorder = SessionRecorder()
     try:
-        source = VoiceLiveSource()
+        source = VoiceLiveSource(recorder=recorder)
         turn_state = VoiceTurnState()
         stt    = RealEstateSTTProcessor(turn_state=turn_state)
         llm    = RealEstateLLMProcessor()
@@ -792,7 +866,7 @@ async def websocket_voice_demo(websocket: WebSocket):
         llm.state_manager.conversation_data["lead_name"] = lead_name
         llm_ref = llm  # capture ref BEFORE runner_task starts
         tts    = RealEstateTTSProcessor(turn_state=turn_state)
-        sink   = VoiceLiveSink(websocket, on_transcript=on_transcript)
+        sink   = VoiceLiveSink(websocket, on_transcript=on_transcript, recorder=recorder)
         logger.info("Voice Demo: Pipeline components created")
 
         pipeline    = Pipeline([source, stt, llm, tts, sink])
@@ -876,6 +950,16 @@ async def websocket_voice_demo(websocket: WebSocket):
             pass
 
         # ── Extract real lead data from the StateManager conversation_data ──
+        duration_s = 0.0
+        recording_url = ""
+        try:
+            filename = f"rec_{lead_uid}.wav"
+            filepath = os.path.join("recordings", filename)
+            duration_s = recorder.finalize(filepath)
+            recording_url = f"/recordings/{filename}"
+        except Exception as _rec_err:
+            logger.warning("Voice Demo: Audio recording failed - %s", _rec_err)
+
         conv_data: dict = {}
         try:
             if llm_ref and hasattr(llm_ref, "state_manager"):
@@ -902,6 +986,8 @@ async def websocket_voice_demo(websocket: WebSocket):
             "provider":      "demo_mic",
             "processed":     True,
             "lead_data":     conv_data,  # send raw extracted slots for frontend card
+            "recording_url": recording_url,
+            "duration":      int(duration_s) if duration_s else len(transcripts) * 8
         }
         logger.info("Voice Demo: Extracted lead data — %s", conv_data)
         await ws_manager.send_call_event(

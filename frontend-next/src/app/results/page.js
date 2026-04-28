@@ -7,16 +7,21 @@ export default function CallResults() {
   const { activeClient } = useAuth();
   const [leads, setLeads] = useState([]);
   const [loading, setLoading] = useState(true);
-  const isFinserv = activeClient === 'finserv';
   
-  // We'll mimic fetching 'default' campaign results
+  // Transcripts lazy loading state
+  const [expandedRow, setExpandedRow] = useState(null);
+  const [transcriptsCache, setTranscriptsCache] = useState({});
+  const [loadingTranscript, setLoadingTranscript] = useState(false);
+
+  const isFinserv = activeClient === 'finserv';
+  const API = process.env.NEXT_PUBLIC_API_URL || `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+  
   useEffect(() => {
     let active = true;
     
-    // Function to ping server API for demo results matching index.html
     const fetchResults = async () => {
       try {
-        const API = process.env.NEXT_PUBLIC_API_URL || '';
+        // Here we default to 'default' campaign, but in a real app this might be dynamic
         const res = await fetch(`${API}/api/campaigns/default/results`);
         const json = await res.json();
         if (active) {
@@ -30,14 +35,36 @@ export default function CallResults() {
     };
 
     fetchResults();
-    // Poll every 5s instead of 3s to be lighter on server in React
     const int = setInterval(fetchResults, 5000);
 
     return () => {
       active = false;
       clearInterval(int);
     };
-  }, [activeClient]);
+  }, [activeClient, API]);
+
+  const toggleTranscript = async (leadId) => {
+    if (expandedRow === leadId) {
+      setExpandedRow(null);
+      return;
+    }
+    
+    setExpandedRow(leadId);
+    
+    // Lazy load if not in cache
+    if (!transcriptsCache[leadId]) {
+      setLoadingTranscript(true);
+      try {
+        const res = await fetch(`${API}/api/results/${leadId}/transcript`);
+        const data = await res.json();
+        setTranscriptsCache(prev => ({ ...prev, [leadId]: data }));
+      } catch (e) {
+        console.error("Failed to load transcript", e);
+      } finally {
+        setLoadingTranscript(false);
+      }
+    }
+  };
 
   const processed = leads.filter(l => l.processed);
   const connected = processed.filter(l => l.status === 'Connected');
@@ -94,21 +121,20 @@ export default function CallResults() {
                 <th className="fw-semibold py-3">Duration</th>
                 <th className="fw-semibold py-3">Status</th>
                 <th className="fw-semibold py-3">{isFinserv ? 'Renewal Confirmed' : 'Interested'}</th>
-                <th className="fw-semibold py-3">{isFinserv ? 'Objection' : 'Budget'}</th>
-                <th className="fw-semibold py-3">Callback</th>
+                <th className="fw-semibold py-3">Recording & QA</th>
               </tr>
             </thead>
             <tbody>
               {loading && leads.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="text-center py-5 text-muted">
+                  <td colSpan="7" className="text-center py-5 text-muted">
                     <div className="spinner-border spinner-border-sm me-2" role="status"></div>
                     Fetching live results...
                   </td>
                 </tr>
               ) : leads.length === 0 ? (
                 <tr>
-                  <td colSpan="8" className="text-center py-5 text-muted">
+                  <td colSpan="7" className="text-center py-5 text-muted">
                     No leads found for this campaign. Click start campaign first.
                   </td>
                 </tr>
@@ -124,10 +150,76 @@ export default function CallResults() {
                     </span>
                   </td>
                   <td className="py-3 fw-medium text-dark">{l.interested || '—'}</td>
-                  <td className="py-3 text-secondary">{l.budget || l.objection || '—'}</td>
-                  <td className="py-3 text-secondary">{l.callback || '—'}</td>
+                  <td className="py-3">
+                    <div className="d-flex align-items-center gap-2">
+                      {l.has_recording ? (
+                        <audio 
+                          src={`${API}${l.recording_url}`} 
+                          controls 
+                          preload="metadata" 
+                          style={{ height: '32px', width: '200px' }} 
+                        />
+                      ) : (
+                        <span className="text-muted small fst-italic">No Media</span>
+                      )}
+                      
+                      <button 
+                        className={`btn btn-sm ${expandedRow === (l.lead_id || l.id) ? 'btn-secondary' : 'btn-outline-secondary'}`}
+                        onClick={() => toggleTranscript(l.lead_id || l.id)}
+                        disabled={!l.has_transcript}
+                      >
+                        📄 {expandedRow === (l.lead_id || l.id) ? 'Hide' : 'Transcript'}
+                      </button>
+                    </div>
+                  </td>
                 </tr>
-              ))}
+              )).reduce((acc, tr, i) => {
+                // We map over leads and for each row we check if we need to append an expanded row
+                const l = leads[i];
+                const leadId = l.lead_id || l.id;
+                acc.push(tr);
+                
+                if (expandedRow === leadId) {
+                  const transcript = transcriptsCache[leadId] || [];
+                  acc.push(
+                    <tr key={`exp-${leadId}`} className="bg-light">
+                      <td colSpan="7" className="p-0 border-bottom-0">
+                        <div className="p-4 border-start border-4 border-secondary m-3 bg-white rounded shadow-sm">
+                          <h6 className="fw-bold mb-3 d-flex align-items-center gap-2">
+                            <span>💬 Conversation Transcript</span>
+                            {loadingTranscript && !transcriptsCache[leadId] && (
+                              <div className="spinner-border spinner-border-sm text-secondary" role="status"></div>
+                            )}
+                          </h6>
+                          
+                          <div className="transcript-chat" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+                            {transcript.length === 0 && !loadingTranscript ? (
+                              <div className="text-muted small italic">No conversation data available.</div>
+                            ) : (
+                              <div className="d-flex flex-column gap-2 pe-2">
+                                {transcript.map((msg, idx) => (
+                                  <div key={idx} className={`d-flex ${msg.speaker === 'user' ? 'justify-content-end' : 'justify-content-start'}`}>
+                                    <div 
+                                      className={`px-3 py-2 rounded-3 ${msg.speaker === 'user' ? 'bg-primary text-white' : 'bg-light border'}`}
+                                      style={{ maxWidth: '75%', fontSize: '0.9rem' }}
+                                    >
+                                      <div className={`small fw-bold mb-1 ${msg.speaker === 'user' ? 'text-white-50' : 'text-secondary'}`} style={{ fontSize: '0.7rem' }}>
+                                        {msg.speaker === 'user' ? (l.name || 'User') : 'AI Agent'}
+                                      </div>
+                                      <div>{msg.text || msg.content}</div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                }
+                return acc;
+              }, [])}
             </tbody>
           </table>
         </div>

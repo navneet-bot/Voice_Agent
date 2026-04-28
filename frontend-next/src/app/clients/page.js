@@ -6,9 +6,8 @@ import { useAuth, clientProfile } from '@/context/AuthContext';
 export default function ClientsPage() {
   const { user } = useAuth();
   const [showModal, setShowModal] = useState(false);
-  const [clients, setClients] = useState(
-    Object.entries(clientProfile).map(([id, data]) => ({ id, ...data }))
-  );
+  const [clients, setClients] = useState([]);
+  const [loading, setLoading] = useState(true);
   
   const [formData, setFormData] = useState({
     id: '',
@@ -17,24 +16,61 @@ export default function ClientsPage() {
     agentId: ''
   });
 
-  const handleCreate = (e) => {
+  const API = process.env.NEXT_PUBLIC_API_URL || `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+
+  useEffect(() => {
+    fetch(`${API}/api/clients`)
+      .then(r => r.ok ? r.json() : [])
+      .then(data => {
+        // Merge with clientProfile if needed, or just use DB data
+        // For now, let's just use DB data but add initials for UI
+        const formatted = data.map(c => ({
+          ...c,
+          initials: c.name ? c.name.substring(0, 2).toUpperCase() : '??',
+          agent: c.agentName || 'None',
+          agentId: c.agentId || 'none'
+        }));
+        setClients(formatted);
+        setLoading(false);
+      })
+      .catch(e => {
+        console.error("Failed to load clients", e);
+        setLoading(false);
+      });
+  }, [API]);
+
+  const handleCreate = async (e) => {
     e.preventDefault();
     if (!formData.id || !formData.name) return;
     
-    // Mock adding a client locally
-    const newClient = {
-      id: formData.id.toLowerCase().replace(/\s+/g, '-'),
-      name: formData.name,
-      agent: formData.agent || 'Default',
-      agentId: formData.agentId || 'default',
-      role: 'client',
-      initials: formData.name.substring(0, 2).toUpperCase()
-    };
-    
-    setClients([...clients, newClient]);
-    setShowModal(false);
-    setFormData({ id: '', name: '', agent: '', agentId: '' });
-    // In a real app, you would POST to /api/clients and update AuthContext.
+    try {
+      const payload = {
+        id: formData.id.toLowerCase().replace(/\s+/g, '-'),
+        name: formData.name,
+        agentName: formData.agent || 'Default',
+        agentId: formData.agentId || 'default'
+      };
+
+      const res = await fetch(`${API}/api/clients`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (res.ok) {
+        const saved = await res.json();
+        setClients([...clients, {
+          ...saved,
+          initials: saved.name.substring(0, 2).toUpperCase(),
+          agent: saved.agentName,
+          agentId: saved.agentId
+        }]);
+        setShowModal(false);
+        setFormData({ id: '', name: '', agent: '', agentId: '' });
+      }
+    } catch (err) {
+      console.error("Failed to create client", err);
+    }
   };
 
   return (
