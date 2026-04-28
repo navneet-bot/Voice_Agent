@@ -13,3 +13,4 @@ edge-tts
 
 # lightweight audio handling (optional)
 miniaudio
+pipecat-ai

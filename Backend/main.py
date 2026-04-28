@@ -769,6 +769,7 @@ async def websocket_voice_demo(websocket: WebSocket):
     """
     # Accept FIRST (Issue 2)
     await websocket.accept()
+    print("Connected")
 
     agent_id    = websocket.query_params.get("agentId",  "default")
     client_id   = websocket.query_params.get("clientId", "global")
@@ -908,6 +909,7 @@ async def websocket_voice_demo(websocket: WebSocket):
         try:
             while True:
                 msg = await websocket.receive()
+                print("Received message")
                 if msg["type"] == "websocket.receive":
                     text = msg.get("text")
                     if text:
@@ -931,13 +933,15 @@ async def websocket_voice_demo(websocket: WebSocket):
                 elif msg["type"] == "websocket.disconnect":
                     break
         except WebSocketDisconnect:
-            pass
+            print("Client disconnected normally")
         except Exception as e:
+            print("WebSocket error:", e)
             logger.error("Voice Demo Reader Task Error: %s", e)
 
     try:
         await reader()
     finally:
+        print("Closing connection")
         # Tear down pipeline
         try:
             if source._process_task:
