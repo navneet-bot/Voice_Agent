@@ -204,8 +204,11 @@ async def health():
 
 # ── Frontend / Health ─────────────────────────────────────────────────────────
 @app.get("/")
-async def root():
-    return {"status": "ok"}
+async def serve_frontend():
+    frontend_path = os.path.join(os.path.dirname(__file__), "..", "Frontend", "index.html")
+    if os.path.exists(frontend_path):
+        return FileResponse(frontend_path)
+    return {"status": "ok", "message": "Voice Agent Backend is running."}
 
 @app.get("/audio-worklet-processor.js")
 async def serve_audio_worklet():
