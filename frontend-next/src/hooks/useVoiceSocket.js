@@ -140,13 +140,16 @@ export function useVoiceSocket(agentId, activeClient) {
         : `api/voice-live?agentId=${encodeURIComponent(agentId)}`;
 
       const API = process.env.NEXT_PUBLIC_API_URL || `http://${window.location.hostname}:8000`;
-      const wsUrl = `${API.replace(/^http/, 'ws')}/${endpoint}`;
+      const WS_URL = API.replace(/^http/, 'ws').replace(/\/$/, "");
+      const wsUrl = `${WS_URL}/${endpoint}`;
+      console.log("WS URL:", wsUrl);
       const socket = new WebSocket(wsUrl);
       socket.binaryType = 'arraybuffer';
       wsRef.current = socket;
       shouldReconnectRef.current = true;
 
       socket.onopen = async () => {
+        console.log("WebSocket connected");
         setIsConnected(true);
         setStatusText('🔴 Listening — speak now');
         
@@ -263,6 +266,7 @@ export function useVoiceSocket(agentId, activeClient) {
       };
 
       socket.onclose = () => {
+        console.log("WebSocket closed");
         setIsConnected(false);
         if (!shouldReconnectRef.current) {
           setStatusText('Session ended');
@@ -272,7 +276,8 @@ export function useVoiceSocket(agentId, activeClient) {
         reconnectTimeoutRef.current = setTimeout(() => connect(isDemo, leadName, true), 2000);
       };
       
-      socket.onerror = () => {
+      socket.onerror = (err) => {
+        console.error("WebSocket error", err);
         setStatusText('Voice server error.');
         disconnect();
       };
