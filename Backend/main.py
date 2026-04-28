@@ -711,16 +711,6 @@ async def websocket_voice_live(websocket: WebSocket):
     task        = PipelineTask(pipeline)
     runner_task = asyncio.create_task(runner.run(task))
 
-    # ── PRODUCTION FIX: boot pipeline greeting ────────────────────────────────
-    async def _boot_voice_live():
-        await asyncio.sleep(0.1)
-        try:
-            logger.info("[BOOT] voice-live: Pushing StartFrame to trigger greeting")
-            await source.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
-        except Exception as _be:
-            logger.error("[BOOT] voice-live: StartFrame injection failed: %s", _be)
-    asyncio.create_task(_boot_voice_live())
-
     async def reader():
         try:
             while True:
@@ -890,25 +880,7 @@ async def websocket_voice_demo(websocket: WebSocket):
             runner      = PipelineRunner()
             task        = PipelineTask(pipeline)
             runner_task = asyncio.create_task(runner.run(task))
-            logger.info("Voice Demo: Pipeline running — injecting StartFrame to boot greeting")
-
-            # ── PRODUCTION FIX: Explicitly boot the pipeline ──────────────────
-            # PipelineTask sends StartFrame internally, but only after runner.run()
-            # begins executing on the event loop. In production there is a race where
-            # the StartFrame never flows through VoiceLiveSource before the reader
-            # loop starts. We yield once, then push StartFrame directly through the
-            # source so the LLM greeting fires reliably on every connection.
-            async def _boot_pipeline():
-                await asyncio.sleep(0.1)  # let runner_task start
-                try:
-                    logger.info("[BOOT] Pushing StartFrame into source to trigger initial greeting")
-                    print("PIPELINE BOOT: Pushing StartFrame")
-                    await source.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
-                    logger.info("[BOOT] StartFrame pushed — LLM greeting should fire now")
-                except Exception as _boot_err:
-                    logger.error("[BOOT] StartFrame injection failed: %s", _boot_err)
-
-            asyncio.create_task(_boot_pipeline())
+            logger.info("Voice Demo: Pipeline running")
             pipeline_ok = True
         except Exception as _pipe_err:
             logger.exception("Voice Demo: Pipeline creation FAILED — %s", _pipe_err)
@@ -939,23 +911,6 @@ async def websocket_voice_demo(websocket: WebSocket):
     except Exception:
         pass
     logger.info("Voice Demo: Connected event sent — pipeline_ok=%s", pipeline_ok)
-
-    # ── FALLBACK GREETING (no pipeline / text-only mode) ──────────────────────
-    # If pipecat is unavailable, send a text greeting immediately so the frontend
-    # shows something and the user knows the session is live.
-    if not pipeline_ok:
-        try:
-            fallback_greeting = "Hello! I'm your real estate assistant. How can I help you today?"
-            await websocket.send_text(json.dumps({
-                "type":    "transcript",
-                "speaker": "agent",
-                "text":    fallback_greeting,
-            }))
-            logger.info("Voice Demo: Sent fallback text greeting (no pipeline)")
-            print("FALLBACK GREETING SENT")
-        except Exception as _fg_err:
-            logger.warning("Voice Demo: Fallback greeting failed: %s", _fg_err)
-
     print("Loop running")
 
     # ── HEARTBEAT TASK ─────────────────────────────────────────────────────────
