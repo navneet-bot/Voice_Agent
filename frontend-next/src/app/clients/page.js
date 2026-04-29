@@ -24,7 +24,8 @@ export default function ClientsPage() {
       .then(data => {
         // Merge with clientProfile if needed, or just use DB data
         // For now, let's just use DB data but add initials for UI
-        const formatted = data.map(c => ({
+        const dataArray = Array.isArray(data) ? data : [];
+        const formatted = dataArray.map(c => ({
           ...c,
           initials: c.name ? c.name.substring(0, 2).toUpperCase() : '??',
           agent: c.agentName || 'None',

@@ -19,9 +19,10 @@ export default function LogsPage() {
     fetch(`${API}/api/campaigns`)
       .then(r => r.ok ? r.json() : [])
       .then(data => {
-        setCampaigns(data);
-        if (data.length > 0) {
-          setSelectedCampaign(data[0].id);
+        const campaignsArray = Array.isArray(data) ? data : [];
+        setCampaigns(campaignsArray);
+        if (campaignsArray.length > 0) {
+          setSelectedCampaign(campaignsArray[0].id);
         }
         setLoading(false);
       })
@@ -37,7 +38,7 @@ export default function LogsPage() {
     fetch(`${API}/api/campaigns/${selectedCampaign}/results`)
       .then(r => r.ok ? r.json() : [])
       .then(data => {
-        setLogs(data);
+        setLogs(Array.isArray(data) ? data : []);
         setLoading(false);
       })
       .catch(e => {

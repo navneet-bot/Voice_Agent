@@ -19,9 +19,8 @@ export default function MyNumbers() {
       try {
         const API = process.env.NEXT_PUBLIC_API_URL || '';
         const res = await fetch(`${API}/api/telephony/numbers?client_id=${encodeURIComponent(activeClient)}`);
-        const json = await res.json();
         if (active) {
-          setNumbers(json);
+          setNumbers(Array.isArray(json) ? json : []);
           setLoading(false);
         }
       } catch (e) {
@@ -38,7 +37,7 @@ export default function MyNumbers() {
       const API = process.env.NEXT_PUBLIC_API_URL || '';
       const res = await fetch(`${API}/api/telephony/numbers/search?provider=${searchProvider}&country_code=${searchCountry}`, { method: 'POST' });
       const json = await res.json();
-      setSearchResults(json);
+      setSearchResults(Array.isArray(json) ? json : []);
     } catch (e) {
       setSearchResults([]);
     }

@@ -26,8 +26,14 @@ export default function CampaignsPage() {
         fetch(`${API}/api/campaigns`),
         fetch(`${API}/api/agents`)
       ]);
-      if (cRes.ok) setCampaigns(await cRes.json());
-      if (aRes.ok) setAgents(await aRes.json());
+      if (cRes.ok) {
+        const cData = await cRes.json();
+        setCampaigns(Array.isArray(cData) ? cData : []);
+      }
+      if (aRes.ok) {
+        const aData = await aRes.json();
+        setAgents(Array.isArray(aData) ? aData : []);
+      }
     } catch (err) {
       console.error('Failed to fetch data', err);
     } finally {

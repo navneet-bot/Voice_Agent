@@ -25,7 +25,7 @@ export default function CallResults() {
         const res = await fetch(`${API}/api/campaigns/default/results`);
         const json = await res.json();
         if (active) {
-          setLeads(json);
+          setLeads(Array.isArray(json) ? json : []);
           setLoading(false);
         }
       } catch (e) {
