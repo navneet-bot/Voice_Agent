@@ -17,7 +17,7 @@ export default function CampaignsPage() {
     leadsCsv: 'John Doe,+1234567890\nJane Smith,+0987654321'
   });
 
-  const API = process.env.NEXT_PUBLIC_API_URL || `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   const fetchData = async () => {
     setLoading(true);

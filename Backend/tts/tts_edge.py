@@ -58,17 +58,9 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
                     audio_buffer.extend(chunk["data"])
             return bytes(audio_buffer)
 
-        # Execute
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                new_loop = asyncio.new_event_loop()
-                mp3_bytes = new_loop.run_until_complete(_collect_mp3())
-                new_loop.close()
-            else:
-                mp3_bytes = loop.run_until_complete(_collect_mp3())
-        except RuntimeError:
-            mp3_bytes = asyncio.run(_collect_mp3())
+        # Execute — always use asyncio.run() since this function is called
+        # from a ThreadPoolExecutor where no event loop is running.
+        mp3_bytes = asyncio.run(_collect_mp3())
 
         if not mp3_bytes:
             yield b""

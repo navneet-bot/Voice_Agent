@@ -139,8 +139,11 @@ export function useVoiceSocket(agentId, activeClient) {
         ? `api/voice-demo?agentId=${encodeURIComponent(agentId)}&clientId=${clientId}&leadName=${encodedLead}`
         : `api/voice-live?agentId=${encodeURIComponent(agentId)}`;
 
-      const API = process.env.NEXT_PUBLIC_API_URL || `http://${window.location.hostname}:8000`;
-      const WS_URL = API.replace(/^http/, 'ws').replace(/\/$/, "");
+      // Build WebSocket URL from the backend API URL.
+      // In production, NEXT_PUBLIC_API_URL should be set to the Railway backend URL
+      // (e.g. https://your-app.up.railway.app). In dev, fall back to localhost:8000.
+      const API = process.env.NEXT_PUBLIC_API_URL || `http://localhost:8000`;
+      const WS_URL = API.replace(/^https/, 'wss').replace(/^http/, 'ws').replace(/\/$/, '');
       const wsUrl = `${WS_URL}/${endpoint}`;
       console.log("WS URL:", wsUrl);
       const socket = new WebSocket(wsUrl);

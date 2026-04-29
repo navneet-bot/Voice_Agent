@@ -19,7 +19,7 @@ export default function AgentsPage() {
     data_fields: 'interested, budget, location'
   });
 
-  const API = process.env.NEXT_PUBLIC_API_URL || `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   const fetchAgents = async () => {
     setLoading(true);

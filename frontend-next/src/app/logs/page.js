@@ -13,7 +13,7 @@ export default function LogsPage() {
   const [transcriptsCache, setTranscriptsCache] = useState({});
   const [loadingTranscript, setLoadingTranscript] = useState(false);
 
-  const API = process.env.NEXT_PUBLIC_API_URL || `http://${typeof window !== 'undefined' ? window.location.hostname : 'localhost'}:8000`;
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   useEffect(() => {
     fetch(`${API}/api/campaigns`)
