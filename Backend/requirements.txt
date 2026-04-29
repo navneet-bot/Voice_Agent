@@ -4,6 +4,7 @@ gunicorn
 httpx
 python-dotenv
 websockets
+pydantic
 
 # AI APIs
 groq
@@ -11,6 +12,11 @@ groq
 # TTS (cloud)
 edge-tts
 
-# lightweight audio handling (optional)
-miniaudio
+# Audio processing (REQUIRED for voice pipeline)
+numpy
+scipy
+soundfile
+
+# Pipeline orchestration
 pipecat-ai
+miniaudio
