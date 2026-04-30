@@ -42,7 +42,7 @@ except ImportError:
     CancelFrame = None
 
 from llm.llm import generate_response
-from llm.language_utils import LanguageTracker, analyze_user_text
+from llm.language_utils import LanguageTracker, analyze_user_text, localize_template
 from llm.state_manager import StateManager
 from llm.pipeline_logger import pipeline_logger
 from pipecat.frames.frames import StartFrame
@@ -237,7 +237,7 @@ class RealEstateLLMProcessor(FrameProcessor):
         except asyncio.TimeoutError:
             logger.warning("LLM Timeout — emitting system busy signal.")
             llm_failed = True
-            reply = "Give me just one moment..."
+            reply = localize_template("Give me just one moment...", self.current_language)
         except BaseException as exc:
             logger.error("[PIPELINE] LLM -> Generation error after STT handoff: %s", exc)
             llm_failed = True
@@ -248,13 +248,13 @@ class RealEstateLLMProcessor(FrameProcessor):
                     logger.warning("[PIPELINE] LLM -> State reset after terminal-state interrupt.")
                 except Exception:
                     pass
-            reply = self._fallback_reply
+            reply = localize_template(self._fallback_reply, self.current_language)
 
         # Only use fallback when the model actually failed.
         if not reply:
             if llm_failed:
                 logger.warning("[PIPELINE] LLM -> Empty reply after LLM failure, using fallback response.")
-                reply = self._fallback_reply
+                reply = localize_template(self._fallback_reply, self.current_language)
             else:
                 logger.warning("[PIPELINE] LLM -> Empty reply from state manager. Skipping fallback override.")
                 self.history.append({"role": "user", "content": user_text})

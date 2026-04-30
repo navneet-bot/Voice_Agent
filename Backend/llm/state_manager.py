@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from . import config as cfg
+from .language_utils import localize_template
 
 logger = logging.getLogger(__name__)
 
@@ -464,7 +465,12 @@ def _is_actionable(text: str) -> bool:
     return True
 
 
-def _resolve_response(node: dict[str, Any], data: dict[str, Any], user_text: str = "") -> str:
+def _resolve_response(
+    node: dict[str, Any],
+    data: dict[str, Any],
+    user_text: str = "",
+    language: str = "en",
+) -> str:
     """
     Return node["response"] with {{placeholders}} filled from data.
     Never returns an empty string.
@@ -495,7 +501,8 @@ def _resolve_response(node: dict[str, Any], data: dict[str, Any], user_text: str
             return str(val)
         return ""
 
-    resolved = re.sub(r"\{\{(\w+)\}\}", fill, template).strip()
+    localized_template = localize_template(template, language)
+    resolved = re.sub(r"\{\{(\w+)\}\}", fill, localized_template).strip()
     resolved = re.sub(r" +", " ", resolved)
     return resolved
 
@@ -557,6 +564,7 @@ class StateManager:
         self._session_ended: bool = False
         # Fallback escalation counters (Issue 6)
         self._fallback_counts: dict[str, int] = {}
+        self.active_language: str = "en"
         self.load_schema()
 
     def load_schema(self) -> None:
@@ -639,6 +647,10 @@ class StateManager:
         self._session_ended = False
         self._fallback_counts = {}
         self._whatsapp_sent = False
+        self.active_language = "en"
+
+    def set_active_language(self, language: str) -> None:
+        self.active_language = language or "en"
 
     def _trigger_whatsapp_if_needed(self, intent: str, next_node: dict[str, Any]) -> None:
         """Asynchronously triggers WhatsApp property details based on intent or node."""
@@ -763,7 +775,7 @@ class StateManager:
                 )
 
         _log("NOISE FILTERED", f"\"{user_text}\"")
-        response = _resolve_response(current_node, self.conversation_data, user_text)
+        response = _resolve_response(current_node, self.conversation_data, user_text, self.active_language)
         self._log_response(current_node, response)
         return response
 
@@ -777,7 +789,7 @@ class StateManager:
             return ""
         if allow_transition:
             return self.process_turn(user_text, None)
-        response = _resolve_response(node, self.conversation_data, user_text)
+        response = _resolve_response(node, self.conversation_data, user_text, self.active_language)
         self._log_response(node, response)
         return response
 
@@ -802,7 +814,7 @@ class StateManager:
         if current_node.get("type") == "end":
             _log("END NODE REACHED", "Conversation terminated gracefully.")
             self._session_ended = True
-            final_response = _resolve_response(current_node, self.conversation_data, self._last_user_text)
+            final_response = _resolve_response(current_node, self.conversation_data, self._last_user_text, self.active_language)
             self._last_node_id = self.current_node_id
             _log("RESPONSE", f'[JSON] "{final_response}"')
             _log("FINAL RESPONSE", f'"{final_response}"')
@@ -849,7 +861,7 @@ class StateManager:
                 if self.conversation_data.get(slot):
                     continue
                 if _is_vague_answer(user_text, slot):
-                    response = _get_guidance_response(slot)
+                    response = localize_template(_get_guidance_response(slot), self.active_language)
                     _log("VAGUE", f"Vague answer for '{slot}' - offering guidance")
                     self._last_node_id = self.current_node_id
                     return response
@@ -875,7 +887,7 @@ class StateManager:
             self._fallback_counts[node_id] = self._fallback_counts.get(node_id, 0) + 1
             _log("FALLBACK COUNT", f"{node_id} = {self._fallback_counts[node_id]}")
 
-        final_response = _resolve_response(next_node, self.conversation_data, self._last_user_text)
+        final_response = _resolve_response(next_node, self.conversation_data, self._last_user_text, self.active_language)
         _log("RESPONSE", f'[JSON] "{final_response}"')
 
         matched = _match_phrases_used(final_response, _PHRASE_BANK)
@@ -1449,7 +1461,6 @@ class StateManager:
         if any(phrase in clean_text for phrase in HANGUP_PHRASES):
             target = self.nodes.get("node-universal-disconnect")
             if target:
-                from flows.runtime import _log
                 _log("INTENT NORMALIZED", "Universal disconnect triggered by user")
                 return target
         has_goodbye = any(

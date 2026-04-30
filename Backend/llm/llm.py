@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -80,6 +81,12 @@ unclear_callback_time, unclear
 
 Rules:
 - Choose the single most specific intent
+- The user may speak in English, Hindi, or Hinglish. Understand romanized Hindi too.
+- Map natural Hindi/Hinglish phrases to the same schema:
+  - "investment ke liye", "nivesh ke liye" -> provide_intent with intent_value "invest"
+  - "khud ke liye", "apne liye", "rehne ke liye" -> provide_intent with intent_value "buy"
+  - "rent pe", "kiraye pe", "on rent" -> provide_intent with intent_value "rent"
+  - "budget 50 lakh", "50 lakh ke around", "mera budget 1 crore hai" -> extract budget
 - Confirmation words (yes, yeah, yep, correct, right, ok, okay, sure, go ahead) -> intent: "confirm"
 - Generic denial (no, nahi, nope, nah, not now, sorry no, no sorry) -> intent: "deny"
 - "wrong number", "wrong person", "not Prashant", "this is not" -> intent: "deny_identity"
@@ -98,6 +105,72 @@ Rules:
 - CRITICAL: "not really" or "no requirement" is "deny_interest"."""
 
 _EMPTY_INTENT = {"intent": "unclear", "entities": {}}
+
+_BUDGET_PATTERN = re.compile(
+    r"\b(?:budget|price|range|around|approx|approximately|mera budget|budget hai|budget is)?\s*"
+    r"(\d+(?:\.\d+)?)\s*(crore|crores|cr|lakh|lakhs|lac|lacs|thousand|k)\b",
+    re.IGNORECASE,
+)
+_BUY_HINTS = (
+    "khud ke liye", "apne liye", "rehne ke liye", "ghar ke liye", "for myself",
+    "for self", "self use", "personal use", "to live", "move in", "own use",
+)
+_INVEST_HINTS = (
+    "investment ke liye", "nivesh ke liye", "return ke liye", "invest karna",
+    "for investment", "investment", "invest", "roi", "rental income",
+)
+_RENT_HINTS = (
+    "rent pe", "kiraye pe", "kiraya", "on rent", "rent ke liye", "looking to rent",
+    "for rent", "to rent",
+)
+
+
+def _normalize_budget_unit(unit: str) -> str:
+    unit = unit.lower()
+    if unit in {"crores", "cr"}:
+        return "crore"
+    if unit in {"lakhs", "lac", "lacs"}:
+        return "lakh"
+    if unit == "k":
+        return "thousand"
+    return unit
+
+
+def _extract_budget_entity(user_text: str) -> str | None:
+    match = _BUDGET_PATTERN.search(user_text or "")
+    if not match:
+        return None
+    number = match.group(1)
+    unit = _normalize_budget_unit(match.group(2))
+    return f"{number} {unit}"
+
+
+def _enrich_intent_entities(user_text: str, intent: str, entities: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    clean_text = (user_text or "").strip().lower()
+    entities = dict(entities)
+
+    if not entities.get("budget"):
+        budget = _extract_budget_entity(user_text)
+        if budget:
+            entities["budget"] = budget
+            if intent == "unclear":
+                intent = "provide_budget"
+
+    if not entities.get("intent_value"):
+        if any(phrase in clean_text for phrase in _BUY_HINTS):
+            entities["intent_value"] = "buy"
+            if intent == "unclear":
+                intent = "provide_intent"
+        elif any(phrase in clean_text for phrase in _INVEST_HINTS):
+            entities["intent_value"] = "invest"
+            if intent == "unclear":
+                intent = "provide_intent"
+        elif any(phrase in clean_text for phrase in _RENT_HINTS):
+            entities["intent_value"] = "rent"
+            if intent == "unclear":
+                intent = "provide_intent"
+
+    return intent, entities
 
 
 async def _async_call_groq_api(
@@ -187,6 +260,7 @@ async def extract_intent(user_text: str) -> dict[str, Any]:
     if intent not in KNOWN_INTENTS:
         intent = "unclear"
 
+    intent, normalized_entities = _enrich_intent_entities(user_text, intent, normalized_entities)
     return {"intent": intent, "entities": normalized_entities}
 
 
@@ -319,12 +393,15 @@ async def generate_response(
     allow_transition: bool = True,
 ) -> str:
     """Async compatibility wrapper for the pipeline entry point."""
-    del conversation_history, language
+    del conversation_history
 
     if state_manager is None:
         from .state_manager import StateManager
 
         state_manager = StateManager("Updated_Real_Estate_Agent.json")
+
+    if getattr(state_manager, "set_active_language", None):
+        state_manager.set_active_language(language)
 
     if not allow_transition:
         return await asyncio.to_thread(state_manager.next_step, user_text, False)
