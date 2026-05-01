@@ -369,11 +369,15 @@ class DatabaseManager:
             try:
                 existing = conn.execute("SELECT id FROM campaigns WHERE id=?", (campaign_id,)).fetchone()
                 if existing:
+                    # Bug 4 fix: also update name and client_id so they are not silently dropped
                     conn.execute(
-                        """UPDATE campaigns SET status=?, agent_id=?, telephony_provider=?, started_at=?, completed_at=?
+                        """UPDATE campaigns
+                           SET status=?, agent_id=?, client_id=COALESCE(?, client_id),
+                               name=COALESCE(?, name), telephony_provider=?, started_at=?, completed_at=?
                            WHERE id=?""",
                         (
                             data.get("status"), data.get("agent_id"),
+                            data.get("client_id"), data.get("name"),
                             data.get("telephony_provider"), data.get("started_at"),
                             data.get("completed_at"), campaign_id,
                         )
@@ -462,26 +466,31 @@ class DatabaseManager:
             try:
                 import uuid as _uuid
                 rid = str(_uuid.uuid4())
+                # Bug 3 fix: derive a stable lead_id from campaign+phone so transcript
+                # lookups via /api/results/{leadId}/transcript work correctly.
+                phone = result.get("phone", "")
+                lead_id = f"{campaign_id}_{phone}" if phone else rid
                 lead_data_json = json.dumps(result.get("lead_data", {}))
                 callback_value = (
                     result.get("callback")
                     or result.get("timeline")
                     or result.get("callback_time")
                 )
-                
-                # Check if lead_data column exists, if not add it dynamically for backwards compat
+
+                # Ensure lead_data column exists (backwards compat)
                 try:
                     conn.execute("ALTER TABLE call_results ADD COLUMN lead_data TEXT")
                 except sqlite3.OperationalError:
-                    pass # Column already exists
-                    
+                    pass  # Column already exists
+
                 conn.execute(
                     """INSERT INTO call_results
-                       (id, campaign_id, lead_name, phone, called_at, duration, status,
+                       (id, campaign_id, lead_id, lead_name, phone, called_at, duration, status,
                         outcome, interested, budget, callback_time, transcription, provider, processed, lead_data)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        rid, campaign_id, result.get("name"), result.get("phone"),
+                        rid, campaign_id, lead_id,
+                        result.get("name"), result.get("phone"),
                         result.get("calledAt"), result.get("duration"),
                         result.get("status", "Connected"), result.get("outcome"),
                         result.get("interested"), result.get("budget"),
