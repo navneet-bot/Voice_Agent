@@ -435,8 +435,29 @@ async def twilio_twiml(call_id: str, request: Request):
 @app.websocket("/telephony/stream/{call_id}")
 async def twilio_stream(websocket: WebSocket, call_id: str):
     from telephony.twilio_handler import handle_twilio_stream
-    agent_schema_path = _resolve_schema("default")
-    await handle_twilio_stream(websocket, call_id=call_id, agent_schema_path=agent_schema_path, ws_manager=ws_manager)
+    from ws_hub import call_registry
+
+    # Resolve per-call context registered by agent_runner.run_campaign()
+    # Falls back gracefully for inbound/unknown calls.
+    meta = call_registry.get(call_id) or {}
+    agent_schema_path = meta.get("agent_schema_path") or _resolve_schema("default")
+
+    try:
+        await handle_twilio_stream(
+            websocket,
+            call_id=call_id,
+            agent_schema_path=agent_schema_path,
+            ws_manager=ws_manager,
+            db=db,
+            campaign_id=meta.get("campaign_id", ""),
+            lead_id=call_id,
+            lead_name=meta.get("lead_name", "Lead"),
+            phone=meta.get("phone", ""),
+            client_id=meta.get("client_id", "global"),
+        )
+    finally:
+        # Always clean up the registry entry even if the handler raises
+        call_registry.clear(call_id)
 
 
 # ── WebSocket Dashboard Hub ───────────────────────────────────────────────────

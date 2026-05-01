@@ -133,3 +133,36 @@ class WebSocketManager:
 
 # Singleton instance shared across the entire app
 ws_manager = WebSocketManager()
+
+
+class CallSessionRegistry:
+    """
+    In-process registry: call_id → Twilio session metadata.
+
+    Populated by agent_runner.run_campaign() BEFORE provider.initiate_call()
+    so that the /telephony/stream/{call_id} WebSocket handler can look up
+    the campaign context and persist the call result when the stream ends.
+
+    Thread-safe: plain dict, all mutations happen in the asyncio event loop.
+    """
+
+    def __init__(self):
+        self._sessions: dict[str, dict] = {}
+
+    def register(self, call_id: str, meta: dict) -> None:
+        """Store metadata for an in-flight call."""
+        self._sessions[call_id] = meta
+        logger.info("CallRegistry: registered call_id=%s campaign=%s", call_id, meta.get("campaign_id"))
+
+    def get(self, call_id: str) -> dict | None:
+        """Return metadata or None if the call_id is unknown (e.g. inbound call)."""
+        return self._sessions.get(call_id)
+
+    def clear(self, call_id: str) -> None:
+        """Remove the entry once the stream handler has finished."""
+        self._sessions.pop(call_id, None)
+        logger.info("CallRegistry: cleared call_id=%s", call_id)
+
+
+# Singleton instance shared across the entire app
+call_registry = CallSessionRegistry()

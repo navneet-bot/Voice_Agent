@@ -5,6 +5,13 @@ Handles:
   - Twilio Media Streams (bidirectional audio WebSocket)
   - TwiML webhook endpoint
   - Inbound μ-law 8kHz audio → Pipecat pipeline → 8kHz PCM back to Twilio
+
+v2.2 changes:
+  - handle_twilio_stream() now accepts db, ws_manager, campaign_id, lead_id,
+    lead_name, phone, client_id so it can persist the call result to SQLite
+    and broadcast call_completed via WebSocket when the stream ends.
+  - _persist_call_result() extracts state_manager.conversation_data and
+    llm.history from the live pipeline objects after cleanup.
 """
 
 from __future__ import annotations
@@ -14,6 +21,7 @@ import base64
 import json
 import logging
 import os
+from datetime import datetime
 
 import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
@@ -82,15 +90,26 @@ async def handle_twilio_stream(
     call_id: str,
     agent_schema_path: str,
     ws_manager=None,
+    db=None,
     campaign_id: str = "",
     lead_id: str = "",
+    lead_name: str = "Lead",
+    phone: str = "",
+    client_id: str = "global",
 ):
     """
     Main Twilio Media Streams WebSocket handler.
     Called for each active call — creates an isolated Pipecat pipeline.
+
+    After the call ends (stop event or disconnect) the conversation data
+    is extracted from the live LLM processor and persisted to the database.
+    A call_completed WebSocket event is also broadcast to the dashboard.
     """
     await websocket.accept()
-    logger.info("[TWILIO] Stream connected — call_id=%s", call_id)
+    logger.info(
+        "[TWILIO] Stream connected — call_id=%s campaign=%s lead=%s",
+        call_id, campaign_id, lead_name
+    )
 
     from flows.runtime import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
     from llm.state_manager import StateManager
@@ -102,7 +121,7 @@ async def handle_twilio_stream(
     # Load agent schema FRESH from disk on every call (auto-reload)
     if os.path.exists(agent_schema_path):
         llm.state_manager = StateManager(agent_schema_path)
-    
+
     tts = RealEstateTTSProcessor()
     sink = TwilioSink(websocket, call_id=call_id, ws_manager=ws_manager)
 
@@ -111,6 +130,17 @@ async def handle_twilio_stream(
     task = PipelineTask(pipeline)
     runner_task = asyncio.create_task(runner.run(task))
     queue_task = asyncio.create_task(source.run_queue_loop())
+
+    # Emit ringing/connected events for dashboard live feed
+    if ws_manager and campaign_id:
+        try:
+            await ws_manager.send_call_event(
+                "call_connected",
+                campaign_id=campaign_id, lead_id=lead_id, lead_name=lead_name,
+                status="Connected", provider="twilio", client_id=client_id,
+            )
+        except Exception as e:
+            logger.warning("[TWILIO] WS connected event failed: %s", e)
 
     try:
         while True:
@@ -150,6 +180,94 @@ async def handle_twilio_stream(
         except (asyncio.CancelledError, Exception):
             pass
         logger.info("[TWILIO] Pipeline cleanup complete — call_id=%s", call_id)
+
+        # ── Persist call result to DB ─────────────────────────────────────────
+        # This is the critical step that was missing before v2.2.
+        # We always attempt a persist if we have both db and a campaign_id.
+        if db and campaign_id:
+            await _persist_call_result(
+                db=db,
+                ws_manager=ws_manager,
+                llm=llm,
+                campaign_id=campaign_id,
+                lead_id=lead_id or call_id,
+                lead_name=lead_name,
+                phone=phone,
+                client_id=client_id,
+            )
+
+
+async def _persist_call_result(
+    db,
+    ws_manager,
+    llm,
+    campaign_id: str,
+    lead_id: str,
+    lead_name: str,
+    phone: str,
+    client_id: str,
+) -> None:
+    """
+    Extract conversation_data from the live LLM processor's StateManager and
+    write a completed call result row to SQLite. Then broadcast call_completed.
+
+    This mirrors exactly what DemoCallEngine._build_result() produces so that
+    the frontend results page treats Twilio and demo calls identically.
+    """
+    try:
+        sm = getattr(llm, "state_manager", None)
+        data: dict = {}
+        if sm:
+            data = getattr(sm, "conversation_data", {}) or {}
+
+        history: list[dict] = getattr(llm, "history", []) or []
+        turns = len(history) // 2  # each turn = 1 user + 1 assistant msg
+
+        interested = "Yes" if (data.get("location") or data.get("intent_value")) else "No"
+        callback_val = data.get("timeline") or data.get("callback") or "—"
+
+        result = {
+            "name":          lead_name,
+            "phone":         phone,
+            "calledAt":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "duration":      f"{turns * 12}s",
+            "status":        "Connected",
+            "interested":    interested,
+            "budget":        data.get("budget", "—"),
+            "callback":      callback_val,
+            "location":      data.get("location", "—"),
+            "transcription": history,
+            "provider":      "twilio",
+            "processed":     True,
+            "lead_data":     data,
+        }
+
+        await db.append_call_result(campaign_id, result)
+        await db.update_live_state(
+            lead_id, campaign_id, lead_name,
+            "Completed", "Call ended", history, "twilio"
+        )
+        logger.info(
+            "[TWILIO] Result persisted — campaign=%s lead=%s turns=%d interested=%s",
+            campaign_id, lead_name, turns, interested
+        )
+
+        # Broadcast call_completed so the dashboard live feed updates
+        if ws_manager:
+            await ws_manager.send_call_event(
+                "call_completed",
+                campaign_id=campaign_id,
+                lead_id=lead_id,
+                lead_name=lead_name,
+                status="Completed",
+                snippet="Call ended",
+                transcripts=history,
+                result=result,
+                provider="twilio",
+                client_id=client_id,
+            )
+    except Exception as e:
+        logger.error("[TWILIO] _persist_call_result error: %s", e)
 
 
 def build_twiml(stream_url: str) -> str:

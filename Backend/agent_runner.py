@@ -69,7 +69,7 @@ async def run_campaign(
     """
     # Late import to avoid circular dependencies
     from db.db_manager import db
-    from ws_hub import ws_manager
+    from ws_hub import ws_manager, call_registry
     from llm.state_manager import StateManager
     from llm.llm import generate_response
 
@@ -105,6 +105,15 @@ async def run_campaign(
         )
         await db.update_live_state(lead_uid, campaign_id, lead_name, "Ringing...", provider=telephony_provider)
 
+        # ── Register call in registry so stream handler can resolve context ──
+        call_registry.register(lead_uid, {
+            "campaign_id":       campaign_id,
+            "lead_name":         lead_name,
+            "phone":             phone,
+            "client_id":         client_id,
+            "agent_schema_path": agent_schema_path,
+        })
+
         # ── Initiate real call if provider configured ──────────────────────
         if provider and phone:
             phone_numbers = await db.list_phone_numbers()
@@ -113,8 +122,8 @@ async def run_campaign(
                 webhook_base = os.getenv("WEBHOOK_BASE_URL", "http://localhost:3000")
                 call_result = await provider.initiate_call(phone, from_number, lead_uid, webhook_base)
                 logger.info("Provider call initiated: %s", call_result)
-                # For real calls, the Twilio/VoBiz webhook handles the rest
-                # Just update status and move to next lead
+                # For real calls, the Twilio/VoBiz webhook handles the rest.
+                # The stream handler will persist the result via call_registry.
                 await db.update_live_state(
                     lead_uid, campaign_id, lead_name,
                     "Connecting...", provider=telephony_provider
@@ -195,18 +204,19 @@ async def run_campaign(
         # ── Record result ──────────────────────────────────────────────────
         data = getattr(state_manager, "conversation_data", {}) or {}
         result = {
-            "name": lead_name,
-            "phone": phone,
-            "calledAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "duration": f"{turns * 12}s",
-            "status": "Connected",
-            "interested": "Yes" if data.get("location") else "No",
-            "budget": data.get("budget", "—"),
-            "callback": data.get("timeline", "—"),
-            "location": data.get("location", "—"),
+            "name":         lead_name,
+            "phone":        phone,
+            "calledAt":     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "duration":     f"{turns * 12}s",
+            "status":       "Connected",
+            "interested":   "Yes" if data.get("location") else "No",
+            "budget":       data.get("budget", "—"),
+            "callback":     data.get("timeline", "—"),
+            "location":     data.get("location", "—"),
             "transcription": transcripts,
-            "provider": telephony_provider,
-            "processed": True,
+            "provider":     telephony_provider,
+            "processed":    True,
+            "lead_data":    data,
         }
         await db.append_call_result(campaign_id, result)
         await db.update_live_state(
