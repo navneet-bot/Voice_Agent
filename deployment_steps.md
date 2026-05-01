@@ -5,16 +5,19 @@ This guide provides instructions for deploying the restructured Voice Agent Plat
 ## 1. Project Structure
 
 The project is now organized into two main directories:
-- **`Frontend/`**: Contains the web interface (`index.html`).
+- **`frontend-next/`**: Contains the Next.js web interface.
 - **`Backend/`**: Contains the FastAPI server, speech processing logic, and databases.
 
 ## 2. Local Deployment (Manual)
 
 ### Prerequisites
 - Python 3.10+
+- Node.js 18+
 - FFmpeg installed on your system (for audio processing)
 
 ### Setup Steps
+
+#### Backend
 1. **Navigate to the Backend directory**:
    ```bash
    cd Backend
@@ -28,17 +31,32 @@ The project is now organized into two main directories:
 3. **Configure Environment Variables**:
    Update the `.env` file in the `Backend/` directory with your API keys:
    - `GROQ_API_KEY`
-   - `ELEVENLABS_API_KEY` (if using ElevenLabs)
-   - Other keys as required by your specific flows.
+   - `PLATFORM_API_KEY` (if required)
 
 4. **Run the Server**:
    ```bash
-   python server.py
+   python main.py
    ```
-   The server will start at `http://localhost:3000`.
+   The backend will start at `http://localhost:8000`.
 
-5. **Access the Platform**:
-   Open your browser and go to `http://localhost:3000`. The backend will automatically serve the frontend from the `Frontend/` directory.
+#### Frontend
+1. **Navigate to the frontend-next directory**:
+   ```bash
+   cd frontend-next
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+3. **Run the Dashboard**:
+   ```bash
+   npm run dev
+   ```
+   The frontend will start at `http://localhost:3000`.
+
+---
 
 ## 3. Docker Deployment (Recommended)
 
@@ -53,13 +71,15 @@ The project is now organized into two main directories:
    ```
 
 2. **Access the Platform**:
-   The application will be available at `http://localhost:3000`.
+   The application dashboard will be available at `http://localhost:3000`.
 
 ### Key Docker configurations:
 - The **DB volume** is mapped to `./Backend/db` on your host machine to ensure data persistence.
 - The **Environment variables** are passed through the `docker-compose.yml` or your system environment.
 
+---
+
 ## 4. Troubleshooting
-- **Frontend not loading**: Ensure the path in `Backend/server.py` correctly points to `../Frontend/index.html`.
+- **API Connection Errors**: Ensure the `NEXT_PUBLIC_API_URL` in your frontend environment matches the backend URL (e.g., `http://localhost:8000`).
 - **Audio issues**: Ensure FFmpeg is installed and accessible in the system path or within the Docker container.
-- **WebSocket Disconnection**: Check if the backend is running and the port 3000 is open and not blocked by a firewall.
+- **WebSocket Disconnection**: Check if the backend is running and the port 8000 is open and not blocked by a firewall.

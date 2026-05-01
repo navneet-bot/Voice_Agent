@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from . import config as cfg
+from .conversation_response import should_answer_user_question
+from .llm_response_generator import TurnResult
 from .language_utils import localize_template
 
 logger = logging.getLogger(__name__)
@@ -465,19 +467,21 @@ def _is_actionable(text: str) -> bool:
     return True
 
 
-def _resolve_response(
+def _detect_user_question(user_text: str) -> str | None:
+    """Return question type if user is asking a meta-question, else None."""
+    if should_answer_user_question(user_text):
+        from .conversation_response import _detect_user_question as _detect
+        return _detect(user_text)
+    return None
+
+
+def _resolve_template(
     node: dict[str, Any],
     data: dict[str, Any],
-    user_text: str = "",
     language: str = "en",
 ) -> str:
-    """
-    Return node["response"] with {{placeholders}} filled from data.
-    Never returns an empty string.
-    """
-    del user_text
-    node_id = str(node.get("id") or "")
-    template = OPENING_NODE_RESPONSES.get(node_id, node.get("response"))
+    """Fill {{placeholders}} in a node's template response. No LLM. No generation logic."""
+    template = OPENING_NODE_RESPONSES.get(str(node.get("id") or ""), node.get("response"))
     missing_slot_responses = node.get("missing_slot_responses")
     if isinstance(missing_slot_responses, dict):
         collects = node.get("collects")
@@ -497,14 +501,65 @@ def _resolve_response(
             val = data.get("name") or data.get("lead_name") or data.get("lead") or "Prashant"
         else:
             val = data.get(key)
-        if val:
-            return str(val)
-        return ""
+        return str(val) if val else ""
 
     localized_template = localize_template(template, language)
     resolved = re.sub(r"\{\{(\w+)\}\}", fill, localized_template).strip()
     resolved = re.sub(r" +", " ", resolved)
     return resolved
+
+
+_FILLER_OPENERS = (
+    "sure,",
+    "sure -",
+    "sure —",
+    "great,",
+    "great -",
+    "great —",
+    "absolutely,",
+    "absolutely -",
+    "absolutely —",
+)
+
+
+def _enforce_single_question(text: str) -> str:
+    question_count = text.count("?")
+    if question_count <= 1:
+        return text
+    first_seen = False
+    chars: list[str] = []
+    for ch in text:
+        if ch == "?":
+            if first_seen:
+                chars.append(".")
+            else:
+                chars.append("?")
+                first_seen = True
+        else:
+            chars.append(ch)
+    return "".join(chars)
+
+
+def _remove_filler_openers(text: str) -> str:
+    cleaned = text.strip()
+    lowered = cleaned.lower()
+    for filler in _FILLER_OPENERS:
+        if lowered.startswith(filler):
+            cleaned = cleaned[len(filler):].lstrip(" ,.-—")
+            break
+    return cleaned
+
+
+def _finalize_response_text(text: str) -> str:
+    """Apply production response constraints before TTS."""
+    if not text or not text.strip():
+        return text
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    cleaned = _remove_filler_openers(cleaned)
+    cleaned = _enforce_single_question(cleaned)
+    cleaned = _truncate_response(cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +620,17 @@ class StateManager:
         # Fallback escalation counters (Issue 6)
         self._fallback_counts: dict[str, int] = {}
         self.active_language: str = "en"
+        # Anti-repetition: track what questions have been asked
+        self._asked_flags: dict[str, bool] = {
+            "availability": False,
+            "intent": False,
+            "location": False,
+            "budget": False,
+            "visit_time": False,
+            "callback_time": False,
+            "property_type": False,
+        }
+        self._last_response: str = ""
         self.load_schema()
 
     def load_schema(self) -> None:
@@ -648,6 +714,46 @@ class StateManager:
         self._fallback_counts = {}
         self._whatsapp_sent = False
         self.active_language = "en"
+        self._asked_flags = {k: False for k in self._asked_flags}
+        self._last_response = ""
+
+    def _record_asked(self, node_id: str) -> None:
+        """Mark the question type for a node as asked."""
+        _FLAG_MAP = {
+            "node-1735264873079": "availability",
+            "node-1735970090937": "availability",
+            "node-1735264921453": "intent",
+            "fallback_intent": "intent",
+            "node-1735267546732": "location",  # also budget but tracked via context
+            "fallback_location": "location",
+            "fallback_budget": "budget",
+            "node-1735265015507": "visit_time",
+            "fallback_visit_datetime": "visit_time",
+            "node-1736492391269": "callback_time",
+            "fallback_callback_time": "callback_time",
+            "node-1767420514711": "property_type",
+            "fallback_property_type": "property_type",
+        }
+        flag = _FLAG_MAP.get(node_id)
+        if flag:
+            self._asked_flags[flag] = True
+            _log("ASKED FLAG", f"{flag} = True")
+
+    def _build_turn_result(self, node: dict[str, Any], **kwargs: Any) -> TurnResult:
+        """Build a TurnResult with asked_flags and last_response always included."""
+        return TurnResult(
+            node=node,
+            context=dict(self.conversation_data),
+            language=self.active_language,
+            asked_flags=dict(self._asked_flags),
+            last_response=self._last_response,
+            **kwargs,
+        )
+
+    def record_response(self, response: str) -> None:
+        """Called after response generation to update last_response for anti-repetition."""
+        if response and response.strip():
+            self._last_response = response.strip()
 
     def set_active_language(self, language: str) -> None:
         self.active_language = language or "en"
@@ -743,17 +849,18 @@ class StateManager:
             self.current_node_id = self.start_node_id
             self._last_node_id = self.current_node_id
 
-    def process_noise_turn(self, user_text: str) -> str:
+    def execute_noise_transition(self, user_text: str) -> TurnResult:
+        """Handle noise/non-actionable input. Returns TurnResult (no response)."""
         self._reactivate_if_needed(user_text)
         if self._session_ended:
             _log("SESSION ENDED", "Ignoring further input")
-            return ""
+            return self._build_turn_result({}, is_terminal=True, user_input=user_text)
         self._last_user_text = user_text or ""
         _log("STT", f"\"{user_text}\"")
 
         current_node = self.get_current_node()
         if not current_node:
-            return ""
+            return self._build_turn_result({}, is_terminal=True, user_input=user_text)
 
         # Recover callback scheduling even when intent extraction is unavailable.
         node_id = current_node.get("id")
@@ -768,36 +875,47 @@ class StateManager:
             has_callback_number = any(char.isdigit() for char in clean_text)
             if has_callback_time_hint or has_callback_number:
                 timeline = self._synthesize_callback_timeline((user_text or "").strip())
-                _log("NOISE RECOVERY", f'Callback time detected in low-confidence turn -> "{timeline}"')
-                return self.process_turn(
+                _log("NOISE RECOVERY", f'Callback time detected -> "{timeline}"')
+                return self.execute_transition(
                     user_text,
                     {"intent": "provide_timeline", "entities": {"timeline": timeline}},
                 )
 
         _log("NOISE FILTERED", f"\"{user_text}\"")
-        response = _resolve_response(current_node, self.conversation_data, user_text, self.active_language)
-        self._log_response(current_node, response)
-        return response
+        return self._build_turn_result(
+            current_node, user_input=user_text, response_type="noise_repeat",
+        )
 
-    def next_step(self, user_text: str = "", allow_transition: bool = True) -> str:
+    def execute_greeting_transition(self, user_text: str = "") -> TurnResult:
+        """Return TurnResult for the greeting/current node without transitioning."""
         self._reactivate_if_needed(user_text)
-        if self._session_ended:
-            _log("SESSION ENDED", "Ignoring further input")
-            return ""
         node = self.get_current_node()
         if not node:
-            return ""
-        if allow_transition:
-            return self.process_turn(user_text, None)
-        response = _resolve_response(node, self.conversation_data, user_text, self.active_language)
-        self._log_response(node, response)
-        return response
+            return self._build_turn_result({}, is_terminal=True, user_input=user_text)
+        self._record_asked(node.get("id", ""))
+        return self._build_turn_result(
+            node, user_input=user_text, response_type="greeting",
+        )
 
-    def process_turn(self, user_text: str, intent_data: Optional[dict[str, Any]]) -> str:
+    def execute_transition(self, user_text: str, intent_data: Optional[dict[str, Any]]) -> TurnResult:
+        """Execute a state transition and return TurnResult.
+
+        This is the CORE method. It handles:
+        - STT normalization
+        - User question detection
+        - Intent normalization
+        - Entity extraction and merging
+        - Node transition
+        - Auto-advance through skip edges
+
+        It does NOT generate any response text. That's LLMResponseGenerator's job.
+        """
         self._reactivate_if_needed(user_text)
         if self._session_ended:
             _log("SESSION ENDED", "Ignoring further input")
-            return ""
+            return self._build_turn_result(
+                self.get_current_node() or {}, is_terminal=True, user_input=user_text,
+            )
 
         self._last_user_text = user_text or ""
         _log("STT", f"\"{user_text}\"")
@@ -809,27 +927,40 @@ class StateManager:
 
         current_node = self.get_current_node()
         if not current_node:
-            return ""
+            return self._build_turn_result({}, is_terminal=True, user_input=user_text)
 
+        # ── User is asking a meta-question → stay on current node ────────
+        user_question = _detect_user_question(user_text)
+        if user_question:
+            _log("STATE", f"{current_node['id']} unchanged (user question: {user_question})")
+            self._last_node_id = self.current_node_id
+            return self._build_turn_result(
+                current_node, user_input=user_text, user_question=user_question,
+            )
+
+        # ── End node → terminal ──────────────────────────────────────────
         if current_node.get("type") == "end":
             _log("END NODE REACHED", "Conversation terminated gracefully.")
             self._session_ended = True
-            final_response = _resolve_response(current_node, self.conversation_data, self._last_user_text, self.active_language)
             self._last_node_id = self.current_node_id
-            _log("RESPONSE", f'[JSON] "{final_response}"')
-            _log("FINAL RESPONSE", f'"{final_response}"')
-            return final_response.strip()
+            return self._build_turn_result(
+                current_node, user_input=self._last_user_text, is_terminal=True,
+            )
 
+        # ── Hostile input → deescalation ─────────────────────────────────
         if HOSTILE_DETECTION_ENABLED and _is_hostile(user_text):
-            _log("TONE", "Hostile input detected - applying de-escalation response")
-            response = DEESCALATION_RESPONSES[self._deescalation_index]
+            _log("TONE", "Hostile input detected")
             self._deescalation_index = (self._deescalation_index + 1) % len(DEESCALATION_RESPONSES)
             self._last_node_id = self.current_node_id
-            return response
+            return self._build_turn_result(
+                current_node, user_input=user_text, response_type="deescalation",
+            )
 
+        # ── No intent data → noise ──────────────────────────────────────
         if intent_data is None:
-            return self.process_noise_turn(user_text)
+            return self.execute_noise_transition(user_text)
 
+        # ── Intent processing ────────────────────────────────────────────
         intent = str(intent_data.get("intent") or "unclear").strip() or "unclear"
         entities = intent_data.get("entities") or {}
         if not isinstance(entities, dict):
@@ -846,26 +977,28 @@ class StateManager:
         _log("INTENT", self._format_intent_log(intent, entities))
         self._merge_entities(entities, intent=intent)
 
-        # If the user provided a callback time while on callback fallback,
-        # re-enter callback scheduling and resolve immediately in the same turn.
+        # Callback time recovery from fallback
         if current_node.get("id") == "fallback_callback_time" and intent == "provide_timeline":
             resume_node_id = self._first_destination(current_node)
             resume_node = self.nodes.get(resume_node_id) if resume_node_id else None
             if resume_node:
-                _log("STATE", f"{current_node['id']} -> {resume_node['id']} (resume callback with provided time)")
+                _log("STATE", f"{current_node['id']} -> {resume_node['id']} (resume callback)")
                 current_node = resume_node
 
+        # Vague detection
         if VAGUE_DETECTION_ENABLED:
             collect_slots = self._collect_slots(current_node)
             for slot in collect_slots:
                 if self.conversation_data.get(slot):
                     continue
                 if _is_vague_answer(user_text, slot):
-                    response = localize_template(_get_guidance_response(slot), self.active_language)
-                    _log("VAGUE", f"Vague answer for '{slot}' - offering guidance")
+                    _log("VAGUE", f"Vague answer for '{slot}'")
                     self._last_node_id = self.current_node_id
-                    return response
+                    return self._build_turn_result(
+                        current_node, user_input=user_text,
+                    )
 
+        # ── Resolve next node ────────────────────────────────────────────
         if intent in {"confirm"} or intent in ALL_DENY_INTENTS:
             _log("STATE", "Confirmation handled via edge")
             next_node, bypass_guard = self._handle_confirmation(current_node, intent)
@@ -887,34 +1020,69 @@ class StateManager:
             self._fallback_counts[node_id] = self._fallback_counts.get(node_id, 0) + 1
             _log("FALLBACK COUNT", f"{node_id} = {self._fallback_counts[node_id]}")
 
-        final_response = _resolve_response(next_node, self.conversation_data, self._last_user_text, self.active_language)
-        _log("RESPONSE", f'[JSON] "{final_response}"')
-
-        matched = _match_phrases_used(final_response, _PHRASE_BANK)
-        if matched:
-            _log("JSON PHRASES USED", "; ".join(f'"{p}"' for p in matched[:5]))
-
-        _log("FINAL RESPONSE", f'"{final_response}"')
-
+        is_terminal = False
         if next_node.get("type") == "end":
             _log("END NODE REACHED", "Conversation terminated gracefully.")
             self._session_ended = True
-            self._last_node_id = self.current_node_id
-            return final_response.strip()
+            is_terminal = True
 
-        if next_node["id"] in AUTO_ADVANCE_NODES:
+        # Auto-advance through skip edges
+        if not is_terminal and next_node["id"] in AUTO_ADVANCE_NODES:
             terminal = self._auto_advance_skip_edges(next_node)
             if terminal and terminal["id"] != next_node["id"]:
                 self.current_node_id = terminal["id"]
                 self.visited_nodes.add(terminal["id"])
                 if terminal.get("type") == "end":
-                    _log("END NODE REACHED", f"Auto-advanced through skip edges -> {terminal['id']}")
+                    _log("END NODE REACHED", f"Auto-advanced -> {terminal['id']}")
                     self._session_ended = True
-                    self._last_node_id = self.current_node_id
-                    return final_response.strip()
+                    is_terminal = True
 
         self._last_node_id = self.current_node_id
-        return final_response.strip()
+        self._record_asked(next_node["id"])
+        _log("STATE", f"Transition complete -> {next_node['id']}")
+
+        return self._build_turn_result(
+            next_node, user_input=self._last_user_text, is_terminal=is_terminal,
+        )
+
+    # ── Backward-compatible wrappers (call execute_transition + generate response) ──
+
+    def process_noise_turn(self, user_text: str) -> str:
+        """DEPRECATED: Use execute_noise_transition() + LLMResponseGenerator instead."""
+        turn = self.execute_noise_transition(user_text)
+        if not turn.node:
+            return ""
+        from .llm_response_generator import generate_response_for_turn_sync
+        response = generate_response_for_turn_sync(turn)
+        self.record_response(response)
+        self._log_response(turn.node, response)
+        return _finalize_response_text(response)
+
+    def next_step(self, user_text: str = "", allow_transition: bool = True) -> str:
+        """DEPRECATED: Use execute_greeting_transition() + LLMResponseGenerator instead."""
+        self._reactivate_if_needed(user_text)
+        if self._session_ended:
+            return ""
+        if allow_transition:
+            return self.process_turn(user_text, None)
+        turn = self.execute_greeting_transition(user_text)
+        from .llm_response_generator import generate_response_for_turn_sync
+        response = generate_response_for_turn_sync(turn)
+        self.record_response(response)
+        self._log_response(turn.node, response)
+        return _finalize_response_text(response)
+
+    def process_turn(self, user_text: str, intent_data: Optional[dict[str, Any]]) -> str:
+        """DEPRECATED: Use execute_transition() + LLMResponseGenerator instead."""
+        turn = self.execute_transition(user_text, intent_data)
+        if not turn.node:
+            return ""
+        from .llm_response_generator import generate_response_for_turn_sync
+        response = generate_response_for_turn_sync(turn)
+        self.record_response(response)
+        _log("FINAL RESPONSE", f'"{response}"')
+        self._last_node_id = self.current_node_id
+        return _finalize_response_text(response).strip()
 
     def _resolve_by_intent(self, current_node: dict[str, Any], intent: str, raw_intent: str = "") -> dict[str, Any]:
         """Resolve next node strictly from current node edges."""
@@ -1245,14 +1413,9 @@ class StateManager:
             and ("about" in clean_words or "call" in clean_words or "calling" in clean_words)
         )
 
-        # Flow-safe purpose clarification handling:
-        # - At greeting: route to availability-check edge (confirm_identity destination)
-        # - At availability check: route to re-engage edge (busy/reject-now destination)
         node_id = current_node.get("id")
-        if asks_call_purpose and node_id == "node-1767592854176":
-            return "confirm_identity"
-        if asks_call_purpose and node_id == "node-1735264873079":
-            return "deny_time"
+        if asks_call_purpose:
+            return intent
 
         # ── buyer_requirements_ready: auto-transition when both location+budget collected ──
         if node_id == "node-1735267546732":

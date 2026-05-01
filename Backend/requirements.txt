@@ -15,6 +15,7 @@ edge-tts
 # Audio processing (REQUIRED for voice pipeline)
 numpy
 scipy
+sounddevice
 soundfile
 
 # Pipeline orchestration

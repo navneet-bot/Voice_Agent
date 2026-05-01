@@ -34,6 +34,18 @@ BARGE_IN_MIN_RMS     = 0.10
 CALL_CONNECTED_TRIGGER = "[System: The call has just been connected. No user has spoken yet. Speak only for the current conversation node and do not transition.]"
 
 
+def audio_devices_available() -> bool:
+    """Return whether the default microphone and speaker are available."""
+    try:
+        import sounddevice as sd
+        sd.query_devices(kind="input")
+        sd.query_devices(kind="output")
+        return True
+    except Exception as exc:
+        print(f"[ERROR] Audio device unavailable: {exc}")
+        return False
+
+
 def interruptible_play(speech_gen, start_time):
     """Plays audio from a generator while listening for barge-in interruptions."""
     import sounddevice as sd
@@ -41,8 +53,12 @@ def interruptible_play(speech_gen, start_time):
     import threading
     from stt.config import ENERGY_THRESHOLD
     
-    stream = sd.OutputStream(samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype='int16')
-    stream.start()
+    try:
+        stream = sd.OutputStream(samplerate=OUTPUT_SAMPLE_RATE, channels=1, dtype='int16')
+        stream.start()
+    except Exception as exc:
+        print(f"[WARN] Speaker output unavailable: {exc}")
+        return
     
     interrupted = threading.Event()
     stop_monitor = threading.Event()
@@ -163,6 +179,10 @@ def run_conversation():
         state_manager = StateManager(schema_path)
     except ImportError:
         print("[ERROR] Failed to import state_manager")
+        sys.exit(1)
+
+    if not audio_devices_available():
+        print("Mic mode needs a default microphone and speaker. Check macOS audio permissions/devices, then run again.")
         sys.exit(1)
 
     # Startup Header

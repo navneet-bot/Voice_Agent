@@ -6,6 +6,8 @@ Features a charismatic Indian-English bilingual voice natively.
 Latency target is immediate stream yield.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import io

@@ -391,24 +391,46 @@ async def generate_response(
     language: str = cfg.DEFAULT_LANGUAGE,
     state_manager: Optional[Any] = None,
     allow_transition: bool = True,
+    runtime_context: Optional[dict[str, Any]] = None,
 ) -> str:
-    """Async compatibility wrapper for the pipeline entry point."""
+    """Pipeline entry point: STT → Intent → StateManager (transition) → LLMResponseGenerator (response).
+
+    Clean architecture:
+    - StateManager handles ONLY state transitions (returns TurnResult)
+    - LLMResponseGenerator handles ONLY response generation
+    """
     del conversation_history
+    from .llm_response_generator import generate_response_for_turn
+    from .state_manager import _finalize_response_text
 
     if state_manager is None:
         from .state_manager import StateManager
-
         state_manager = StateManager("Updated_Real_Estate_Agent.json")
 
     if getattr(state_manager, "set_active_language", None):
         state_manager.set_active_language(language)
+    if runtime_context:
+        state_manager.conversation_data.update(runtime_context)
 
+    # ── Step 1: StateManager — transition only (no response generation) ──
     if not allow_transition:
-        return await asyncio.to_thread(state_manager.next_step, user_text, False)
+        turn = await asyncio.to_thread(state_manager.execute_greeting_transition, user_text)
+    elif getattr(state_manager, "is_actionable", None) and not state_manager.is_actionable(user_text):
+        turn = await asyncio.to_thread(state_manager.execute_noise_transition, user_text)
+    else:
+        intent_data = await extract_intent(user_text)
+        turn = await asyncio.to_thread(state_manager.execute_transition, user_text, intent_data)
 
-    if getattr(state_manager, "is_actionable", None) and not state_manager.is_actionable(user_text):
-        return await asyncio.to_thread(state_manager.process_noise_turn, user_text)
+    if not turn.node:
+        return ""
 
-    intent_data = await extract_intent(user_text)
+    # ── Step 2: LLMResponseGenerator — response only ─────────────────────
+    response = await generate_response_for_turn(turn)
+    finalized = _finalize_response_text(response).strip()
 
-    return await asyncio.to_thread(state_manager.process_turn, user_text, intent_data)
+    # ── Step 3: Record response for anti-repetition tracking ─────────────
+    if hasattr(state_manager, "record_response"):
+        state_manager.record_response(finalized)
+
+    return finalized
+
