@@ -164,6 +164,16 @@ def _init_schema() -> None:
             conn.execute("ALTER TABLE call_results ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         except sqlite3.OperationalError:
             pass
+        try:
+            conn.execute("ALTER TABLE call_results ADD COLUMN lead_data TEXT")
+        except sqlite3.OperationalError:
+            pass
+        # call_key: non-FK text identifier used for transcript lookups.
+        # Replaces using lead_id (which is a real FK to leads.id) for custom IDs.
+        try:
+            conn.execute("ALTER TABLE call_results ADD COLUMN call_key TEXT")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
         logger.info("DB schema initialized at %s", DB_PATH)
     finally:
@@ -466,10 +476,15 @@ class DatabaseManager:
             try:
                 import uuid as _uuid
                 rid = str(_uuid.uuid4())
-                # Bug 3 fix: derive a stable lead_id from campaign+phone so transcript
-                # lookups via /api/results/{leadId}/transcript work correctly.
+
+                # call_key: a stable non-FK text identifier for this call.
+                # We store it in the non-FK call_key column so transcript lookups
+                # work without violating the FOREIGN KEY constraint on lead_id
+                # (which references leads.id — a real row that may not exist for
+                # demo/mic sessions or Twilio calls not tied to a lead row).
                 phone = result.get("phone", "")
-                lead_id = f"{campaign_id}_{phone}" if phone else rid
+                call_key = f"{campaign_id}_{phone}" if phone else rid
+
                 lead_data_json = json.dumps(result.get("lead_data", {}))
                 callback_value = (
                     result.get("callback")
@@ -477,26 +492,31 @@ class DatabaseManager:
                     or result.get("callback_time")
                 )
 
-                # Ensure lead_data column exists (backwards compat)
-                try:
-                    conn.execute("ALTER TABLE call_results ADD COLUMN lead_data TEXT")
-                except sqlite3.OperationalError:
-                    pass  # Column already exists
+                # Ensure non-FK columns exist (backwards compat)
+                for col_sql in [
+                    "ALTER TABLE call_results ADD COLUMN lead_data TEXT",
+                    "ALTER TABLE call_results ADD COLUMN call_key TEXT",
+                ]:
+                    try:
+                        conn.execute(col_sql)
+                    except sqlite3.OperationalError:
+                        pass  # Column already exists
 
                 conn.execute(
                     """INSERT INTO call_results
-                       (id, campaign_id, lead_id, lead_name, phone, called_at, duration, status,
-                        outcome, interested, budget, callback_time, transcription, provider, processed, lead_data)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       (id, campaign_id, call_key, lead_name, phone, called_at, duration, status,
+                        outcome, interested, budget, callback_time, transcription, provider, processed,
+                        lead_data, recording_url)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
-                        rid, campaign_id, lead_id,
+                        rid, campaign_id, call_key,
                         result.get("name"), result.get("phone"),
                         result.get("calledAt"), result.get("duration"),
                         result.get("status", "Connected"), result.get("outcome"),
                         result.get("interested"), result.get("budget"),
                         callback_value, json.dumps(result.get("transcription", [])),
                         result.get("provider", "demo"), 1 if result.get("processed") else 0,
-                        lead_data_json
+                        lead_data_json, result.get("recording_url"),
                     )
                 )
                 conn.commit()
@@ -542,6 +562,9 @@ class DatabaseManager:
                     d["calledAt"] = d.get("calledAt") or d.get("called_at") or "—"
                     d["callback"] = callback_value
                     d["timeline"] = callback_value
+                    # Expose call_key as lead_id so the frontend's (l.lead_id || l.id)
+                    # pattern resolves to the correct lookup key for transcripts.
+                    d["lead_id"] = d.get("call_key") or d.get("lead_id") or d.get("id")
                     result.append(d)
                 return result
             finally:
@@ -553,12 +576,15 @@ class DatabaseManager:
         def _sync():
             conn = _get_connection()
             try:
+                # Search by call_key (our custom non-FK identifier), then fall
+                # back to row id (UUID). lead_id FK column is NULL for most calls.
                 row = conn.execute(
-                    "SELECT transcription FROM call_results WHERE lead_id=? OR id=? ORDER BY called_at DESC LIMIT 1",
+                    """SELECT transcription FROM call_results
+                       WHERE call_key=? OR id=?
+                       ORDER BY called_at DESC LIMIT 1""",
                     (lead_id, lead_id)
                 ).fetchone()
                 if row and row["transcription"]:
-                    import json
                     try:
                         return json.loads(row["transcription"])
                     except Exception:
