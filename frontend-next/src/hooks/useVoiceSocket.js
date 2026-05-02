@@ -8,7 +8,7 @@ export function useVoiceSocket(agentId, activeClient) {
   
   const wsRef = useRef(null);
   const audioCtxRef = useRef(null);
-  const masterGainRef = useRef(null);
+  const activeGainNodeRef = useRef(null);
   const micStreamRef = useRef(null);
   const nextStartTimeRef = useRef(0);
   const pingIntervalRef = useRef(null);
@@ -125,10 +125,10 @@ export function useVoiceSocket(agentId, activeClient) {
       audioCtxRef.current = ctx;
       if (ctx.state === 'suspended') await ctx.resume();
 
-      const masterGain = ctx.createGain();
-      masterGain.gain.value = 1;
-      masterGain.connect(ctx.destination);
-      masterGainRef.current = masterGain;
+      const newGain = ctx.createGain();
+      newGain.gain.value = 1;
+      newGain.connect(ctx.destination);
+      activeGainNodeRef.current = newGain;
 
       let workletLoaded = false;
 
@@ -218,25 +218,24 @@ export function useVoiceSocket(agentId, activeClient) {
             const msg = JSON.parse(e.data);
             if (msg.type === 'transcript') {
               setTranscripts(prev => [...prev, msg]);
-            } else if (msg.type === 'gen_id') {
-              activeGenIdRef.current = msg.value;
-              expectsGenHeaderRef.current = true;
+            } else if (msg.type === 'cancel' || msg.type === 'gen_id') {
+              activeGenIdRef.current = msg.value || (activeGenIdRef.current + 1);
+              expectsGenHeaderRef.current = false; // Never expect 4-byte headers, they corrupt raw PCM
               holdMicInput(250);
 
-              // Quickly fade out to prevent audio pop/tick on barge-in
-              if (masterGainRef.current && audioCtxRef.current) {
+              // Gracefully fade out the current playing generation over 50ms
+              if (activeGainNodeRef.current && audioCtxRef.current) {
                 const ct = audioCtxRef.current.currentTime;
-                masterGainRef.current.gain.cancelScheduledValues(ct);
-                masterGainRef.current.gain.setValueAtTime(masterGainRef.current.gain.value, ct);
-                masterGainRef.current.gain.linearRampToValueAtTime(0, ct + 0.05);
+                const oldGain = activeGainNodeRef.current;
+                oldGain.gain.cancelScheduledValues(ct);
+                oldGain.gain.setValueAtTime(oldGain.gain.value, ct);
+                oldGain.gain.linearRampToValueAtTime(0, ct + 0.05);
 
-                // Reset gain back to 1 shortly after, for the new incoming generation
-                setTimeout(() => {
-                  if (masterGainRef.current && audioCtxRef.current) {
-                    masterGainRef.current.gain.cancelScheduledValues(audioCtxRef.current.currentTime);
-                    masterGainRef.current.gain.setValueAtTime(1, audioCtxRef.current.currentTime);
-                  }
-                }, 100);
+                // Create a completely new GainNode for the incoming generation
+                const newGain = audioCtxRef.current.createGain();
+                newGain.gain.value = 1;
+                newGain.connect(audioCtxRef.current.destination);
+                activeGainNodeRef.current = newGain;
               }
               // Reset play queue pointer so new audio starts instantly
               nextStartTimeRef.current = 0;
@@ -286,7 +285,7 @@ export function useVoiceSocket(agentId, activeClient) {
         buf.getChannelData(0).set(floatData);
         const src = ctx.createBufferSource();
         src.buffer = buf;
-        src.connect(masterGainRef.current);
+        src.connect(activeGainNodeRef.current);
         
         const ctxNow = ctx.currentTime;
         // Increase lead time to 80ms minimum to prevent breaking/pops

@@ -137,13 +137,7 @@ def interruptible_play(speech_gen, start_time):
         if monitor_thread and monitor_thread.is_alive():
             monitor_thread.join(timeout=0.2)
         try:
-            if interrupted.is_set():
-                try:
-                    stream.abort()
-                except Exception:
-                    stream.stop()
-            else:
-                stream.stop()
+            stream.stop()
         finally:
             stream.close()
 

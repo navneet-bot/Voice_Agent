@@ -651,6 +651,10 @@ class VoiceLiveSink(FrameProcessor):
         frame_type = type(frame).__name__
         if isinstance(frame, CancelFrame):
             logger.info("[PIPELINE] SINK <- CancelFrame")
+            try:
+                await self.ws.send_text(json.dumps({"type": "cancel"}))
+            except Exception as e:
+                logger.error("[PIPELINE] SINK -> Failed sending cancel payload: %s", e)
             await self.push_frame(frame, direction)
             return
 
