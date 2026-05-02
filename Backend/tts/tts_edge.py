@@ -73,6 +73,19 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
             # We explicitly specify the format to help soundfile
             data, samplerate = sf.read(mp3_file)
         
+        # Apply a 15ms fade-in and fade-out to prevent audio pops/clicks at the start and end
+        fade_ms = 15
+        fade_samples = int(samplerate * (fade_ms / 1000.0))
+        if len(data) > fade_samples * 2:
+            fade_in = np.linspace(0.0, 1.0, fade_samples)
+            fade_out = np.linspace(1.0, 0.0, fade_samples)
+            if data.ndim == 1:
+                data[:fade_samples] *= fade_in
+                data[-fade_samples:] *= fade_out
+            else:
+                data[:fade_samples, :] *= fade_in[:, None]
+                data[-fade_samples:, :] *= fade_out[:, None]
+
         # soundfile returns float arrays. Convert to PCM16.
         # Ensure we target 24000Hz if the output wasn't already (though Edge usually is)
         pcm16 = (data * 32767).astype(np.int16)
