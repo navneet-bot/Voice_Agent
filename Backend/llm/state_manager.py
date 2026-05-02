@@ -1009,6 +1009,9 @@ class StateManager:
         if not bypass_guard:
             next_node = self._apply_forward_guard(next_node or current_node)
 
+        # Track whether a state transition occurred (node changed)
+        node_changed = next_node.get("id") != current_node.get("id")
+
         self.current_node_id = next_node["id"]
         if next_node.get("type") != "fallback":
             self.visited_nodes.add(next_node["id"])
@@ -1043,6 +1046,7 @@ class StateManager:
 
         return self._build_turn_result(
             next_node, user_input=self._last_user_text, is_terminal=is_terminal,
+            node_changed=node_changed,
         )
 
     # ── Backward-compatible wrappers (call execute_transition + generate response) ──

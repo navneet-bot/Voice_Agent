@@ -117,7 +117,7 @@
                 "intent_triggers": [
                     "confirm_identity"
                 ],
-                "response": "Quick question — do you have two minutes right now? I came across something that might actually be relevant for you."
+                "response": "Do you have two minutes right now? I came across something that might actually be relevant for you."
             },
             {
                 "name": "Ask Intent",
@@ -181,7 +181,7 @@
                 "intent_triggers": [
                     "availability_confirmed"
                 ],
-                "response": "Got it — are you mainly looking for something to move into, or more of an investment angle?",
+                "response": "Are you currently looking to buy, rent, or invest in a property?",
                 "collects": "intent_value",
                 "expected_input_type": "any"
             },
@@ -343,7 +343,7 @@
                 "intent_triggers": [
                     "buyer_requirements_ready"
                 ],
-                "response": "Actually, I have something in {{location}} that fits your budget well — it's a {{property_type}} that's quite well-suited for what you're looking for. Would you want to see it in person?"
+                "response": "Actually, I have a property in {{location}} that fits your budget well. Would you like to visit it in person?"
             },
             {
                 "name": "Site Visit Availability",

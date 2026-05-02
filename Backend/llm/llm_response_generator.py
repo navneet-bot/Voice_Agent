@@ -43,6 +43,7 @@ class TurnResult:
     response_type: str = "normal"   # "normal" | "noise_repeat" | "deescalation" | "greeting"
     asked_flags: dict[str, bool] = field(default_factory=dict)  # What has been asked already
     last_response: str = ""         # Previous agent response (for anti-repetition)
+    node_changed: bool = False      # True if a state transition occurred (skip LLM, use template)
 
     def __post_init__(self):
         if not self.node_id:
@@ -66,24 +67,9 @@ _RESPONSE_SYSTEM_PROMPT: str = _load_response_prompt()
 # ─── Node classification ─────────────────────────────────────────────────────
 
 # Nodes where the LLM generates dynamic responses using JSON phrases as guidance.
-# All other nodes use fast template responses.
-_LLM_RESPONSE_NODES = {
-    "node-1735264921453",       # Ask Intent
-    "fallback_intent",          # Fallback Intent
-    "node-1735267546732",       # Ask Location and Budget
-    "fallback_location",        # Fallback Location
-    "fallback_budget",          # Fallback Budget
-    "node-1736323961832",       # Share Property Details
-    "node-objection-budget-high",   # Handle Objection Budget High
-    "node-objection-not-looking",   # Handle Objection Not Looking
-    "node-1736510533232",       # Seller Flow Start
-    "node-1767420514711",       # Seller Property Details
-    "fallback_property_type",   # Fallback Property Type
-    "fallback_visit_datetime",  # Fallback Visit Datetime
-    "fallback_callback_time",   # Fallback Callback Time
-    "node-1735970090937",       # Re-engage User
-    "node-1735265015507",       # Site Visit Availability
-}
+# DISABLED: All nodes now use their pre-written JSON templates directly.
+# This ensures strict adherence to the 7 flow states with the exact same question every time.
+_LLM_RESPONSE_NODES: set[str] = set()  # Empty = all nodes use templates
 
 # Nodes that always use fast template responses (no LLM call needed)
 _TEMPLATE_ONLY_NODES = {
@@ -278,7 +264,7 @@ _FILLER_OPENERS = (
 
 
 def _finalize_response(text: str) -> str:
-    """Apply production constraints: max 2 sentences, 20 words, 1 question, no fillers."""
+    """Apply production constraints: max 2 sentences, 30 words (sentence-boundary-aware), 1 question, no fillers, complete sentences."""
     if not text or not text.strip():
         return text
 
@@ -314,13 +300,45 @@ def _finalize_response(text: str) -> str:
         first = cleaned.find("?")
         cleaned = cleaned[:first + 1] + cleaned[first + 1:].replace("?", ".")
 
-    # Max 20 words
+    # Max 30 words — truncate to nearest complete sentence boundary
     words = cleaned.split()
-    if len(words) > 20:
-        trimmed = " ".join(words[:20]).rstrip(" ,;:-")
-        if "?" in cleaned[:len(trimmed) + 5]:
-            return trimmed.rstrip(".") + "?"
-        return trimmed.rstrip(".") + "."
+    if len(words) > 30:
+        # Find the last sentence-ending punctuation within the first 30 words
+        truncated = " ".join(words[:30])
+        last_period = max(truncated.rfind("."), truncated.rfind("?"), truncated.rfind("!"))
+        if last_period > 10:  # Found a sentence boundary
+            cleaned = truncated[:last_period + 1]
+        else:
+            # No good boundary found — hard cut at 25 words and add punctuation
+            cleaned = " ".join(words[:25]).rstrip(" ,;:-")
+            if "?" in truncated:
+                cleaned = cleaned.rstrip(".") + "?"
+            else:
+                cleaned = cleaned.rstrip(".") + "."
+        words = cleaned.split()
+
+    # ── Completeness validation (HARD CONSTRAINT) ─────────────────────
+    # Strip trailing connectors that signal an incomplete sentence
+    _trailing = {"and", "or", "but", "to", "for", "with", "the", "a", "an",
+                 "is", "are", "in", "on", "at", "of", "so", "—", "-",
+                 "it's", "let", "me", "that", "like"}
+    while words and words[-1].lower().rstrip(".,;:-—") in _trailing:
+        words.pop()
+
+    if not words:
+        return ""
+
+    cleaned = " ".join(words)
+
+    # Ensure terminal punctuation
+    if cleaned and cleaned[-1] not in ".!?":
+        question_starters = ("what", "which", "where", "when", "how", "who",
+                             "are", "is", "do", "does", "can", "could", "would",
+                             "kya", "kahan", "kaun", "kab", "kitna")
+        if words[0].lower() in question_starters:
+            cleaned += "?"
+        else:
+            cleaned += "."
 
     return cleaned
 
@@ -461,7 +479,9 @@ async def generate_response_for_turn(turn: TurnResult) -> str:
         return DEESCALATION_RESPONSES[idx]
 
     # ── Path 4: LLM-powered response for qualification/fallback nodes ─────
-    if node_id in _LLM_RESPONSE_NODES:
+    # ONLY use LLM when staying on the same node (needs clarification/rephrasing).
+    # If the node changed (user answered correctly), skip LLM and use template directly.
+    if node_id in _LLM_RESPONSE_NODES and not turn.node_changed:
         llm_response = await _call_llm_for_response(
             node,
             purpose=purpose,
@@ -478,18 +498,67 @@ async def generate_response_for_turn(turn: TurnResult) -> str:
             if finalized:
                 # ── Anti-repetition guard ─────────────────────────────
                 if last_response and _is_repetition(finalized, last_response):
-                    logger.warning("[ANTI-REPEAT] LLM repeated last response, falling back to template")
+                    logger.warning("[ANTI-REPEAT] LLM repeated last response, generating nudge instead")
+                    # Generate a short contextual nudge instead of falling back to broken template
+                    nudge = _get_anti_repeat_nudge(node, language)
+                    if nudge:
+                        logger.info("[ANTI-REPEAT NUDGE] \"%s\"", nudge)
+                        return nudge
                 else:
                     _log_phrase_usage(finalized)
                     logger.info("[LLM RESPONSE] \"%s\"", finalized)
                     return finalized
-        # LLM failed or repeated → fall through to template
+        # LLM failed → fall through to template
         logger.warning("[LLM RESPONSE] Falling back to template for %s", node_id)
+    elif node_id in _LLM_RESPONSE_NODES and turn.node_changed:
+        logger.info("[SKIP LLM] Node changed, using template directly for %s", node_id)
 
     # ── Path 5: Template response (fast path) ────────────────────────────
     response = _resolve_template_response(node, context, language)
     logger.info("[TEMPLATE] %s: \"%s\"", node_id, (response or "")[:60])
     return _finalize_response(response) if response else ""
+
+
+def _get_anti_repeat_nudge(node: dict[str, Any], language: str) -> str:
+    """Generate a short contextual nudge when the LLM repeats itself.
+
+    Instead of falling back to a template with potentially missing placeholders,
+    produce a clean, short follow-up based on the node's goal.
+    """
+    node_id = str(node.get("id", ""))
+    node_name = str(node.get("name", "")).lower()
+
+    # Goal-specific nudges (English defaults, extend for other languages as needed)
+    nudges = {
+        "share_property": "Would you like to see it in person?",
+        "ask_intent": "Are you looking to buy or rent?",
+        "ask_location": "Which area works best for you?",
+        "ask_budget": "What budget range works for you?",
+        "ask_visit_time": "Would a weekend or weekday work better?",
+        "ask_availability": "Do you have a couple of minutes right now?",
+        "handle_objection": "Would you be open to hearing about other options?",
+    }
+
+    # Classify the node goal
+    goal = _classify_node_goal(node, location=None, budget=None)
+
+    nudge = nudges.get(goal, "")
+    if not nudge:
+        # Generic fallback nudge
+        nudge = "Would you like to know more?"
+
+    # Basic language adaptation
+    if language in ("hi", "hinglish"):
+        hi_nudges = {
+            "share_property": "Kya aap ise personally dekhna chahenge?",
+            "ask_intent": "Aap buy karna chahte ho ya rent?",
+            "ask_location": "Kaun sa area prefer karenge?",
+            "ask_budget": "Roughly kitna budget hai aapka?",
+            "ask_visit_time": "Weekend better rahega ya weekday?",
+        }
+        nudge = hi_nudges.get(goal, nudge)
+
+    return nudge
 
 
 def _is_repetition(new_response: str, last_response: str) -> bool:
