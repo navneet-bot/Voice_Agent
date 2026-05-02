@@ -59,6 +59,11 @@ LOCALIZED_TEMPLATE_MAP = {
         "hi": "Bas do minute milenge? Aapke liye ek relevant option tha.",
         "hinglish": "Bas 2 minute milenge? Aapke liye ek relevant option tha.",
     },
+    "Are you currently looking to buy, rent, or invest in a property?": {
+        "hi": "Aap abhi property kharidne, rent par lene, ya invest karne ke liye dekh rahe hain?",
+        "hinglish": "Aap currently property buy, rent, ya invest karne ke liye dekh rahe hain?",
+        "mr": "तुम्ही सध्या प्रॉपर्टी विकत घेण्यासाठी, भाड्याने घेण्यासाठी, किंवा इन्व्हेस्ट करण्यासाठी पाहत आहात का?",
+    },
     "Got it — are you mainly looking for something to move into, or more of an investment angle?": {
         "hi": "Samajh gayi. Aap khud rehne ke liye dekh rahe ho ya investment angle se?",
         "hinglish": "Got it. Aap khud ke liye dekh rahe ho ya investment angle se?",
@@ -379,7 +384,7 @@ def get_language_instruction(language: str) -> str:
 def localize_template(template: str, language: str) -> str:
     """Map shared-flow English templates to Hindi/Hinglish without changing the flow."""
     normalized = language if language in SUPPORTED_LANGUAGES else "en"
-    if normalized not in {"hi", "hinglish"}:
+    if normalized not in {"hi", "hinglish", "mr"}:
         return template
     variants = LOCALIZED_TEMPLATE_MAP.get(template)
     if not variants:

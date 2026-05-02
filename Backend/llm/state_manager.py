@@ -1181,6 +1181,11 @@ class StateManager:
 
     def _handle_confirmation(self, current_node: dict[str, Any], intent: str) -> tuple[dict[str, Any], bool]:
         """Returns (next_node, bypass_forward_guard)."""
+        if intent in ALL_DENY_INTENTS:
+            target = self._route_deny_subtype(current_node, intent)
+            if target:
+                return target, False
+
         edge = self._select_confirmation_edge(current_node, intent)
 
         if not edge:
