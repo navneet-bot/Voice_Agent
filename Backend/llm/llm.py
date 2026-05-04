@@ -50,6 +50,9 @@ KNOWN_INTENTS = [
     "unclear_visit_datetime",
     "unclear_callback_time",
     "unclear",
+    "user_question",
+    "suggest_time",
+    "confirm_availability",
 ]
 
 INTENT_EXTRACTION_SYSTEM_PROMPT = """You are an intent classifier for a real estate voice agent.
@@ -77,7 +80,7 @@ deny_time, deny_visit_time, provide_intent, provide_location,
 provide_budget, provide_property_type, provide_timeline, confirm_site_visit,
 deny_site_visit, provide_visit_datetime, ask_location_suggestion, ask_off_topic, unclear_intent,
 unclear_location, unclear_budget, unclear_property_type, unclear_visit_datetime,
-unclear_callback_time, unclear
+unclear_callback_time, unclear, user_question, suggest_time, confirm_availability
 
 Rules:
 - Choose the single most specific intent
@@ -87,6 +90,9 @@ Rules:
   - "khud ke liye", "apne liye", "rehne ke liye" -> provide_intent with intent_value "buy"
   - "rent pe", "kiraye pe", "on rent" -> provide_intent with intent_value "rent"
   - "budget 50 lakh", "50 lakh ke around", "mera budget 1 crore hai" -> extract budget
+- CRITICAL: "What about tomorrow?", "Tomorrow works", "Kal call karna", "Next week okay" -> intent: "suggest_time" (NOT deny, NOT deny_time)
+- CRITICAL: If user is asking a question (e.g., "What is it?", "Oh, what it is?", "Kya hai?", "What are you talking about?") -> intent: "user_question" (NOT deny_time, NOT deny)
+- CRITICAL: If user corrects and says "I have time", "I said I have time", "I am free" -> intent: "confirm_availability"
 - Confirmation words (yes, yeah, yep, correct, right, ok, okay, sure, go ahead) -> intent: "confirm"
 - Generic denial (no, nahi, nope, nah, not now, sorry no, no sorry) -> intent: "deny"
 - "wrong number", "wrong person", "not Prashant", "this is not" -> intent: "deny_identity"

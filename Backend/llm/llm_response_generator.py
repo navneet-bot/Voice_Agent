@@ -150,6 +150,7 @@ def _extract_node_phrases(node: dict[str, Any]) -> list[str]:
 
 def _build_llm_user_message(
     *,
+    node_id: str,
     node_goal: str,
     json_phrases: list[str],
     purpose: str | None,
@@ -164,36 +165,20 @@ def _build_llm_user_message(
     """Build the user message matching the clean prompt format."""
     phrases_block = "\n".join(f"- {p}" for p in json_phrases) if json_phrases else "(none)"
 
-    # Build compact context line
-    ctx_parts = []
-    if purpose:
-        ctx_parts.append(f"purpose={purpose}")
-    if location:
-        ctx_parts.append(f"location={location}")
-    if budget:
-        ctx_parts.append(f"budget={budget}")
-    context_line = ", ".join(ctx_parts) if ctx_parts else "no context yet"
-
-    # Build asked flags line (only show what's been asked)
-    already_asked = ""
-    if asked_flags:
-        asked_items = [k for k, v in asked_flags.items() if v]
-        if asked_items:
-            already_asked = f"\nAlready asked: {', '.join(asked_items)}"
-
-    # Anti-repetition line
-    last_line = ""
-    if last_response:
-        last_line = f'\nLast response: "{last_response}"'
-
+    already_asked_str = ", ".join([k for k, v in asked_flags.items() if v]) if asked_flags else "None"
+    
     return (
-        f"Node goal: {node_goal}\n"
-        f"User: \"{user_input}\"\n"
-        f"Context: {context_line}\n"
-        f"Language: {language}"
-        f"{already_asked}"
-        f"{last_line}\n\n"
-        f"Reference phrases:\n{phrases_block}"
+        f"current_node: {node_id}\n"
+        f"node_goal: {node_goal}\n"
+        f"json_phrases:\n{phrases_block}\n\n"
+        f"context:\n"
+        f"  purpose: {purpose or 'None'}\n"
+        f"  location: {location or 'None'}\n"
+        f"  budget: {budget or 'None'}\n"
+        f"  language: {language}\n"
+        f"  already_asked: {already_asked_str}\n"
+        f"  last_response: {last_response or 'None'}\n\n"
+        f"user_input: \"{user_input}\""
     )
 
 
@@ -231,7 +216,44 @@ def _resolve_template_response(
     """Fill {{placeholders}} in a node's template response. Fast path, no LLM."""
     from .language_utils import localize_template
 
-    template = node.get("response", "")
+    collects = node.get("collects", [])
+    if isinstance(collects, str):
+        collects = [collects] if collects else []
+    
+    missing_slots = [s for s in collects if not context.get(s)]
+    template = ""
+    
+    # If partially filled (we have some slots collected, but not all)
+    if 0 < len(missing_slots) < len(collects):
+        msr = node.get("missing_slot_responses", {})
+        target_slot = missing_slots[0]
+        template = msr.get(target_slot, "")
+        
+        # Add a natural acknowledgment for the slot that WAS provided
+        if template:
+            ack = ""
+            if target_slot == "budget" and context.get("location"):
+                loc = context.get("location")
+                if language in ("hi", "hinglish"):
+                    ack = f"Theek hai, {loc}."
+                elif language == "mr":
+                    ack = f"ठीक आहे, {loc}."
+                else:
+                    ack = f"Got it — {loc}."
+            elif target_slot == "location" and context.get("budget"):
+                bud = context.get("budget")
+                if language in ("hi", "hinglish"):
+                    ack = f"Theek hai, {bud}."
+                elif language == "mr":
+                    ack = f"ठीक आहे, {bud}."
+                else:
+                    ack = f"Got it — {bud}."
+            
+            if ack:
+                template = f"{ack} {template}"
+
+    if not template:
+        template = node.get("response", "")
     if not template:
         template = (node.get("instruction") or {}).get("text", "")
     if not template:
@@ -243,6 +265,11 @@ def _resolve_template_response(
             val = context.get("name") or context.get("lead_name") or context.get("lead") or "Prashant"
         else:
             val = context.get(key)
+        
+        # Entity safety: DO NOT use "null" in response
+        if str(val).lower() == "null":
+            return ""
+            
         return str(val) if val else ""
 
     localized = localize_template(template, language)
@@ -372,6 +399,7 @@ async def _call_llm_for_response(
     node_goal = _classify_node_goal(node, location=location, budget=budget)
 
     user_message = _build_llm_user_message(
+        node_id=str(node.get("id", "")),
         node_goal=node_goal,
         json_phrases=json_phrases,
         purpose=purpose,

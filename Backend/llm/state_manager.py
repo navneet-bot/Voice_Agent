@@ -966,6 +966,30 @@ class StateManager:
         if not isinstance(entities, dict):
             entities = {}
 
+        # Questions -> answer + stay in node
+        if intent == "user_question":
+            _log("STATE", f"{current_node['id']} unchanged (user question from LLM)")
+            self._last_node_id = self.current_node_id
+            return self._build_turn_result(
+                current_node, user_input=user_text, user_question="purpose"
+            )
+
+        # Intent mapping for custom intents
+        if intent == "suggest_time":
+            intent = "provide_timeline"
+
+        # State correction: If user corrects previous misunderstanding by confirming availability
+        if intent == "confirm_availability" and current_node.get("id") in {"node-1736492391269", "fallback_callback_time"}:
+            _log("STATE CORRECTION", "User confirmed availability; returning to Availability Check.")
+            corrected_node = self.nodes.get("node-1735264873079")
+            if corrected_node:
+                current_node = corrected_node
+                
+        # Confirming a time suggestion: if user says "Yeah" after agent suggests a time
+        if intent == "confirm" and current_node.get("id") in {"node-1736492391269", "fallback_callback_time"}:
+            _log("STATE CORRECTION", "User confirmed time suggestion; mapping to provide_timeline.")
+            intent = "provide_timeline"
+
         raw_intent = intent
         intent = self._normalize_intent_for_context(current_node, intent, entities, user_text)
         if intent != raw_intent:
@@ -1011,6 +1035,29 @@ class StateManager:
 
         # Track whether a state transition occurred (node changed)
         node_changed = next_node.get("id") != current_node.get("id")
+
+        # ── Prevent Loops ────────────────────────────────────────────────
+        if not node_changed:
+            missing = self._missing_slots(current_node)
+            is_collecting = len(missing) > 0 and current_node.get("type") != "fallback"
+            
+            if is_collecting:
+                _log("LOOP PREVENTION", f"Holding at {current_node['id']} because entities are missing: {missing}")
+                self._same_node_count = 0
+            else:
+                self._same_node_count = getattr(self, "_same_node_count", 0) + 1
+                if self._same_node_count >= 1:
+                    _log("LOOP PREVENTION", f"Forcing transition from {current_node['id']}")
+                    forward_id = self._first_destination(current_node)
+                    if forward_id:
+                        next_node = self.nodes.get(forward_id) or next_node
+                    else:
+                        end_node = self.nodes.get("node-1736492520068")
+                        if end_node:
+                            next_node = end_node
+                    self._same_node_count = 0
+        else:
+            self._same_node_count = 0
 
         self.current_node_id = next_node["id"]
         if next_node.get("type") != "fallback":
