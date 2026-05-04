@@ -48,7 +48,9 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from tts.tts_kokoro import generate_speech
+    from tts import generate_speech_stream
+    def generate_speech(text):
+        return b"".join(generate_speech_stream(text))
 except ImportError as e:
     print(f"Failed to import TTS module: {e}")
     sys.exit(1)

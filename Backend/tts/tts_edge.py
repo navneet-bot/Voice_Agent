@@ -1,7 +1,7 @@
 """
 TTS module powered by Microsoft Edge-TTS API.
 
-Replaces local CPU-bound Kokoro engine with a fully cloud-hosted API.
+Replaces local CPU-bound engine with a fully cloud-hosted API.
 Features a charismatic Indian-English bilingual voice natively.
 Latency target is immediate stream yield.
 """

@@ -1,7 +1,7 @@
 """
 Speech Formatter
 ================
-This module transforms raw LLM output into speech-friendly text before Kokoro inference.
+This module transforms raw LLM output into speech-friendly text before TTS inference.
 By adjusting spacing, punctuation, and sentence length, these transformations reduce robotic 
 qualities, add conversational rhythm, and provide natural breathing room, significantly 
 improving overall voice naturalness.

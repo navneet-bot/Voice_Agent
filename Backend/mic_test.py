@@ -45,7 +45,7 @@ def _play_startup_greeting() -> bool:
 
     greeting = generate_speech("Hello, I am Neha. If you can hear this, local TTS playback is working.")
     if not greeting:
-        print("TTS preflight failed: Kokoro returned no audio.")
+        print("TTS preflight failed: TTS engine returned no audio.")
         return False
 
     data, sample_rate = sf.read(io.BytesIO(greeting))
@@ -81,12 +81,12 @@ async def main():
     ))
 
     # 2. Initialize our Real Estate Processors
-    print("⏳ Loading AI Engines (Whisper + Kokoro)...")
-    print("   - Initializing STT (Whisper)...")
+    print("⏳ Loading AI Engines...")
+    print("   - Initializing STT...")
     stt = RealEstateSTTProcessor()
     print("   - Initializing LLM (Groq)...")
     llm = RealEstateLLMProcessor()
-    print("   - Initializing TTS (Kokoro)...")
+    print("   - Initializing TTS...")
     tts = RealEstateTTSProcessor()
     print("[SUCCESS] AI Engines Ready.")
 

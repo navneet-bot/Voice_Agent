@@ -20,7 +20,7 @@ from llm.language_utils import LanguageTracker, analyze_user_text
 
 # CONFIGURATION BLOCK
 INPUT_SAMPLE_RATE    = 16000    # Hz — microphone recording
-OUTPUT_SAMPLE_RATE   = 24000    # Hz — Kokoro TTS output
+OUTPUT_SAMPLE_RATE   = 24000    # Hz — TTS output
 RECORD_DURATION_S    = 4        # seconds per recording window
 POST_RESPONSE_PAUSE_S = 1.0     # silence gap after AI speaks before next listen
 MIN_TRANSCRIPTION_CHARS = 3     # ignore STT output shorter than this

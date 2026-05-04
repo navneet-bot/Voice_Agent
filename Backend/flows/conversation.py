@@ -115,8 +115,8 @@ except ImportError:
 
 class RealEstateTTSProcessor(FrameProcessor):
     """
-    Synthesizes TTS audio from LLM TextFrames using our Kokoro integration.
-    Expects Kokoro to return WAV bytes, conversions to PCM16 for playback.
+    Synthesizes TTS audio from LLM TextFrames using our TTS integration.
+    Expects TTS to return WAV bytes, conversions to PCM16 for playback.
     """
     def __init__(self):
         super().__init__()
@@ -131,7 +131,7 @@ class RealEstateTTSProcessor(FrameProcessor):
                 import soundfile as sf
                 import numpy as np
                 
-                # 1. Read the WAV bytes into a numpy array (Kokoro returns float32)
+                # 1. Read the WAV bytes into a numpy array
                 try:
                     data, samplerate = sf.read(io.BytesIO(wav_bytes))
                     

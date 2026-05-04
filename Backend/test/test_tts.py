@@ -2,16 +2,19 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import logging
-from tts import generate_speech
+from tts import generate_speech_stream
 
-# Set up logging to see what Kokoro is doing
+def generate_speech(text):
+    return b"".join(generate_speech_stream(text))
+
+# Set up logging to see what TTS is doing
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 def test_tts():
     # Test cases: English, Hindi, and Hinglish (mixed)
     test_cases = {
-        "en": "Hello, this is a test of the Kokoro text to speech engine.",
-        "hi": "नमस्ते, यह कोकोरो वॉइस इंजन का एक परीक्षण है।",
+        "en": "Hello, this is a test of the text to speech engine.",
+        "hi": "नमस्ते, यह वॉइस इंजन का एक परीक्षण है।",
         "mixed": "कल शाम मैंने बहुत दिनों बाद my old friends से बात की। We talked for hours, old memories refresh हो गईं। सच में, true friendship की कोई कीमत नहीं होती। It was the best part of my week!" 
     }
 

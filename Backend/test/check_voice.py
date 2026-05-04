@@ -1,5 +1,5 @@
 """
-Simple script to test the Kokoro TTS engine.
+Simple script to test the TTS engine.
 Usage: python check_voice.py "Text to speak"
 """
 
@@ -12,7 +12,9 @@ import soundfile as io
 import numpy as np
 
 try:
-    from tts import generate_speech
+    from tts import generate_speech_stream
+    def generate_speech(text):
+        return b"".join(generate_speech_stream(text))
 except ImportError:
     print("❌ Error: Could not import tts module. Ensure dependencies are installed.")
     sys.exit(1)
