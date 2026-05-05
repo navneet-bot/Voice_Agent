@@ -80,7 +80,7 @@
                 "intent_triggers": [
                     "call_connected"
                 ],
-                "response": "Hey, this is Neha — I'm with the Real Estate team. Is this Prashant?"
+                "response": "Hey, this is Neha — I'm with the Real Estate team. Is this {{name}}?"
             },
             {
                 "name": "Availability Check",
@@ -712,7 +712,7 @@
                 "intent_triggers": [
                     "unclear_intent"
                 ],
-                "response": "I'm sorry, I didn't quite catch that! Could you please let me know, are you exploring for yourself or as an investment?",
+                "response": "Ah, I missed that. Are you looking to buy for yourself, or is it more of an investment?",
                 "collects": null,
                 "expected_input_type": "any",
                 "edges": [
@@ -735,7 +735,7 @@
                     "unclear_location",
                     "ask_location_suggestion"
                 ],
-                "response": "I'm sorry, I didn't quite catch that! If you are unsure, popular areas include Wakad, Baner, Hinjewadi, and Kharadi. Which part of the city are you looking at?",
+                "response": "Sorry, which area was that? Somewhere like Wakad or Baner, or maybe Hinjewadi?",
                 "collects": null,
                 "expected_input_type": "location",
                 "edges": [
@@ -757,7 +757,7 @@
                 "intent_triggers": [
                     "unclear_budget"
                 ],
-                "response": "I'm sorry, I didn't quite catch that! If you are unsure, we have great options ranging from 50 lakhs to 2 crores. Roughly what budget should I work with?",
+                "response": "I didn't get the budget clearly. Are we looking around 50 lakhs, or perhaps closer to 2 crores?",
                 "collects": null,
                 "expected_input_type": "budget",
                 "edges": [
@@ -779,7 +779,7 @@
                 "intent_triggers": [
                     "unclear_property_type"
                 ],
-                "response": "I'm sorry, I didn't quite catch that! Could you please let me know, are you looking for a 1 BHK, 2 BHK, or something else?",
+                "response": "Could you repeat the property type? Is it a 2 BHK you're looking for, or something else?",
                 "collects": null,
                 "expected_input_type": "any",
                 "edges": [

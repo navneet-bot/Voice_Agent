@@ -95,6 +95,26 @@ DENY_VISIT_NODES = {"node-1736323961832", "node-1735265015507"}     # Share Prop
 ALL_DENY_INTENTS = {"deny", "deny_identity", "deny_interest", "deny_time", "deny_visit_time"}
 # Edges with these condition keywords auto-advance without user input
 SKIP_EDGE_MARKERS = {"skip", "skip response"}
+
+# ── Node Classification Map (Fix #6: Avoid fragile string matching) ──────────
+NODE_GOALS = {
+    "node-1767592854176": "greet_and_confirm_identity",
+    "node-1735264873079": "ask_availability",
+    "node-1735970090937": "ask_availability",
+    "node-1735264921453": "ask_intent",
+    "fallback_intent": "ask_intent",
+    "node-1735267546732": "ask_location", # Initial combined node
+    "fallback_location": "ask_location",
+    "fallback_budget": "ask_budget",
+    "node-1736323961832": "share_property",
+    "node-1735265015507": "ask_visit_time",
+    "fallback_visit_datetime": "ask_visit_time",
+    "node-1736492391269": "ask_callback_time",
+    "fallback_callback_time": "ask_callback_time",
+    "node-1735265209472": "confirm_and_close",
+    "node-1736567518748": "confirm_and_close",
+}
+
 # Nodes that should auto-advance through skip edges after delivering response
 AUTO_ADVANCE_NODES = {
     "node-1736492925252",  # Confirm and End
@@ -1001,6 +1021,16 @@ class StateManager:
         _log("INTENT", self._format_intent_log(intent, entities))
         self._merge_entities(entities, intent=intent)
 
+        # 5. SLOT COMPLETION DERIVATION (Fix #5)
+        collects = self._collect_slots(current_node)
+        if collects and intent not in {"unclear", "unclear_intent"}:
+            if all(self.conversation_data.get(slot) for slot in collects):
+                _log("SLOT_DERIVED", f"All slots filled for {current_node['id']} -> intent=slots_collected")
+                intent = "slots_collected"
+            elif any(self.conversation_data.get(slot) for slot in collects) and intent == "unclear":
+                 # If user provided SOMETHING valid even if intent extraction was shaky
+                 intent = "partial_info"
+
         # Callback time recovery from fallback
         if current_node.get("id") == "fallback_callback_time" and intent == "provide_timeline":
             resume_node_id = self._first_destination(current_node)
@@ -1170,6 +1200,7 @@ class StateManager:
         if raw_intent and raw_intent not in intents_to_match:
             intents_to_match.append(raw_intent)
 
+        # 1. Structured Edge Matching (Semantic Intent Mapping)
         for edge in edges:
             destination_id = edge.get("destination_node_id")
             if not destination_id:
@@ -1179,7 +1210,10 @@ class StateManager:
                 continue
 
             destination_triggers = destination.get("intent_triggers") or []
-            if any(i in destination_triggers for i in intents_to_match):
+            condition = (edge.get("condition", "") or "").lower().strip()
+            
+            # Match by explicit intent triggers OR semantic condition aliases
+            if any(i in destination_triggers for i in intents_to_match) or self._edge_condition_matches_intent(condition, intents_to_match):
                 if destination.get("type") == "fallback":
                     expected = destination.get("expected_input_type")
                     if expected and self.conversation_data.get(expected):
@@ -1187,13 +1221,13 @@ class StateManager:
                         continue
                 _log(
                     "STATE",
-                    f"{current_node['id']} -> {destination['id']} (intent={intent}, edge='{edge.get('condition', '')}')",
+                    f"{current_node['id']} -> {destination['id']} (intent={intent}, condition='{condition}')",
                 )
                 return destination
 
         _log(
-            "STATE",
-            f"No matching edge from {current_node['id']} for intent '{intent}' - staying on current node",
+            "STATE_STALL",
+            f"No matching edge from {current_node['id']} for intent '{intent}'",
         )
 
         # Callback scheduling should still progress once timeline exists.
@@ -1224,6 +1258,16 @@ class StateManager:
                         if destination:
                             _log("STATE", f"{current_node['id']} -> {destination['id']} (unclear -> re-engage)")
                             return destination
+
+        # 2.4 Repetition Root Fix: If we still haven't moved and intent was unclear, 
+        # force a transition to the node's forward destination to prevent infinite re-prompts.
+        if intent.startswith("unclear") or raw_intent.startswith("unclear"):
+            forward_id = self._first_destination(current_node)
+            forward_node = self.nodes.get(forward_id)
+            if forward_node and forward_node.get("type") == "fallback":
+                 _log("STATE_FORCE", f"Stalled on unclear -> forcing forward to fallback {forward_id}")
+                 return forward_node
+
         return current_node
 
     def _handle_confirmation(self, current_node: dict[str, Any], intent: str) -> tuple[dict[str, Any], bool]:
@@ -1395,6 +1439,40 @@ class StateManager:
     def _apply_forward_guard(self, next_node: dict[str, Any]) -> dict[str, Any]:
         # Strict flow mode: always honor the edge-selected destination node.
         return next_node
+
+    def _edge_condition_matches_intent(self, condition: str, intents_to_match: list[str]) -> bool:
+        """
+        Semantic intent mapping layer for edge conditions.
+        This protects config-generated flows where transitions are defined by
+        edge condition text instead of destination intent_triggers.
+        """
+        if not condition:
+            return False
+        normalized = condition.strip().lower()
+        
+        # 2.1 Intent Alias Mapping (Expanded as per instruction)
+        intent_aliases = {
+            "confirm": {
+                "confirm", "affirm", "yes", "acknowledge", "open_yes", "perm_yes",
+                "conv_yes", "interested", "okay", "ok", "sure", "haan", "acha",
+            },
+            "deny": {"deny", "no", "reject", "decline", "conv_no", "not_interested"},
+            "deny_time": {"deny_time", "busy", "not_now", "call_later", "perm_busy", "later"},
+            "provide_intent": {"provide_intent", "intent_active", "intent_info", "ask_info"},
+            # 2.2 Fallback Routing - retry is a synonym for unclear
+            "unclear": {"unclear", "fallback", "retry", "hmm", "noise"},
+            "unclear_intent": {"unclear_intent", "intent_fallback"},
+            "slots_collected": {"slots_collected", "qual_done", "completed"},
+        }
+        
+        for intent in intents_to_match:
+            key = intent.strip().lower()
+            if key and key in normalized:
+                return True
+            aliases = intent_aliases.get(key, set())
+            if any(alias in normalized for alias in aliases):
+                return True
+        return False
 
     def _merge_entities(self, entities: dict[str, Any], intent: str = "") -> None:
         for key in ENTITY_KEYS:

@@ -151,6 +151,12 @@ def _detect_user_question(user_input: str) -> str | None:
         "what do you mean", "what are you saying", "confused",
         "samajh nahi", "samjha nahi", "clear nahi",
     )
+    off_topic_markers = (
+        "weather", "prime minister", "pm", "stock market",
+        "cricket", "score", "joke", "song", "sing a song",
+        "mausam", "barish", "modi", "khana khaya", "lunch kiya",
+        "how are you", "kaise ho", "kasa ahes",
+    )
 
     if any(marker in text for marker in identity_markers):
         return "identity"
@@ -158,6 +164,8 @@ def _detect_user_question(user_input: str) -> str | None:
         return "purpose"
     if any(marker in text for marker in confusion_markers):
         return "confusion"
+    if any(marker in text for marker in off_topic_markers):
+        return "off_topic"
     return None
 
 
@@ -179,17 +187,25 @@ def _question_answer(language: str, question: str) -> str:
     if language == "hi":
         if question == "identity":
             return "Neha bol rahi hoon, Real Estate team se."
+        if question == "off_topic":
+            return "Main sirf property ke baare mein help kar sakti hoon."
         return "Aapki earlier property interest ke baare mein call kiya hai."
     if language == "hinglish":
         if question == "identity":
             return "Neha bol rahi hoon, Real Estate team se."
+        if question == "off_topic":
+            return "Main sirf property ke baare mein help kar sakti hoon."
         return "Aapki earlier property interest ke baare mein call kiya hai."
     if language == "mr":
         if question == "identity":
             return "Neha बोलतेय, Real Estate team मधून."
+        if question == "off_topic":
+            return "मी फक्त प्रॉपर्टीबद्दल मदत करू शकते."
         return "तुमच्या earlier property interest बद्दल call केला आहे."
     if question == "identity":
         return "Neha here from the Real Estate team."
+    if question == "off_topic":
+        return "I can only help with property-related questions."
     return "It's about your earlier property interest."
 
 

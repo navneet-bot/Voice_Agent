@@ -86,38 +86,26 @@ _TEMPLATE_ONLY_NODES = {
 
 
 def _classify_node_goal(node: dict[str, Any], *, location: str | None, budget: str | None) -> str:
-    """Classify the current node's goal for the LLM prompt."""
+    """Classify the current node's goal for the LLM prompt using structured mapping."""
+    from .state_manager import NODE_GOALS
     node_id = str(node.get("id") or "")
-    node_name = str(node.get("name") or "").lower()
+    
+    # Use structured mapping if available
+    goal = NODE_GOALS.get(node_id)
+    if goal:
+        # Contextual refinement for combined nodes
+        if node_id == "node-1735267546732":
+            if location and not budget:
+                return "ask_budget"
+            return "ask_location"
+        return goal
 
-    if node_id == "node-1767592854176":
-        return "greet_and_confirm_identity"
-    if node_id in {"node-1735264873079", "node-1735970090937"}:
-        return "ask_availability"
-    if node_id in {"node-1735264921453", "fallback_intent"} or "intent" in node_name or "purpose" in node_name:
-        return "ask_intent"
-    if node_id == "node-1735267546732":
-        if location and not budget:
-            return "ask_budget"
-        return "ask_location"
-    if node_id in {"fallback_location"} or "location" in node_name:
-        return "ask_location"
-    if node_id in {"fallback_budget"} or "budget" in node_name:
-        return "ask_budget"
-    if node_id == "node-1736323961832":
-        return "share_property"
-    if node_id in {"node-1735265015507", "fallback_visit_datetime"}:
-        return "ask_visit_time"
-    if node_id in {"node-1736492391269", "fallback_callback_time"}:
-        return "ask_callback_time"
-    if node_id in {"node-1735265209472", "node-1736567518748"}:
-        return "confirm_and_close"
+    # Fallback to type-based classification
     if node.get("type") == "end":
         return "end_conversation"
-    if "objection" in node_name:
-        return "handle_objection"
-    if "seller" in node_name:
-        return "seller_flow"
+    if node.get("type") == "fallback":
+        return "clarify_input"
+        
     return "generic"
 
 

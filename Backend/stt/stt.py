@@ -125,7 +125,7 @@ def transcribe_audio(audio_chunk: bytes) -> str:
                 "file": (buffer.name, buffer.read()),
                 "model": "whisper-large-v3-turbo",
                 "response_format": "json",
-                "prompt": "Real estate properties in Wakad, Hinjewadi, Baner, Kharadi. Buy, rent, invest, seller, buyer, budget, lakhs, crores, rupees, preference."
+                "prompt": "Real estate properties in Wakad, Hinjewadi, Baner, Kharadi. Buy, rent, invest, budget, lakhs, crores. हाँ, अच्छा, ठीक है, सांगा, सांगा ना, बोला, बोला ना."
             }
             
             # Lock language ONLY if strictly set in config, otherwise auto-detect for code-mixing
@@ -157,11 +157,15 @@ def transcribe_audio(audio_chunk: bytes) -> str:
 
             # Reject very short transcripts that are predominantly non-ASCII
             # (e.g. a 4-char Korean snippet on background noise)
+            # EXCEPTION: Allow Devanagari script (Hindi/Marathi)
             if text:
                 non_latin = sum(1 for ch in text if ch.isalpha() and not ch.isascii())
-                if non_latin > 0 and len(text) < 8 and non_latin / len(text) > 0.5:
-                    logger.info("STT (Groq Cloud) rejected short non-Latin noise: '%s'", text.encode('ascii', 'replace').decode('ascii'))
-                    return ""
+                if non_latin > 0:
+                    # Check if it's Devanagari (Hindi/Marathi)
+                    has_devanagari = any('\u0900' <= ch <= '\u097f' for ch in text)
+                    if not has_devanagari and len(text) < 8 and non_latin / len(text) > 0.5:
+                        logger.info("STT (Groq Cloud) rejected short non-Latin noise: '%s'", text.encode('ascii', 'replace').decode('ascii'))
+                        return ""
 
             if text:
                 safe_text = _safe_log_text(text)

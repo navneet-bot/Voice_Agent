@@ -6,7 +6,7 @@ Backend/.env
 .env
 venv/
 env/
-
+Backend/work_log.md
 # Voice / Media (Temporary chunks)
 Backend/audio/
 Backend/output/

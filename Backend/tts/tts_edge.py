@@ -20,16 +20,30 @@ from tts.config import EDGE_SPEECH_RATE
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_VOICE = "en-IN-NeerjaExpressiveNeural"
+VOICE_MAP = {
+    "en": "en-IN-NeerjaExpressiveNeural",
+    "hi": "hi-IN-SwaraNeural",
+    "hinglish": "hi-IN-SwaraNeural",
+    "mr": "mr-IN-AarohiNeural"
+}
+
+DEFAULT_VOICE = VOICE_MAP["en"]
 
 def generate_speech_stream(text: str, preferred_language: str | None = None):
     """
-    Synchronous wrapper that yields PCM16 bytes chunks sequentially so it directly plugs
-    into the existing mic_conversation.py and flows/runtime.py pipeline loops without async breakage.
+    Synchronous wrapper that yields PCM16 bytes chunks sequentially.
+    Uses language-aware voice selection to ensure correct pronunciation.
     """
     if not text or not text.strip():
         yield b""
         return
+
+    # Select the best voice for the active language
+    voice = VOICE_MAP.get(preferred_language, DEFAULT_VOICE)
+    if preferred_language == "mr" and "mr-IN" not in voice:
+         voice = VOICE_MAP["mr"]
+    elif preferred_language in ("hi", "hinglish") and "hi-IN" not in voice:
+         voice = VOICE_MAP["hi"]
 
     # ── Text normalisation for faster-paced speech ──────────────────────
     # Expand abbreviations and clean up text so the neural voice stays
@@ -51,7 +65,7 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
 
     try:
         # Run asynchronously and collect stream blocks.
-        communicate = edge_tts.Communicate(text, DEFAULT_VOICE, rate=EDGE_SPEECH_RATE)
+        communicate = edge_tts.Communicate(text, voice, rate=EDGE_SPEECH_RATE)
         
         async def _collect_mp3():
             audio_buffer = bytearray()

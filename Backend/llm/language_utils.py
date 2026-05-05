@@ -8,8 +8,19 @@ import re
 
 SUPPORTED_LANGUAGES = {"en", "hi", "mr", "hinglish"}
 DEVANAGARI_RANGE = ("\u0900", "\u097F")
-HINDI_MARKERS = ("है", "नहीं", "मुझे", "आप", "क्या", "जी", "चाहिए", "करना", "बोलिए")
-MARATHI_MARKERS = ("आहे", "नाही", "माझ", "तुम्ह", "काय", "होय", "पाहिजे", "करू", "बोला")
+HINDI_MARKERS = {
+    "hindi", "hindi mein", "bol", "boliye", "bataiye", "samajh", "nahi", "haan", "acha", "theek",
+    "kya", "kyun", "kaise", "kab", "kaun", "kahan", "hai", "hain", "tha", "thi", "the",
+    "kar", "karo", "kar rahe", "baat", "call", "milenge", "do minute", "investment",
+    "ghar", "flat", "property", "zaroorat", "chaiye", "chahiye", "mangta",
+    "है", "नहीं", "मुझे", "आप", "क्या", "जी", "चाहिए", "करना", "बोलिए", "हाँ", "अच्छा", "ठीक",
+}
+MARATHI_MARKERS = {
+    "marathi", "marathi madhe", "bol", "bola", "sanga", "sangal", "pahije", "ho", "nahi",
+    "kai", "kasa", "kiva", "ani", "pan", "tar", "aahe", "aahet", "hote", "hoti", "hota",
+    "karaycha", "kartoy", "boltoy", "boltey", "ghetlay", "pahata", "pahat",
+    "आहे", "नाही", "माझ", "तुम्ह", "काय", "होय", "पाहिजे", "करू", "बोला", "हो", "सांगा",
+}
 HINGLISH_MARKERS = (
     "aap", "apka", "apki", "haan", "han", "ji", "nahi", "nahin",
     "achha", "acha", "kya", "kaise", "karna", "chahiye", "chahiye",
@@ -31,7 +42,7 @@ ENGLISH_STYLE_MARKERS = (
     "price", "range", "premium", "options", "rent", "rental", "apartment",
 )
 LOCALIZED_TEMPLATE_MAP = {
-    "Hey, this is Neha — am I speaking with {{name}}?": {
+    "Hey, this is Neha — I'm with the Real Estate team. Is this {{name}}?": {
         "hi": "Hi, Neha bol rahi hoon. Kya main {{name}} se baat kar rahi hoon?",
         "hinglish": "Hi, Neha bol rahi hoon. Kya main {{name}} se baat kar rahi hoon?",
     },
@@ -55,7 +66,7 @@ LOCALIZED_TEMPLATE_MAP = {
         "hi": "Time dene ke liye thanks. Aapka din achha rahe.",
         "hinglish": "Time dene ke liye thanks. Have a great day.",
     },
-    "Quick question — do you have two minutes right now? I came across something that might actually be relevant for you.": {
+    "Do you have two minutes right now? I came across something that might actually be relevant for you.": {
         "hi": "Bas do minute milenge? Aapke liye ek relevant option tha.",
         "hinglish": "Bas 2 minute milenge? Aapke liye ek relevant option tha.",
     },
@@ -77,8 +88,8 @@ LOCALIZED_TEMPLATE_MAP = {
         "hinglish": "No worries. Main WhatsApp par details bhej doon? Aap jab convenient ho tab dekh lena.",
     },
     "Which part of the city are you looking at — and roughly what budget should I work with?": {
-        "hi": "Kaunsi location side dekh rahe ho, aur budget roughly kitna socha hai?",
-        "hinglish": "Kaunsi location side dekh rahe ho, aur budget roughly kitna hai?",
+        "hi": "Aap kis area mein dekh rahe hain — aur budget roughly kitna rahega?",
+        "hinglish": "Aap kis area mein dekh rahe ho — aur budget roughly kitna rahega?",
     },
     "Which city or area are you considering?": {
         "hi": "Kaunsa city ya area dekh rahe ho?",
@@ -88,21 +99,21 @@ LOCALIZED_TEMPLATE_MAP = {
         "hi": "Budget range roughly kitni rakhun?",
         "hinglish": "Budget range roughly kitni rakhun?",
     },
-    "Actually, I have something in {{location}} that fits your budget well — it's a {{property_type}} that's quite well-suited for what you're looking for. Would you want to see it in person?": {
-        "hi": "{{location}} mein ek option hai jo aapke budget mein achha fit hota hai. Ye {{property_type}} hai, dekhna chahoge site par?",
-        "hinglish": "{{location}} mein ek option hai jo aapke budget mein kaafi achha fit hota hai. Ye {{property_type}} hai, site visit karna chahoge?",
+    "Actually, I have a property in {{location}} that fits your budget well. Would you like to visit it in person?": {
+        "hi": "Mere paas {{location}} mein ek property hai jo aapke budget mein fit baithti hai. Kya aap use dekhne jaana chahenge?",
+        "hinglish": "Mere paas {{location}} mein ek property hai jo aapke budget mein fit baithti hai. Kya aap visit karna chahenge?",
     },
     "What works better for you — weekend or a weekday? And any time preference?": {
-        "hi": "Aapke liye weekend better rahega ya weekday? Time ka bhi koi preference hai?",
-        "hinglish": "Weekend better rahega ya weekday? Time ka bhi koi preference hai?",
+        "hi": "Aapke liye weekend better rahega ya weekday? Aur koi time preference?",
+        "hinglish": "Aapke liye weekend better rahega ya weekday? Aur koi time preference?",
     },
     "Done — I'll send you the location and directions on WhatsApp before {{timeline}}. Looking forward to it.": {
-        "hi": "Perfect, {{timeline}} se pehle main location aur directions WhatsApp par bhej dungi. Milte hain.",
-        "hinglish": "Perfect, {{timeline}} se pehle main location aur directions WhatsApp par bhej dungi. Looking forward.",
+        "hi": "Done — main aapko {{timeline}} se pehle WhatsApp par location bhej dungi. Milte hain fir.",
+        "hinglish": "Done — main aapko {{timeline}} se pehle WhatsApp par location bhej dungi. See you then.",
     },
     "All set — see you then. Have a good one!": {
-        "hi": "Perfect, phir milte hain. Aapka din achha rahe.",
-        "hinglish": "All set, phir milte hain. Have a good one.",
+        "hi": "Sab set hai — fir milte hain. Have a good one!",
+        "hinglish": "Sab set hai — see you then. Have a good one!",
     },
     "No worries. When's a better time to catch you — morning, afternoon, or evening?": {
         "hi": "Koi baat nahi. Callback ke liye morning, afternoon ya evening mein kya better rahega?",
@@ -136,23 +147,23 @@ LOCALIZED_TEMPLATE_MAP = {
         "hi": "Bilkul theek hai. Take care.",
         "hinglish": "No problem at all. Take care.",
     },
-    "I'm sorry, I didn't quite catch that! Could you please let me know, are you exploring for yourself or as an investment?": {
+    "Ah, I missed that. Are you looking to buy for yourself, or is it more of an investment?": {
         "hi": "Thoda clear bolenge? Aap khud ke liye dekh rahe ho ya investment ke liye?",
         "hinglish": "Thoda clear bolenge? Aap khud ke liye dekh rahe ho ya investment ke liye?",
     },
-    "I'm sorry, I didn't quite catch that! If you are unsure, popular areas include Wakad, Baner, Hinjewadi, and Kharadi. Which part of the city are you looking at?": {
+    "Sorry, which area was that? Somewhere like Wakad or Baner, or maybe Hinjewadi?": {
         "hi": "Thoda clear bolenge? Agar open ho to Wakad, Baner, Hinjewadi ya Kharadi achhe options hain. Aap kis side dekh rahe ho?",
         "hinglish": "Thoda clear bolenge? Agar open ho to Wakad, Baner, Hinjewadi ya Kharadi achhe options hain. Aap kis side dekh rahe ho?",
     },
-    "I'm sorry, I didn't quite catch that! If you are unsure, we have great options ranging from 50 lakhs to 2 crores. Roughly what budget should I work with?": {
+    "I didn't get the budget clearly. Are we looking around 50 lakhs, or perhaps closer to 2 crores?": {
         "hi": "Thoda clear bolenge? 50 lakh se 2 crore tak options hain. Aapka budget roughly kitna hai?",
         "hinglish": "Thoda clear bolenge? 50 lakh se 2 crore tak options hain. Aapka budget roughly kitna hai?",
     },
-    "I'm sorry, I didn't quite catch that! Could you please let me know, are you looking for a 1 BHK, 2 BHK, or something else?": {
+    "Could you repeat the property type? Is it a 2 BHK you're looking for, or something else?": {
         "hi": "Thoda clear bolenge? Aap 1 BHK, 2 BHK ya kuch aur dekh rahe ho?",
         "hinglish": "Thoda clear bolenge? Aap 1 BHK, 2 BHK ya kuch aur dekh rahe ho?",
     },
-    "I'm sorry, I didn't quite catch that! Could you please let me know, what works better for you — weekend or a weekday? And any time preference?": {
+    "What works better for you — weekend or a weekday? And any time preference?": {
         "hi": "Thoda clear bolenge? Weekend better rahega ya weekday? Time ka bhi koi preference hai?",
         "hinglish": "Thoda clear bolenge? Weekend better rahega ya weekday? Time ka bhi koi preference hai?",
     },
