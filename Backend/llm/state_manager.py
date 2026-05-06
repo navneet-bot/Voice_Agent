@@ -1169,6 +1169,20 @@ class StateManager:
         """Resolve next node strictly from current node edges."""
         node_id = current_node.get("id", "")
 
+        # ── Global Interrupts / Shortcuts ───────────────────────────────────────────
+        # If user says they are free or provides intent during callback scheduling, jump to Ask Intent
+        if node_id in {"node-1736492391269", "fallback_callback_time"}:
+            if intent in {"confirm_availability", "provide_intent", "confirm"}:
+                target = self.nodes.get("node-1735264921453")  # Ask Intent
+                if target:
+                    _log("STATE", f"{node_id} -> {target['id']} (resumed flow from callback)")
+                    return target
+            if intent in {"deny", "deny_interest", "deny_time"}:
+                target = self.nodes.get("node-1736492520068")  # Immediate End Call
+                if target:
+                    _log("STATE", f"{node_id} -> {target['id']} (user refused callback)")
+                    return target
+
         # ── Intent shortcut from Ask Intent or fallback_intent ──────────────────
         # When user gives a valid intent (buy/invest/rent/sell) on either the Ask
         # Intent node OR its fallback, skip intermediate steps and jump directly
@@ -1838,7 +1852,7 @@ class StateManager:
                 return "deny_time"
             if any(hint in clean_text for hint in INTERESTED_HINTS):
                 return "confirm_identity"
-            return "deny_time"
+            return "unclear"
 
         if intent.startswith("unclear") or intent == "ask_off_topic":
             if current_node["id"] in ("node-1735265209472", "node-1736567518748", "node-1736492485610"):
