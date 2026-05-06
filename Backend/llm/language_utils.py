@@ -236,9 +236,17 @@ class LanguageTracker:
             self._pending_hits = 0
             return self.current_language, analysis
 
-        strong_switch = analysis.confidence >= 0.9 or (
-            detected in {"hi", "mr"} and analysis.confidence >= 0.82
-        )
+        # Make it "sticky" to non-English languages
+        is_returning_to_english = detected == "en" and self.current_language in {"hi", "mr", "hinglish"}
+        
+        # Require very high confidence to switch back to English immediately
+        if is_returning_to_english:
+            strong_switch = analysis.confidence >= 0.98
+        else:
+            strong_switch = analysis.confidence >= 0.9 or (
+                detected in {"hi", "mr"} and analysis.confidence >= 0.82
+            )
+
         if strong_switch:
             self.current_language = detected
             self._pending_language = None
@@ -251,7 +259,9 @@ class LanguageTracker:
             self._pending_language = detected
             self._pending_hits = 1
 
-        if self._pending_hits >= 2:
+        # Require more hits to switch back to English if it wasn't a strong switch
+        required_hits = 3 if is_returning_to_english else 2
+        if self._pending_hits >= required_hits:
             self.current_language = detected
             self._pending_language = None
             self._pending_hits = 0

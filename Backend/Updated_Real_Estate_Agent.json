@@ -66,7 +66,7 @@
                             "type": "prompt",
                             "prompt": "user asks for identification or purpose of call"
                         },
-                        "destination_node_id": "node-1735264873079"
+                        "destination_node_id": "node-1735264921453"
                     }
                 ],
                 "start_speaker": "agent",

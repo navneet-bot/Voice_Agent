@@ -125,7 +125,7 @@ def transcribe_audio(audio_chunk: bytes) -> str:
                 "file": (buffer.name, buffer.read()),
                 "model": "whisper-large-v3-turbo",
                 "response_format": "json",
-                "prompt": "Real estate properties in Wakad, Hinjewadi, Baner, Kharadi. Buy, rent, invest, budget, lakhs, crores. हाँ, अच्छा, ठीक है, सांगा, सांगा ना, बोला, बोला ना."
+                "prompt": "Real estate properties in Pune, Wakad, Hinjewadi, Baner, Kharadi. Buy, rent, invest, budget, 1 BHK, 2 BHK, 3 BHK, 4 BHK, lakhs, crores. हाँ, मुझे प्रॉपर्टी चाहिए, मेरा बजट 50 लाख है, एक करोड़, हाँ जी, अच्छा, ठीक है, सांगा, सांगा ना, बोला, बोला ना, होय, नाही, पाहिजे, मला बघायचंय, investment ke liye, khud ke liye, rent pe, kiraye pe, 50 lakh ke around."
             }
             
             # Lock language ONLY if strictly set in config, otherwise auto-detect for code-mixing

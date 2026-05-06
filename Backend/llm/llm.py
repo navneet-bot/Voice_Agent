@@ -84,12 +84,14 @@ unclear_callback_time, unclear, user_question, suggest_time, confirm_availabilit
 
 Rules:
 - Choose the single most specific intent
-- The user may speak in English, Hindi, or Hinglish. Understand romanized Hindi too.
-- Map natural Hindi/Hinglish phrases to the same schema:
-  - "investment ke liye", "nivesh ke liye" -> provide_intent with intent_value "invest"
-  - "khud ke liye", "apne liye", "rehne ke liye" -> provide_intent with intent_value "buy"
-  - "rent pe", "kiraye pe", "on rent" -> provide_intent with intent_value "rent"
-  - "budget 50 lakh", "50 lakh ke around", "mera budget 1 crore hai" -> extract budget
+- The user may speak in English, Hindi, Hinglish, or Marathi. Understand romanized scripts too.
+- Map natural Hindi/Hinglish/Marathi phrases to the same schema:
+  - "investment ke liye", "nivesh ke liye", "investment sathi" -> provide_intent with intent_value "invest"
+  - "khud ke liye", "apne liye", "rehne ke liye", "swatasathi", "swata sathi" -> provide_intent with intent_value "buy"
+  - "rent pe", "kiraye pe", "on rent", "bhadyane", "rent sathi" -> provide_intent with intent_value "rent"
+  - "budget 50 lakh", "50 lakh ke around", "mera budget 1 crore hai", "majha budget 50 lakh ahe" -> extract budget
+  - "haan", "ho", "ho chalel", "haa" -> intent: "confirm"
+  - "nahi", "nako", "nai" -> intent: "deny"
 - CRITICAL: "What about tomorrow?", "Tomorrow works", "Kal call karna", "Next week okay" -> intent: "suggest_time" (NOT deny, NOT deny_time)
 - CRITICAL: If user is asking a question (e.g., "What is it?", "Oh, what it is?", "Kya hai?", "What are you talking about?") -> intent: "user_question" (NOT deny_time, NOT deny)
 - CRITICAL: If user corrects and says "I have time", "I said I have time", "I am free" -> intent: "confirm_availability"
