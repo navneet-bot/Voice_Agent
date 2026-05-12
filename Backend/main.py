@@ -59,6 +59,7 @@ from db.db_manager import db
 from demo_runner import DemoCallEngine
 from agent_runner import run_campaign
 from telephony.provider_registry import get_provider, list_providers
+from metrics.provider_metrics import snapshot_provider_metrics
 
 _PIPECAT_AVAILABLE = False
 try:
@@ -145,6 +146,8 @@ class AgentCreate(BaseModel):
     language: str
     max_duration: int
     provider: str
+    stt_provider: str = "groq"
+    tts_provider: str = "edge"
     script: str
     data_fields: List[str]
 
@@ -246,6 +249,10 @@ registerProcessor('mic-capture-processor', MicCaptureProcessor);
 async def get_dashboard():
     return await db.get_dashboard_stats()
 
+@app.get("/api/provider-metrics")
+async def get_provider_metrics():
+    return snapshot_provider_metrics()
+
 
 # ── Agents ────────────────────────────────────────────────────────────────────
 @app.get("/api/agents")
@@ -263,10 +270,22 @@ async def create_agent(agent: AgentCreate):
         voice_id=voice_id,
         data_fields=agent.data_fields,
     )
+    stt_provider = agent.stt_provider if agent.stt_provider in {"groq", "deepgram"} else "groq"
+    tts_provider = agent.tts_provider if agent.tts_provider in {"edge", "cartesia"} else "edge"
+    agent_schema["provider_config"] = {
+        "stt_provider": stt_provider,
+        "tts_provider": tts_provider,
+    }
     schema_path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
     with open(schema_path, "w") as f:
         json.dump(agent_schema, f, indent=4)
-    data = {**agent.dict(), "schema_path": schema_path, "created_at": datetime.now().isoformat()}
+    data = {
+        **agent.dict(),
+        "stt_provider": stt_provider,
+        "tts_provider": tts_provider,
+        "schema_path": schema_path,
+        "created_at": datetime.now().isoformat(),
+    }
     return await db.create_agent(agent_id, data)
 
 
@@ -723,12 +742,12 @@ async def websocket_voice_live(websocket: WebSocket):
 
     source = VoiceLiveSource()
     turn_state = VoiceTurnState()
-    stt    = RealEstateSTTProcessor(turn_state=turn_state)
+    stt    = RealEstateSTTProcessor(turn_state=turn_state, agent_id=agent_id)
     llm    = RealEstateLLMProcessor()
     llm.state_manager = StateManager(schema_path)
     llm.state_manager.conversation_data["name"] = lead_name
     llm.state_manager.conversation_data["lead_name"] = lead_name
-    tts    = RealEstateTTSProcessor(turn_state=turn_state)
+    tts    = RealEstateTTSProcessor(turn_state=turn_state, agent_id=agent_id)
     sink   = VoiceLiveSink(websocket)
 
     pipeline    = Pipeline([source, stt, llm, tts, sink])
@@ -891,13 +910,13 @@ async def websocket_voice_demo(websocket: WebSocket):
         try:
             source = VoiceLiveSource(recorder=recorder)
             turn_state = VoiceTurnState()
-            stt    = RealEstateSTTProcessor(turn_state=turn_state)
+            stt    = RealEstateSTTProcessor(turn_state=turn_state, agent_id=agent_id)
             llm    = RealEstateLLMProcessor()
             llm.state_manager = StateManager(schema_path)
             llm.state_manager.conversation_data["name"] = lead_name
             llm.state_manager.conversation_data["lead_name"] = lead_name
             llm_ref = llm  # capture ref BEFORE runner_task starts
-            tts    = RealEstateTTSProcessor(turn_state=turn_state)
+            tts    = RealEstateTTSProcessor(turn_state=turn_state, agent_id=agent_id)
             sink   = VoiceLiveSink(websocket, on_transcript=on_transcript, recorder=recorder)
             logger.info("Voice Demo: Pipeline components created")
 

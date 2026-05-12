@@ -115,14 +115,15 @@ async def handle_twilio_stream(
     from llm.state_manager import StateManager
 
     source = TwilioSource()
-    stt = RealEstateSTTProcessor()
+    agent_id = os.path.splitext(os.path.basename(agent_schema_path or "default"))[0] or "default"
+    stt = RealEstateSTTProcessor(agent_id=agent_id)
     llm = RealEstateLLMProcessor()
 
     # Load agent schema FRESH from disk on every call (auto-reload)
     if os.path.exists(agent_schema_path):
         llm.state_manager = StateManager(agent_schema_path)
 
-    tts = RealEstateTTSProcessor()
+    tts = RealEstateTTSProcessor(agent_id=agent_id)
     sink = TwilioSink(websocket, call_id=call_id, ws_manager=ws_manager)
 
     pipeline = Pipeline([source, stt, llm, tts, sink])

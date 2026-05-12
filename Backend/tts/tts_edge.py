@@ -11,14 +11,56 @@ from __future__ import annotations
 import asyncio
 import logging
 import io
+import time
 import warnings
+from collections import deque
 
 import edge_tts
 import numpy as np
 
 from tts.config import EDGE_SPEECH_RATE
+from metrics.provider_metrics import record_provider_metric
 
 logger = logging.getLogger(__name__)
+_tts_ttfb_samples = deque(maxlen=200)
+_tts_total_samples = deque(maxlen=200)
+
+
+def _percentile(values, percentile: float) -> float:
+    """Return a simple nearest-rank percentile for small rolling samples."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = int(round((len(ordered) - 1) * percentile))
+    return ordered[index]
+
+
+def _record_tts_latency(
+    *,
+    provider: str,
+    voice: str,
+    ttfb_s: float,
+    total_s: float,
+    chunks: int,
+    bytes_out: int,
+) -> None:
+    _tts_ttfb_samples.append(ttfb_s)
+    _tts_total_samples.append(total_s)
+    logger.info(
+        "[TTS METRICS] provider=%s voice=%s ttfb_ms=%.1f total_ms=%.1f "
+        "p50_total_ms=%.1f p95_total_ms=%.1f chunks=%d bytes=%d samples=%d",
+        provider,
+        voice,
+        ttfb_s * 1000.0,
+        total_s * 1000.0,
+        _percentile(_tts_total_samples, 0.50) * 1000.0,
+        _percentile(_tts_total_samples, 0.95) * 1000.0,
+        chunks,
+        bytes_out,
+        len(_tts_total_samples),
+    )
+    record_provider_metric("tts_ttfb", provider, ttfb_s * 1000.0)
+    record_provider_metric("tts_total", provider, total_s * 1000.0)
 
 VOICE_MAP = {
     "en": "en-IN-NeerjaExpressiveNeural",
@@ -37,6 +79,10 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
     if not text or not text.strip():
         yield b""
         return
+    started_at = time.perf_counter()
+    first_yield_at = None
+    chunk_count = 0
+    bytes_out = 0
 
     # Select the best voice for the active language
     voice = VOICE_MAP.get(preferred_language, DEFAULT_VOICE)
@@ -107,7 +153,23 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
         # Yield in sensible chunks (e.g. 4096 bytes) for streaming
         chunk_size = 4096
         for i in range(0, len(pcm_bytes), chunk_size):
-            yield pcm_bytes[i:i + chunk_size]
+            chunk = pcm_bytes[i:i + chunk_size]
+            if first_yield_at is None:
+                first_yield_at = time.perf_counter()
+            chunk_count += 1
+            bytes_out += len(chunk)
+            yield chunk
+
+        total_s = time.perf_counter() - started_at
+        ttfb_s = (first_yield_at - started_at) if first_yield_at is not None else total_s
+        _record_tts_latency(
+            provider="edge",
+            voice=voice,
+            ttfb_s=ttfb_s,
+            total_s=total_s,
+            chunks=chunk_count,
+            bytes_out=bytes_out,
+        )
 
     except Exception as e:
         logger.error("Edge TTS Cloud Generation failed: %s", e)

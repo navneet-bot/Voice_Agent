@@ -7,7 +7,7 @@
 # generate_speech(text: str) -> bytes signature.
 # ---------------------------------------------------------------------------
 
-from tts.tts_edge import generate_speech_stream
+from tts.provider import generate_speech_stream
 
 def check_voice_assets():
     # Edge TTS requires no local assets!

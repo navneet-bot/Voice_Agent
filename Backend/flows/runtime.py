@@ -58,7 +58,7 @@ try:
 except ImportError:
     logging.warning("stt.stt.transcribe_audio not available yet. Using mock STT.")
 
-    def transcribe_audio(audio_chunk: bytes) -> str:
+    def transcribe_audio(audio_chunk: bytes, agent_id: str = "default") -> str:
         return "mock transcription"
 
 try:
@@ -66,7 +66,11 @@ try:
 except ImportError:
     logging.warning("tts engine not found. Using mock TTS.")
 
-    def generate_speech_stream(text: str, preferred_language: str | None = None):
+    def generate_speech_stream(
+        text: str,
+        preferred_language: str | None = None,
+        agent_id: str = "default",
+    ):
         return iter([])
 
 logger = logging.getLogger(__name__)
@@ -280,8 +284,9 @@ class RealEstateLLMProcessor(FrameProcessor):
 class RealEstateSTTProcessor(FrameProcessor):
     """Low-latency STT with Adaptive VAD (Noise Floor Calibration)."""
 
-    def __init__(self, turn_state: VoiceTurnState | None = None):
+    def __init__(self, turn_state: VoiceTurnState | None = None, agent_id: str = "default"):
         super().__init__()
+        self.agent_id = agent_id or "default"
         self.audio_buffer = bytearray()
         self.min_chunk_bytes = _ms_to_bytes(stt_cfg.MIN_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
         # Keep larger chunks so sentences are finalized after a real pause, not mid-thought.
@@ -384,6 +389,14 @@ class RealEstateSTTProcessor(FrameProcessor):
                 dynamic_threshold,
                 self.noise_floor,
             )
+            logger.info(
+                "[VAD EVENT] speech_start timestamp=%.3f rms=%.4f threshold=%.4f floor=%.4f source_rate=%d",
+                time.time(),
+                chunk_rms,
+                dynamic_threshold,
+                self.noise_floor,
+                getattr(frame, "sample_rate", 0),
+            )
 
         self._voiced_ms += chunk_duration_ms
         if chunk_rms >= voice_presence_threshold:
@@ -418,6 +431,15 @@ class RealEstateSTTProcessor(FrameProcessor):
             return
 
         chunk = bytes(self.audio_buffer)
+        buffered_ms = (len(self.audio_buffer) / 2.0) / float(stt_cfg.TARGET_SAMPLE_RATE) * 1000.0
+        logger.info(
+            "[VAD EVENT] speech_end timestamp=%.3f buffered_ms=%.1f bytes=%d silence_ms=%.1f voiced_ms=%.1f",
+            time.time(),
+            buffered_ms,
+            len(self.audio_buffer),
+            silence_elapsed_ms,
+            self._voiced_ms,
+        )
         self.audio_buffer.clear()
         self.is_speaking = False
         self._barge_in_sent = False
@@ -429,7 +451,10 @@ class RealEstateSTTProcessor(FrameProcessor):
             # 2. CIRCUIT BREAKER (STT Timeout)
             async with _ml_semaphore:
                 text = await asyncio.wait_for(
-                    asyncio.get_running_loop().run_in_executor(_executor, transcribe_audio, chunk),
+                    asyncio.get_running_loop().run_in_executor(
+                        _executor,
+                        lambda: transcribe_audio(chunk, self.agent_id),
+                    ),
                     timeout=3.5
                 )
         except asyncio.TimeoutError:
@@ -465,8 +490,9 @@ class RealEstateSTTProcessor(FrameProcessor):
 class RealEstateTTSProcessor(FrameProcessor):
     """Turn assistant text into speech, tagged with generation_id for client-side filtering."""
 
-    def __init__(self, turn_state: VoiceTurnState | None = None):
+    def __init__(self, turn_state: VoiceTurnState | None = None, agent_id: str = "default"):
         super().__init__()
+        self.agent_id = agent_id or "default"
         self.last_reply = ""
         self.last_reply_at = 0.0
         self._tts_task = None
@@ -542,7 +568,7 @@ class RealEstateTTSProcessor(FrameProcessor):
         self._tts_task = asyncio.create_task(self._run_tts(text, preferred_language, gen_id, direction))
         
     async def _run_tts(self, text, preferred_lang, gen_id, direction):
-        speech_gen = generate_speech_stream(text, preferred_lang)
+        speech_gen = generate_speech_stream(text, preferred_lang, self.agent_id)
         if not speech_gen: return
 
         chunk_count = 0

@@ -10,6 +10,7 @@ export default function AdminMonitor() {
     sysLoad: 'Normal'
   });
   const [liveCalls, setLiveCalls] = useState({});
+  const [providerMetrics, setProviderMetrics] = useState({});
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -71,6 +72,29 @@ export default function AdminMonitor() {
     };
   }, []);
 
+  useEffect(() => {
+    const API = process.env.NEXT_PUBLIC_API_URL || `http://localhost:8000`;
+    let cancelled = false;
+
+    const fetchProviderMetrics = async () => {
+      try {
+        const res = await fetch(`${API}/api/provider-metrics`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setProviderMetrics(data.metrics || {});
+      } catch (e) {
+        console.error('Provider metrics fetch error', e);
+      }
+    };
+
+    fetchProviderMetrics();
+    const interval = setInterval(fetchProviderMetrics, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
+
   const getStatusBadge = (status) => {
     switch (status) {
       case 'ringing': return <span className="badge bg-warning text-dark"><span className="spinner-grow spinner-grow-sm me-1" aria-hidden="true"></span>Ringing</span>;
@@ -128,6 +152,29 @@ export default function AdminMonitor() {
               <h3 className="mb-0 fw-bold">{metrics.sysLoad}</h3>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div className="card border-0 shadow-sm mb-4">
+        <div className="card-header bg-white border-bottom py-3">
+          <h6 className="mb-0 fw-bold">Provider Latency</h6>
+        </div>
+        <div className="card-body">
+          {Object.keys(providerMetrics).length === 0 ? (
+            <p className="text-muted small mb-0">No STT/TTS samples captured yet.</p>
+          ) : (
+            <div className="row g-3">
+              {Object.entries(providerMetrics).map(([key, metric]) => (
+                <div key={key} className="col-md-3">
+                  <div className="border rounded-3 p-3 h-100">
+                    <div className="small text-muted text-uppercase fw-semibold mb-1">{key.replace(':', ' / ')}</div>
+                    <div className="fw-bold">{Math.round(metric.latest_ms || 0)} ms latest</div>
+                    <div className="small text-muted">p50 {Math.round(metric.p50_ms || 0)} ms - p95 {Math.round(metric.p95_ms || 0)} ms</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

@@ -15,6 +15,8 @@ export default function AgentsPage() {
     language: 'English',
     max_duration: 300,
     provider: 'twilio',
+    stt_provider: 'groq',
+    tts_provider: 'edge',
     script: 'Hello, I am calling about...',
     data_fields: 'interested, budget, location'
   });
@@ -38,7 +40,9 @@ export default function AgentsPage() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchAgents();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCreate = async (e) => {
@@ -88,7 +92,7 @@ export default function AgentsPage() {
           <div className="card-body p-5 text-center text-muted">
             <div className="fs-1 mb-3">🤖</div>
             <h6>No Agents Configured</h6>
-            <p className="small">Click 'Create Agent' to build your first AI persona.</p>
+            <p className="small">Click &apos;Create Agent&apos; to build your first AI persona.</p>
           </div>
         </div>
       ) : (
@@ -103,6 +107,8 @@ export default function AgentsPage() {
                   </div>
                   <p className="small text-muted mb-2"><strong>Voice:</strong> {agent.voice || 'Default'}</p>
                   <p className="small text-muted mb-3"><strong>Provider:</strong> {agent.provider || 'twilio'}</p>
+                  <p className="small text-muted mb-2"><strong>STT:</strong> {agent.stt_provider || 'groq'}</p>
+                  <p className="small text-muted mb-3"><strong>TTS:</strong> {agent.tts_provider || 'edge'}</p>
                   
                   <div className="small text-muted">
                     <strong className="d-block mb-1">Extracted Fields:</strong>
@@ -162,6 +168,25 @@ export default function AgentsPage() {
                     <div className="col-md-4">
                       <label className="form-label small fw-bold">Max Duration (sec)</label>
                       <input type="number" className="form-control" value={formData.max_duration} onChange={e => setFormData({...formData, max_duration: parseInt(e.target.value) || 300})} />
+                    </div>
+                  </div>
+
+                  <div className="row g-3 mb-3">
+                    <div className="col-md-6">
+                      <label className="form-label small fw-bold">STT Engine</label>
+                      <select className="form-select" value={formData.stt_provider} onChange={e => setFormData({...formData, stt_provider: e.target.value})}>
+                        <option value="groq">Groq Whisper (Default)</option>
+                        <option value="deepgram">Deepgram Nova-2</option>
+                      </select>
+                      <div className="form-text">Deepgram remains isolated behind provider flags.</div>
+                    </div>
+                    <div className="col-md-6">
+                      <label className="form-label small fw-bold">TTS Engine</label>
+                      <select className="form-select" value={formData.tts_provider} onChange={e => setFormData({...formData, tts_provider: e.target.value})}>
+                        <option value="edge">Edge TTS (Default)</option>
+                        <option value="cartesia">Cartesia Sonic</option>
+                      </select>
+                      <div className="form-text">Output stays PCM16 mono at 24kHz.</div>
                     </div>
                   </div>
 

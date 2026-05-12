@@ -89,6 +89,8 @@ def _init_schema() -> None:
             language        TEXT DEFAULT 'en',
             max_duration    INTEGER DEFAULT 300,
             provider        TEXT,
+            stt_provider    TEXT DEFAULT 'groq',
+            tts_provider    TEXT DEFAULT 'edge',
             script          TEXT,
             data_fields     TEXT,          -- JSON array as text
             schema_path     TEXT,          -- path to the .json agent schema file
@@ -172,6 +174,14 @@ def _init_schema() -> None:
         # Replaces using lead_id (which is a real FK to leads.id) for custom IDs.
         try:
             conn.execute("ALTER TABLE call_results ADD COLUMN call_key TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN stt_provider TEXT DEFAULT 'groq'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN tts_provider TEXT DEFAULT 'edge'")
         except sqlite3.OperationalError:
             pass
         conn.commit()
@@ -329,12 +339,13 @@ class DatabaseManager:
             conn = _get_connection()
             try:
                 conn.execute(
-                    """INSERT INTO agents (id, name, voice, language, max_duration, provider, script, data_fields, schema_path, client_id, created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    """INSERT INTO agents (id, name, voice, language, max_duration, provider, stt_provider, tts_provider, script, data_fields, schema_path, client_id, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         agent_id, data.get("name"), data.get("voice"),
                         data.get("language", "en"), data.get("max_duration", 300),
-                        data.get("provider"), data.get("script"),
+                        data.get("provider"), data.get("stt_provider", "groq"),
+                        data.get("tts_provider", "edge"), data.get("script"),
                         json.dumps(data.get("data_fields", [])),
                         data.get("schema_path"), data.get("client_id"),
                         datetime.now().isoformat(),
