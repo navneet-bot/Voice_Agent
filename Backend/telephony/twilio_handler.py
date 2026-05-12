@@ -27,6 +27,8 @@ import numpy as np
 from fastapi import WebSocket, WebSocketDisconnect
 from scipy.signal import resample_poly
 
+from call_recording import SessionRecorder, recording_path_and_url
+
 from pipecat.frames.frames import AudioRawFrame, EndFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -39,8 +41,9 @@ logger = logging.getLogger("telephony.twilio")
 class TwilioSource(FrameProcessor):
     """Queues audio frames from the Twilio WebSocket into the Pipecat pipeline."""
 
-    def __init__(self):
+    def __init__(self, recorder: SessionRecorder | None = None):
         super().__init__()
+        self.recorder = recorder
         self._queue: asyncio.Queue = asyncio.Queue()
 
     async def process_frame(self, frame, direction):
@@ -49,6 +52,8 @@ class TwilioSource(FrameProcessor):
     def queue_audio(self, pcm16_bytes: bytes, sample_rate: int = 8000) -> None:
         frame = AudioRawFrame(audio=pcm16_bytes, sample_rate=sample_rate, num_channels=1)
         self._queue.put_nowait(frame)
+        if self.recorder:
+            self.recorder.add_user_audio(pcm16_bytes, sample_rate=sample_rate)
 
     async def run_queue_loop(self):
         """Must be run as a task alongside the Pipecat runner."""
@@ -61,16 +66,25 @@ class TwilioSource(FrameProcessor):
 class TwilioSink(FrameProcessor):
     """Encodes Pipecat TTS audio as base64 μ-law and sends it back to Twilio."""
 
-    def __init__(self, websocket: WebSocket, call_id: str = "", ws_manager=None):
+    def __init__(
+        self,
+        websocket: WebSocket,
+        call_id: str = "",
+        ws_manager=None,
+        recorder: SessionRecorder | None = None,
+    ):
         super().__init__()
         self.ws = websocket
         self.call_id = call_id
         self.ws_manager = ws_manager
+        self.recorder = recorder
 
     async def process_frame(self, frame, direction):
         if isinstance(frame, AudioRawFrame):
             # Resample to 8kHz μ-law for Twilio
             pcm8 = _resample_pcm16(frame.audio, frame.sample_rate, 8000)
+            if self.recorder:
+                self.recorder.add_agent_audio(pcm8, sample_rate=8000)
             ulaw = _pcm16_to_ulaw(pcm8)
             payload = base64.b64encode(ulaw).decode("utf-8")
             msg = json.dumps({
@@ -114,7 +128,8 @@ async def handle_twilio_stream(
     from flows.runtime import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
     from llm.state_manager import StateManager
 
-    source = TwilioSource()
+    recorder = SessionRecorder(sample_rate=8000)
+    source = TwilioSource(recorder=recorder)
     agent_id = os.path.splitext(os.path.basename(agent_schema_path or "default"))[0] or "default"
     stt = RealEstateSTTProcessor(agent_id=agent_id)
     llm = RealEstateLLMProcessor()
@@ -124,7 +139,7 @@ async def handle_twilio_stream(
         llm.state_manager = StateManager(agent_schema_path)
 
     tts = RealEstateTTSProcessor(agent_id=agent_id)
-    sink = TwilioSink(websocket, call_id=call_id, ws_manager=ws_manager)
+    sink = TwilioSink(websocket, call_id=call_id, ws_manager=ws_manager, recorder=recorder)
 
     pipeline = Pipeline([source, stt, llm, tts, sink])
     runner = PipelineRunner()
@@ -182,6 +197,16 @@ async def handle_twilio_stream(
             pass
         logger.info("[TWILIO] Pipeline cleanup complete — call_id=%s", call_id)
 
+        recording_url = ""
+        recording_duration_s = 0.0
+        try:
+            filepath, recording_url = recording_path_and_url("rec_twilio", lead_id or call_id)
+            recording_duration_s = recorder.finalize(filepath)
+            if recording_duration_s <= 0:
+                recording_url = ""
+        except Exception as rec_err:
+            logger.warning("[TWILIO] Recording finalize failed: %s", rec_err)
+
         # ── Persist call result to DB ─────────────────────────────────────────
         # This is the critical step that was missing before v2.2.
         # We always attempt a persist if we have both db and a campaign_id.
@@ -195,6 +220,8 @@ async def handle_twilio_stream(
                 lead_name=lead_name,
                 phone=phone,
                 client_id=client_id,
+                recording_url=recording_url,
+                recording_duration_s=recording_duration_s,
             )
 
 
@@ -207,6 +234,8 @@ async def _persist_call_result(
     lead_name: str,
     phone: str,
     client_id: str,
+    recording_url: str = "",
+    recording_duration_s: float = 0.0,
 ) -> None:
     """
     Extract conversation_data from the live LLM processor's StateManager and
@@ -231,7 +260,7 @@ async def _persist_call_result(
             "name":          lead_name,
             "phone":         phone,
             "calledAt":      datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "duration":      f"{turns * 12}s",
+            "duration":      int(recording_duration_s) if recording_duration_s > 0 else f"{turns * 12}s",
             "status":        "Connected",
             "interested":    interested,
             "budget":        data.get("budget", "—"),
@@ -241,6 +270,7 @@ async def _persist_call_result(
             "provider":      "twilio",
             "processed":     True,
             "lead_data":     data,
+            "recording_url": recording_url,
         }
 
         await db.append_call_result(campaign_id, result)

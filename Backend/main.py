@@ -60,6 +60,7 @@ from demo_runner import DemoCallEngine
 from agent_runner import run_campaign
 from telephony.provider_registry import get_provider, list_providers
 from metrics.provider_metrics import snapshot_provider_metrics
+from call_recording import SessionRecorder as TimelineSessionRecorder
 
 _PIPECAT_AVAILABLE = False
 try:
@@ -710,44 +711,11 @@ async def dashboard_ws_global(websocket: WebSocket):
 # ── VoiceLiveSource / VoiceLiveSink (shared by /api/voice-live and /api/voice-demo) ──
 
 
-import wave
 import time
 
-class SessionRecorder:
-    def __init__(self, sample_rate=16000):
-        self.sample_rate = sample_rate
-        self.user_buffer = bytearray()
-        self.agent_buffer = bytearray()
-        
-    def add_user_audio(self, pcm_data: bytes):
-        self.user_buffer.extend(pcm_data)
-        
-    def add_agent_audio(self, pcm_data: bytes):
-        self.agent_buffer.extend(pcm_data)
-        
-    def finalize(self, filepath: str) -> float:
-        max_len = max(len(self.user_buffer), len(self.agent_buffer))
-        # Ensure even length (16-bit = 2 bytes)
-        if max_len % 2 != 0:
-            max_len += 1
-            
-        user_pad = self.user_buffer + bytearray(max_len - len(self.user_buffer))
-        agent_pad = self.agent_buffer + bytearray(max_len - len(self.agent_buffer))
-        
-        stereo = bytearray(max_len * 2)
-        # Fast interleave
-        stereo[0::4] = user_pad[0::2]
-        stereo[1::4] = user_pad[1::2]
-        stereo[2::4] = agent_pad[0::2]
-        stereo[3::4] = agent_pad[1::2]
-            
-        with wave.open(filepath, "wb") as wf:
-            wf.setnchannels(2)
-            wf.setsampwidth(2)
-            wf.setframerate(self.sample_rate)
-            wf.writeframes(stereo)
-            
-        return max_len / (self.sample_rate * 2) # duration in seconds
+class SessionRecorder(TimelineSessionRecorder):
+    """Compatibility alias for the timeline-aware recorder."""
+    pass
 
 class VoiceLiveSource(FrameProcessor):
     """Bridges browser mic audio into the Pipecat pipeline with backpressure."""
@@ -829,7 +797,7 @@ class VoiceLiveSource(FrameProcessor):
         try:
             self._queue.put_nowait(frame)
             if self.recorder:
-                self.recorder.add_user_audio(data)
+                self.recorder.add_user_audio(data, sample_rate=self._sample_rate)
         except asyncio.QueueFull:
             try:
                 dropped = self._queue.get_nowait()
@@ -892,7 +860,7 @@ class VoiceLiveSink(FrameProcessor):
                 # Send raw PCM16 audio bytes directly to the browser.
                 await self.ws.send_bytes(frame.audio)
                 if self.recorder:
-                    self.recorder.add_agent_audio(frame.audio)
+                    self.recorder.add_agent_audio(frame.audio, sample_rate=frame.sample_rate)
                 logger.info(
                     "[PIPELINE] SINK -> Sent audio bytes=%d",
                     len(frame.audio),
@@ -1103,7 +1071,7 @@ async def websocket_voice_demo(websocket: WebSocket):
     runner_task = None
     pipeline_ok = False
 
-    recorder = SessionRecorder()
+    recorder = TimelineSessionRecorder(sample_rate=24000)
     if _PIPECAT_AVAILABLE:
         try:
             source = VoiceLiveSource(recorder=recorder)
@@ -1248,7 +1216,8 @@ async def websocket_voice_demo(websocket: WebSocket):
             filename = f"rec_{lead_uid}.wav"
             filepath = os.path.join("recordings", filename)
             duration_s = recorder.finalize(filepath)
-            recording_url = f"/recordings/{filename}"
+            if duration_s > 0:
+                recording_url = f"/recordings/{filename}"
         except Exception as _rec_err:
             logger.warning("Voice Demo: Audio recording failed - %s", _rec_err)
 
