@@ -132,26 +132,50 @@ const CARTESIA_FEMALE_VOICES = [
 ];
 const DEFAULT_CARTESIA_VOICE_ID = CARTESIA_FEMALE_VOICES[0].value;
 
+const makeInitialFormData = (overrides = {}) => ({
+  name: '',
+  voice: '11labs-06nek6zjTCD1vCbtc8bc',
+  language: 'English',
+  max_duration: 300,
+  provider: 'twilio',
+  stt_provider: 'groq',
+  tts_provider: 'edge',
+  cartesia_voice_id: DEFAULT_CARTESIA_VOICE_ID,
+  assigned_email: '',
+  agent_type: DEFAULT_AGENT_TYPE,
+  script: AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].prompt,
+  data_fields: AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].fields,
+  ...overrides
+});
+
+const formDataFromAgent = (agent) => {
+  const agentType = agent.agent_type || DEFAULT_AGENT_TYPE;
+  const template = AGENT_TYPE_TEMPLATES[agentType] || AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE];
+  return makeInitialFormData({
+    name: agent.name || '',
+    voice: agent.voice || '11labs-06nek6zjTCD1vCbtc8bc',
+    language: agent.language || 'English',
+    max_duration: agent.max_duration || 300,
+    provider: agent.provider || 'twilio',
+    stt_provider: agent.stt_provider || 'groq',
+    tts_provider: agent.tts_provider || 'edge',
+    cartesia_voice_id: agent.cartesia_voice_id || DEFAULT_CARTESIA_VOICE_ID,
+    assigned_email: agent.assigned_email || '',
+    agent_type: agentType,
+    script: agent.script || template.prompt,
+    data_fields: Array.isArray(agent.data_fields) ? agent.data_fields.join(', ') : agent.data_fields || template.fields
+  });
+};
+
 export default function AgentsPage() {
   const { user } = useAuth();
   const [agents, setAgents] = useState([]);
   const [showModal, setShowModal] = useState(false);
+  const [modalMode, setModalMode] = useState('create');
+  const [editingAgentId, setEditingAgentId] = useState(null);
   const [loading, setLoading] = useState(true);
   
-  const [formData, setFormData] = useState({
-    name: '',
-    voice: '11labs-06nek6zjTCD1vCbtc8bc',
-    language: 'English',
-    max_duration: 300,
-    provider: 'twilio',
-    stt_provider: 'groq',
-    tts_provider: 'edge',
-    cartesia_voice_id: DEFAULT_CARTESIA_VOICE_ID,
-    assigned_email: '',
-    agent_type: DEFAULT_AGENT_TYPE,
-    script: AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].prompt,
-    data_fields: AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].fields
-  });
+  const [formData, setFormData] = useState(makeInitialFormData);
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -179,31 +203,51 @@ export default function AgentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleCreate = async (e) => {
+  const openCreateModal = () => {
+    setModalMode('create');
+    setEditingAgentId(null);
+    setFormData(makeInitialFormData());
+    setShowModal(true);
+  };
+
+  const openEditModal = (agent) => {
+    setModalMode('edit');
+    setEditingAgentId(agent.id);
+    setFormData(formDataFromAgent(agent));
+    setShowModal(true);
+  };
+
+  const closeModal = () => {
+    setShowModal(false);
+    setEditingAgentId(null);
+    setModalMode('create');
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
     const payload = {
       ...formData,
       data_fields: formData.data_fields.split(',').map(s => s.trim()).filter(Boolean)
     };
+    const isEdit = modalMode === 'edit' && editingAgentId;
+    const url = isEdit ? `${API}/api/agents/${editingAgentId}` : `${API}/api/agents`;
 
     try {
-      const res = await fetch(`${API}/api/agents`, {
-        method: 'POST',
+      const res = await fetch(url, {
+        method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
       if (res.ok) {
-        setShowModal(false);
-        setFormData({
-          ...formData,
-          name: '',
-          assigned_email: '',
-          script: AGENT_TYPE_TEMPLATES[formData.agent_type]?.prompt || formData.script,
-          data_fields: AGENT_TYPE_TEMPLATES[formData.agent_type]?.fields || formData.data_fields
-        });
+        closeModal();
+        setFormData(makeInitialFormData({
+          agent_type: formData.agent_type,
+          script: AGENT_TYPE_TEMPLATES[formData.agent_type]?.prompt || AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].prompt,
+          data_fields: AGENT_TYPE_TEMPLATES[formData.agent_type]?.fields || AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].fields
+        }));
         fetchAgents();
       } else {
-        alert("Failed to create agent");
+        alert(isEdit ? "Failed to update agent" : "Failed to create agent");
       }
     } catch (e) {
       console.error(e);
@@ -229,7 +273,7 @@ export default function AgentsPage() {
           <p className="text-muted small mb-0">Configure AI agent personas and voices</p>
         </div>
         {user?.role === 'admin' && (
-          <button className="btn btn-primary btn-sm px-3 shadow-sm" onClick={() => setShowModal(true)}>
+          <button className="btn btn-primary btn-sm px-3 shadow-sm" onClick={openCreateModal}>
             + Create Agent
           </button>
         )}
@@ -275,7 +319,14 @@ export default function AgentsPage() {
                   </div>
                 </div>
                 <div className="card-footer bg-white border-top py-3">
-                  <small className="text-muted">ID: {(agent.id || agent.agent_id || '').substring(0,8)}...</small>
+                  <div className="d-flex justify-content-between align-items-center gap-2">
+                    <small className="text-muted">ID: {(agent.id || agent.agent_id || '').substring(0,8)}...</small>
+                    {user?.role === 'admin' && (
+                      <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => openEditModal(agent)}>
+                        Edit
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
@@ -283,17 +334,17 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {/* Modal for Creating Agent */}
+      {/* Modal for Creating or Editing Agent */}
       {showModal && (
         <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
           <div className="modal-dialog modal-lg modal-dialog-centered">
             <div className="modal-content border-0 shadow">
               <div className="modal-header border-bottom-0 pb-0">
-                <h5 className="modal-title fw-bold">Create New Voice Agent</h5>
-                <button type="button" className="btn-close shadow-none" onClick={() => setShowModal(false)}></button>
+                <h5 className="modal-title fw-bold">{modalMode === 'edit' ? 'Edit Voice Agent' : 'Create New Voice Agent'}</h5>
+                <button type="button" className="btn-close shadow-none" onClick={closeModal}></button>
               </div>
               <div className="modal-body">
-                <form onSubmit={handleCreate}>
+                <form onSubmit={handleSubmit}>
                   <div className="row g-3 mb-3">
                     <div className="col-md-6">
                       <label className="form-label small fw-bold">Agent Name</label>
@@ -385,8 +436,8 @@ export default function AgentsPage() {
                   </div>
 
                   <div className="d-flex justify-content-end gap-2">
-                    <button type="button" className="btn btn-light border" onClick={() => setShowModal(false)}>Cancel</button>
-                    <button type="submit" className="btn btn-primary px-4">Create Agent</button>
+                    <button type="button" className="btn btn-light border" onClick={closeModal}>Cancel</button>
+                    <button type="submit" className="btn btn-primary px-4">{modalMode === 'edit' ? 'Save Changes' : 'Create Agent'}</button>
                   </div>
                 </form>
               </div>

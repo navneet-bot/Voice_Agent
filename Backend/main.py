@@ -281,6 +281,125 @@ async def get_dashboard():
 async def get_provider_metrics():
     return snapshot_provider_metrics()
 
+def _voice_id_for_agent(voice: str | None) -> str:
+    raw_voice = (voice or "11labs-06nek6zjTCD1vCbtc8bc").strip()
+    return VOICE_MAP.get(raw_voice, raw_voice)
+
+
+def _clean_agent_data_fields(fields: Any) -> list[str]:
+    if isinstance(fields, str):
+        return [item.strip() for item in fields.split(",") if item.strip()]
+    if isinstance(fields, list):
+        return [str(item).strip() for item in fields if str(item).strip()]
+    return []
+
+
+def _normalize_agent_record(data: dict) -> dict:
+    normalized = dict(data)
+    normalized["name"] = str(normalized.get("name") or "Voice Agent").strip()
+    normalized["voice"] = str(normalized.get("voice") or "11labs-06nek6zjTCD1vCbtc8bc").strip()
+    normalized["language"] = str(normalized.get("language") or "English").strip()
+    normalized["max_duration"] = int(normalized.get("max_duration") or 300)
+    normalized["provider"] = str(normalized.get("provider") or "twilio").strip()
+    stt_provider = str(normalized.get("stt_provider") or "groq").strip().lower()
+    tts_provider = str(normalized.get("tts_provider") or "edge").strip().lower()
+    normalized["stt_provider"] = stt_provider if stt_provider in VALID_STT_PROVIDERS else "groq"
+    normalized["tts_provider"] = tts_provider if tts_provider in VALID_TTS_PROVIDERS else "edge"
+    normalized["cartesia_voice_id"] = str(normalized.get("cartesia_voice_id") or DEFAULT_CARTESIA_VOICE_ID).strip()
+    normalized["assigned_email"] = str(normalized.get("assigned_email") or "").strip().lower()
+    agent_type = str(normalized.get("agent_type") or "real_estate_sales").strip()
+    normalized["agent_type"] = agent_type if agent_type in VALID_AGENT_TYPES else "real_estate_sales"
+    normalized["script"] = str(normalized.get("script") or "").strip()
+    normalized["data_fields"] = _clean_agent_data_fields(normalized.get("data_fields"))
+    return normalized
+
+
+def _agent_schema_path(agent_id: str, existing_path: str | None = None) -> str:
+    expected_path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
+    if not existing_path:
+        return expected_path
+
+    root = os.path.abspath(AGENTS_DIR)
+    candidate = os.path.abspath(existing_path)
+    if candidate == os.path.abspath(expected_path) or candidate.startswith(root + os.sep):
+        return existing_path
+    logger.warning("Ignoring unsafe schema_path for agent_id=%s: %s", agent_id, existing_path)
+    return expected_path
+
+
+def _write_agent_runtime_schema(
+    agent_id: str,
+    schema_path: str,
+    agent_data: dict,
+    voice_id: str,
+    assigned_client: Optional[dict],
+) -> None:
+    try:
+        with open(schema_path, "r", encoding="utf-8") as existing_file:
+            schema = json.load(existing_file)
+    except (OSError, json.JSONDecodeError):
+        schema = StateManager.template_new_agent(
+            name=agent_data["name"],
+            script=agent_data["script"],
+            voice_id=voice_id,
+            data_fields=agent_data["data_fields"],
+            agent_type=agent_data["agent_type"],
+        )
+
+    if not isinstance(schema, dict):
+        schema = {}
+
+    type_label = AGENT_TYPE_LABELS.get(agent_data["agent_type"], "Customer advisory team")
+    schema["agent_name"] = agent_data["name"]
+    schema["voice_id"] = voice_id
+    schema["global_prompt"] = agent_data["script"]
+    schema["provider_config"] = {
+        "stt_provider": agent_data["stt_provider"],
+        "tts_provider": agent_data["tts_provider"],
+        "cartesia_voice_id": agent_data["cartesia_voice_id"],
+    }
+    schema["agent_metadata"] = {
+        "agent_type": agent_data["agent_type"],
+        "assigned_email": agent_data["assigned_email"],
+        "client_id": assigned_client.get("id") if assigned_client else None,
+    }
+
+    flow = schema.get("conversationFlow")
+    if not isinstance(flow, dict):
+        flow = {"start_node_id": "root_greeting", "nodes": []}
+        schema["conversationFlow"] = flow
+    flow["global_prompt"] = agent_data["script"]
+    flow.setdefault("start_node_id", "root_greeting")
+
+    nodes = flow.get("nodes")
+    if not isinstance(nodes, list):
+        nodes = []
+        flow["nodes"] = nodes
+
+    root = next((node for node in nodes if node.get("id") == "root_greeting"), None)
+    if not root:
+        root = {
+            "id": "root_greeting",
+            "name": "Initial Greeting",
+            "type": "conversation",
+            "intent_triggers": ["call_connected"],
+            "edges": [{"id": "to_discovery", "condition": "user responds", "destination_node_id": "discovery"}],
+        }
+        nodes.insert(0, root)
+    root["instruction"] = {
+        "type": "prompt",
+        "text": f"Greet the user warmly as {agent_data['name']} and confirm identity using the lead name.",
+    }
+    root["response"] = f"Hello, this is {agent_data['name']} from the {type_label}. Am I speaking with {{{{name}}}}?"
+
+    for node in nodes:
+        if node.get("id") == "discovery":
+            node["collects"] = agent_data["data_fields"]
+
+    os.makedirs(os.path.dirname(schema_path), exist_ok=True)
+    with open(schema_path, "w", encoding="utf-8") as schema_file:
+        json.dump(schema, schema_file, indent=4)
+
 
 # ── Agents ────────────────────────────────────────────────────────────────────
 @app.get("/api/agents")
@@ -313,54 +432,62 @@ async def resolve_client_by_email(email: str):
 @app.post("/api/agents", dependencies=[Depends(require_auth)])
 async def create_agent(agent: AgentCreate):
     agent_id = str(uuid.uuid4())
-    voice_map = {"ElevenLabs — Priya (Female)": "11labs-06nek6zjTCD1vCbtc8bc"}
-    voice_id  = voice_map.get(agent.voice, agent.voice)
-    assigned_email = (agent.assigned_email or "").strip().lower()
+    data = _normalize_agent_record(agent.dict())
+    voice_id = _voice_id_for_agent(data["voice"])
+    assigned_email = data["assigned_email"]
     assigned_client = None
     if assigned_email:
         assigned_client = await db.ensure_client_for_email(assigned_email)
 
-    agent_schema = StateManager.template_new_agent(
-        name=agent.name,
-        script=agent.script,
-        voice_id=voice_id,
-        data_fields=agent.data_fields,
-        agent_type=agent.agent_type,
-    )
-    stt_provider = agent.stt_provider if agent.stt_provider in {"groq", "deepgram"} else "groq"
-    tts_provider = agent.tts_provider if agent.tts_provider in {"edge", "cartesia"} else "edge"
-    cartesia_voice_id = (agent.cartesia_voice_id or "95d51f79-c397-46f9-b49a-23763d3eaa2d").strip()
-    agent_schema["provider_config"] = {
-        "stt_provider": stt_provider,
-        "tts_provider": tts_provider,
-        "cartesia_voice_id": cartesia_voice_id,
-    }
-    agent_schema["agent_metadata"] = {
-        "agent_type": agent.agent_type,
-        "assigned_email": assigned_email,
-        "client_id": assigned_client.get("id") if assigned_client else None,
-    }
     schema_path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
-    with open(schema_path, "w") as f:
-        json.dump(agent_schema, f, indent=4)
-    data = {
-        **agent.dict(),
-        "stt_provider": stt_provider,
-        "tts_provider": tts_provider,
-        "cartesia_voice_id": cartesia_voice_id,
-        "assigned_email": assigned_email,
-        "agent_type": agent.agent_type,
+    _write_agent_runtime_schema(agent_id, schema_path, data, voice_id, assigned_client)
+    data.update({
         "client_id": assigned_client.get("id") if assigned_client else None,
         "schema_path": schema_path,
         "created_at": datetime.now().isoformat(),
-    }
+    })
     created = await db.create_agent(agent_id, data)
     if assigned_client:
         await db.set_assignment(assigned_client["id"], agent_id)
     return created
 
 
-# ── Leads ─────────────────────────────────────────────────────────────────────
+@app.put("/api/agents/{agent_id}", dependencies=[Depends(require_auth)])
+async def update_agent(agent_id: str, agent: AgentUpdate):
+    existing = await db.get_agent(agent_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    patch = agent.dict(exclude_unset=True)
+    merged = _normalize_agent_record({**existing, **patch})
+    voice_id = _voice_id_for_agent(merged["voice"])
+    previous_client_id = existing.get("client_id")
+
+    assigned_client = None
+    if merged["assigned_email"]:
+        assigned_client = await db.ensure_client_for_email(merged["assigned_email"])
+
+    schema_path = _agent_schema_path(agent_id, existing.get("schema_path"))
+    _write_agent_runtime_schema(agent_id, schema_path, merged, voice_id, assigned_client)
+    merged.update({
+        "client_id": assigned_client.get("id") if assigned_client else None,
+        "schema_path": schema_path,
+    })
+
+    updated = await db.update_agent(agent_id, merged)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    new_client_id = assigned_client.get("id") if assigned_client else None
+    if previous_client_id and previous_client_id != new_client_id:
+        await db.clear_assignment(previous_client_id, agent_id)
+    if new_client_id:
+        await db.set_assignment(new_client_id, agent_id)
+
+    return updated
+
+
+# Agent editing intentionally updates DB metadata and runtime JSON schema together.
 @app.post("/api/leads/upload", dependencies=[Depends(require_auth)])
 async def upload_leads(data: LeadsUpload):
     await db.upsert_leads(data.campaignId, data.leads)
@@ -1206,3 +1333,4 @@ if __name__ == "__main__":
     import uvicorn
     PORT = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=False)
+
