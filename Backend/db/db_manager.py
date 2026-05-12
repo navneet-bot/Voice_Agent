@@ -101,6 +101,7 @@ def _init_schema() -> None:
             provider        TEXT,
             stt_provider    TEXT DEFAULT 'groq',
             tts_provider    TEXT DEFAULT 'edge',
+            cartesia_voice_id TEXT,
             assigned_email  TEXT,
             agent_type      TEXT DEFAULT 'real_estate_sales',
             script          TEXT,
@@ -194,6 +195,10 @@ def _init_schema() -> None:
             pass
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN tts_provider TEXT DEFAULT 'edge'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN cartesia_voice_id TEXT")
         except sqlite3.OperationalError:
             pass
         try:
@@ -359,13 +364,14 @@ class DatabaseManager:
             conn = _get_connection()
             try:
                 conn.execute(
-                    """INSERT INTO agents (id, name, voice, language, max_duration, provider, stt_provider, tts_provider, assigned_email, agent_type, script, data_fields, schema_path, client_id, created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    """INSERT INTO agents (id, name, voice, language, max_duration, provider, stt_provider, tts_provider, cartesia_voice_id, assigned_email, agent_type, script, data_fields, schema_path, client_id, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         agent_id, data.get("name"), data.get("voice"),
                         data.get("language", "en"), data.get("max_duration", 300),
                         data.get("provider"), data.get("stt_provider", "groq"),
-                        data.get("tts_provider", "edge"), data.get("assigned_email"),
+                        data.get("tts_provider", "edge"), data.get("cartesia_voice_id"),
+                        data.get("assigned_email"),
                         data.get("agent_type", "real_estate_sales"), data.get("script"),
                         json.dumps(data.get("data_fields", [])),
                         data.get("schema_path"), data.get("client_id"),
@@ -374,6 +380,63 @@ class DatabaseManager:
                 )
                 conn.commit()
                 return {**data, "id": agent_id}
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
+    async def get_agent(self, agent_id: str) -> Optional[dict]:
+        def _sync():
+            conn = _get_connection()
+            try:
+                row = conn.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["data_fields"] = json.loads(data.get("data_fields") or "[]")
+                return data
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
+    async def update_agent(self, agent_id: str, data: dict) -> Optional[dict]:
+        def _sync():
+            conn = _get_connection()
+            try:
+                existing = conn.execute("SELECT id FROM agents WHERE id=?", (agent_id,)).fetchone()
+                if not existing:
+                    return None
+
+                conn.execute(
+                    """UPDATE agents
+                       SET name=?, voice=?, language=?, max_duration=?, provider=?,
+                           stt_provider=?, tts_provider=?, cartesia_voice_id=?,
+                           assigned_email=?, agent_type=?, script=?, data_fields=?,
+                           schema_path=?, client_id=?
+                       WHERE id=?""",
+                    (
+                        data.get("name"),
+                        data.get("voice"),
+                        data.get("language", "en"),
+                        data.get("max_duration", 300),
+                        data.get("provider"),
+                        data.get("stt_provider", "groq"),
+                        data.get("tts_provider", "edge"),
+                        data.get("cartesia_voice_id"),
+                        data.get("assigned_email"),
+                        data.get("agent_type", "real_estate_sales"),
+                        data.get("script"),
+                        json.dumps(data.get("data_fields", [])),
+                        data.get("schema_path"),
+                        data.get("client_id"),
+                        agent_id,
+                    ),
+                )
+                conn.commit()
+
+                row = conn.execute("SELECT * FROM agents WHERE id=?", (agent_id,)).fetchone()
+                updated = dict(row)
+                updated["data_fields"] = json.loads(updated.get("data_fields") or "[]")
+                return updated
             finally:
                 conn.close()
         return await run_in_executor(_sync)
@@ -844,6 +907,22 @@ class DatabaseManager:
                        VALUES (?,?)""",
                     (client_id, agent_id)
                 )
+                conn.commit()
+            finally:
+                conn.close()
+        await run_in_executor(_sync)
+
+    async def clear_assignment(self, client_id: str, agent_id: Optional[str] = None) -> None:
+        def _sync():
+            conn = _get_connection()
+            try:
+                if agent_id:
+                    conn.execute(
+                        "DELETE FROM client_assignments WHERE client_id=? AND agent_id=?",
+                        (client_id, agent_id),
+                    )
+                else:
+                    conn.execute("DELETE FROM client_assignments WHERE client_id=?", (client_id,))
                 conn.commit()
             finally:
                 conn.close()

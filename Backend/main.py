@@ -94,6 +94,17 @@ AGENTS_DIR       = os.path.join(DB_DIR, "agents")
 os.makedirs(DB_DIR, exist_ok=True)
 os.makedirs(AGENTS_DIR, exist_ok=True)
 WEBHOOK_BASE_URL = os.getenv("WEBHOOK_BASE_URL", "http://localhost:3000")
+DEFAULT_CARTESIA_VOICE_ID = "95d51f79-c397-46f9-b49a-23763d3eaa2d"
+VALID_STT_PROVIDERS = {"groq", "deepgram"}
+VALID_TTS_PROVIDERS = {"edge", "cartesia"}
+VALID_AGENT_TYPES = {"real_estate_sales", "finance", "insurance", "education"}
+AGENT_TYPE_LABELS = {
+    "real_estate_sales": "Real Estate team",
+    "finance": "Finance advisory team",
+    "insurance": "Insurance advisory team",
+    "education": "Education counselling team",
+}
+VOICE_MAP = {"ElevenLabs - Priya (Female)": "11labs-06nek6zjTCD1vCbtc8bc"}
 
 # API Key Auth — set PLATFORM_API_KEY in .env; if empty, auth is DISABLED (dev mode)
 _PLATFORM_API_KEY = os.getenv("PLATFORM_API_KEY", "")
@@ -148,10 +159,25 @@ class AgentCreate(BaseModel):
     provider: str
     stt_provider: str = "groq"
     tts_provider: str = "edge"
+    cartesia_voice_id: Optional[str] = None
     assigned_email: Optional[str] = None
     agent_type: str = "real_estate_sales"
     script: str
     data_fields: List[str]
+
+class AgentUpdate(BaseModel):
+    name: Optional[str] = None
+    voice: Optional[str] = None
+    language: Optional[str] = None
+    max_duration: Optional[int] = None
+    provider: Optional[str] = None
+    stt_provider: Optional[str] = None
+    tts_provider: Optional[str] = None
+    cartesia_voice_id: Optional[str] = None
+    assigned_email: Optional[str] = None
+    agent_type: Optional[str] = None
+    script: Optional[str] = None
+    data_fields: Optional[List[str]] = None
 
 class LeadsUpload(BaseModel):
     campaignId: str
@@ -299,12 +325,15 @@ async def create_agent(agent: AgentCreate):
         script=agent.script,
         voice_id=voice_id,
         data_fields=agent.data_fields,
+        agent_type=agent.agent_type,
     )
     stt_provider = agent.stt_provider if agent.stt_provider in {"groq", "deepgram"} else "groq"
     tts_provider = agent.tts_provider if agent.tts_provider in {"edge", "cartesia"} else "edge"
+    cartesia_voice_id = (agent.cartesia_voice_id or "95d51f79-c397-46f9-b49a-23763d3eaa2d").strip()
     agent_schema["provider_config"] = {
         "stt_provider": stt_provider,
         "tts_provider": tts_provider,
+        "cartesia_voice_id": cartesia_voice_id,
     }
     agent_schema["agent_metadata"] = {
         "agent_type": agent.agent_type,
@@ -318,6 +347,7 @@ async def create_agent(agent: AgentCreate):
         **agent.dict(),
         "stt_provider": stt_provider,
         "tts_provider": tts_provider,
+        "cartesia_voice_id": cartesia_voice_id,
         "assigned_email": assigned_email,
         "agent_type": agent.agent_type,
         "client_id": assigned_client.get("id") if assigned_client else None,

@@ -29,7 +29,7 @@ SAMPLE_RATE = 24000
 _FADE_SAMPLES = int(SAMPLE_RATE * 0.05)
 _SENTINEL = object()
 
-_DEFAULT_VOICE_ID = "a0e99841-438c-4a64-b679-ae501e7d6091"
+_DEFAULT_INDIAN_FEMALE_VOICE_ID = "95d51f79-c397-46f9-b49a-23763d3eaa2d"  # Hinglish Speaking Lady.
 
 
 def _language_for(preferred_language: str | None) -> str:
@@ -40,13 +40,15 @@ def _language_for(preferred_language: str | None) -> str:
     return "en"
 
 
-def _voice_for(preferred_language: str | None) -> str:
+def _voice_for(preferred_language: str | None, voice_id: str | None = None) -> str:
+    if voice_id:
+        return voice_id
     lang = _language_for(preferred_language)
     if lang == "mr":
-        return os.getenv("CARTESIA_VOICE_ID_MR") or os.getenv("CARTESIA_VOICE_ID") or _DEFAULT_VOICE_ID
+        return os.getenv("CARTESIA_VOICE_ID_MR") or os.getenv("CARTESIA_VOICE_ID") or _DEFAULT_INDIAN_FEMALE_VOICE_ID
     if lang == "hi":
-        return os.getenv("CARTESIA_VOICE_ID_HI") or os.getenv("CARTESIA_VOICE_ID") or _DEFAULT_VOICE_ID
-    return os.getenv("CARTESIA_VOICE_ID_EN") or os.getenv("CARTESIA_VOICE_ID") or _DEFAULT_VOICE_ID
+        return os.getenv("CARTESIA_VOICE_ID_HI") or os.getenv("CARTESIA_VOICE_ID") or _DEFAULT_INDIAN_FEMALE_VOICE_ID
+    return os.getenv("CARTESIA_VOICE_ID_EN") or os.getenv("CARTESIA_VOICE_ID") or _DEFAULT_INDIAN_FEMALE_VOICE_ID
 
 
 def _optimize_text(text: str) -> str:
@@ -91,7 +93,12 @@ def _safe_put(output_queue: queue.Queue, item) -> None:
         logger.warning("Cartesia TTS output queue full; dropping chunk")
 
 
-async def _stream_cartesia(text: str, preferred_language: str | None, output_queue: queue.Queue) -> None:
+async def _stream_cartesia(
+    text: str,
+    preferred_language: str | None,
+    output_queue: queue.Queue,
+    voice_id: str | None = None,
+) -> None:
     api_key = os.getenv("CARTESIA_API_KEY", "").strip()
     if not api_key:
         logger.warning("CARTESIA_API_KEY not set. Cartesia TTS cannot run.")
@@ -102,13 +109,14 @@ async def _stream_cartesia(text: str, preferred_language: str | None, output_que
     context_id = str(uuid.uuid4())
     language = _language_for(preferred_language)
     timeout_s = float(os.getenv("CARTESIA_TIMEOUT_SECONDS", "15.0"))
+    selected_voice_id = _voice_for(preferred_language, voice_id)
 
     request = {
-        "model_id": os.getenv("CARTESIA_MODEL_ID", "sonic-3"),
+        "model_id": os.getenv("CARTESIA_MODEL_ID", "sonic-3.5"),
         "transcript": text,
         "voice": {
             "mode": "id",
-            "id": _voice_for(preferred_language),
+            "id": selected_voice_id,
         },
         "language": language,
         "context_id": context_id,
@@ -120,6 +128,12 @@ async def _stream_cartesia(text: str, preferred_language: str | None, output_que
         "add_timestamps": False,
         "continue": False,
     }
+    logger.info(
+        "[TTS CARTESIA] model=%s voice_id=%s language=%s",
+        request["model_id"],
+        selected_voice_id,
+        language,
+    )
 
     websocket = await _connect(endpoint, api_key)
     try:
@@ -144,9 +158,14 @@ async def _stream_cartesia(text: str, preferred_language: str | None, output_que
         await websocket.close()
 
 
-def _run_producer(text: str, preferred_language: str | None, output_queue: queue.Queue) -> None:
+def _run_producer(
+    text: str,
+    preferred_language: str | None,
+    output_queue: queue.Queue,
+    voice_id: str | None = None,
+) -> None:
     try:
-        asyncio.run(_stream_cartesia(text, preferred_language, output_queue))
+        asyncio.run(_stream_cartesia(text, preferred_language, output_queue, voice_id))
     except Exception as exc:
         logger.exception("Cartesia TTS generation failed: %s", exc)
     finally:
@@ -181,7 +200,11 @@ def _apply_fade_out(chunk: bytes) -> bytes:
     return np.clip(samples, -32768, 32767).astype(np.int16).tobytes()
 
 
-def generate_speech_stream(text: str, preferred_language: str | None = None):
+def generate_speech_stream(
+    text: str,
+    preferred_language: str | None = None,
+    voice_id: str | None = None,
+):
     """Yield PCM16 mono 24kHz chunks from Cartesia Sonic."""
     if not text or not text.strip():
         yield b""
@@ -191,7 +214,7 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
     output_queue: queue.Queue = queue.Queue(maxsize=64)
     producer = threading.Thread(
         target=_run_producer,
-        args=(optimized_text, preferred_language, output_queue),
+        args=(optimized_text, preferred_language, output_queue, voice_id),
         daemon=True,
     )
 

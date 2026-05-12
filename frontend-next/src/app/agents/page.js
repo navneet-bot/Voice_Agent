@@ -104,6 +104,33 @@ Summarize the student requirement and confirm the counselling follow-up.`
 };
 
 const DEFAULT_AGENT_TYPE = 'real_estate_sales';
+const CARTESIA_FEMALE_VOICES = [
+  {
+    label: 'Hinglish Speaking Lady - Indian multilingual (recommended)',
+    value: '95d51f79-c397-46f9-b49a-23763d3eaa2d'
+  },
+  {
+    label: 'Indian Customer Support Lady - phone support',
+    value: 'ff1bb1a9-c582-4570-9670-5f46169d0fc8'
+  },
+  {
+    label: 'Indian Lady - Indian accent fallback',
+    value: '3b554273-4299-48b9-9aaf-eefd438e3941'
+  },
+  {
+    label: 'Hindi Narrator Woman - Hindi-focused',
+    value: 'c1abd502-9231-4558-a054-10ac950c356d'
+  },
+  {
+    label: 'Katie - US English voice agent fallback',
+    value: 'f786b574-daa5-4673-aa0c-cbe3e8534c02'
+  },
+  {
+    label: 'Tessa - US English expressive fallback',
+    value: '6ccbfb76-1fc6-48f7-b71d-91ac6298247b'
+  }
+];
+const DEFAULT_CARTESIA_VOICE_ID = CARTESIA_FEMALE_VOICES[0].value;
 
 export default function AgentsPage() {
   const { user } = useAuth();
@@ -119,6 +146,7 @@ export default function AgentsPage() {
     provider: 'twilio',
     stt_provider: 'groq',
     tts_provider: 'edge',
+    cartesia_voice_id: DEFAULT_CARTESIA_VOICE_ID,
     assigned_email: '',
     agent_type: DEFAULT_AGENT_TYPE,
     script: AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].prompt,
@@ -233,6 +261,9 @@ export default function AgentsPage() {
                   <p className="small text-muted mb-2"><strong>Assigned:</strong> {agent.assigned_email || 'Unassigned'}</p>
                   <p className="small text-muted mb-2"><strong>STT:</strong> {agent.stt_provider || 'groq'}</p>
                   <p className="small text-muted mb-3"><strong>TTS:</strong> {agent.tts_provider || 'edge'}</p>
+                  {agent.tts_provider === 'cartesia' && (
+                    <p className="small text-muted mb-3"><strong>Cartesia Voice:</strong> {CARTESIA_FEMALE_VOICES.find(v => v.value === agent.cartesia_voice_id)?.label || agent.cartesia_voice_id || 'Hinglish Speaking Lady'}</p>
+                  )}
                   
                   <div className="small text-muted">
                     <strong className="d-block mb-1">Extracted Fields:</strong>
@@ -325,11 +356,23 @@ export default function AgentsPage() {
                       <label className="form-label small fw-bold">TTS Engine</label>
                       <select className="form-select" value={formData.tts_provider} onChange={e => setFormData({...formData, tts_provider: e.target.value})}>
                         <option value="edge">Edge TTS (Default)</option>
-                        <option value="cartesia">Cartesia Sonic</option>
+                        <option value="cartesia">Cartesia Sonic 3.5</option>
                       </select>
                       <div className="form-text">Cartesia is enabled for this agent when selected. Output stays PCM16 mono at 24kHz.</div>
                     </div>
                   </div>
+
+                  {formData.tts_provider === 'cartesia' && (
+                    <div className="mb-3">
+                      <label className="form-label small fw-bold">Cartesia Voice</label>
+                      <select className="form-select" value={formData.cartesia_voice_id} onChange={e => setFormData({...formData, cartesia_voice_id: e.target.value})}>
+                        {CARTESIA_FEMALE_VOICES.map((voice) => (
+                          <option key={voice.value} value={voice.value}>{voice.label}</option>
+                        ))}
+                      </select>
+                      <div className="form-text">Recommended for native Indian-style English, Hindi, Hinglish, and Marathi tests. Each agent stores its own selected voice.</div>
+                    </div>
+                  )}
 
                   <div className="mb-3">
                     <label className="form-label small fw-bold">Data Extraction Fields (Comma separated)</label>

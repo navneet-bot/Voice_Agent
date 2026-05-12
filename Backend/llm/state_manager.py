@@ -662,6 +662,7 @@ class StateManager:
             return
 
         flow = self.schema.get("conversationFlow", {})
+        self._repair_generated_greeting(flow)
         self.global_prompt = flow.get("global_prompt", "")
         self.start_node_id = flow.get("start_node_id", "")
         self.nodes = {node["id"]: node for node in flow.get("nodes", []) if "id" in node}
@@ -673,12 +674,43 @@ class StateManager:
         self.reset_state()
         logger.info("Loaded %d nodes. Start node: %s", len(self.nodes), self.start_node_id)
 
+    def _repair_generated_greeting(self, flow: dict[str, Any]) -> None:
+        """Repair old generated schemas that hardcoded Neha and omitted {{name}}."""
+        nodes = flow.get("nodes") or []
+        agent_name = str(self.schema.get("agent_name") or "Agent").strip() or "Agent"
+        bad_responses = {
+            "Hello, this is Neha from the Real Estate AI team. Am I speaking with you?",
+            "Hello, this is Neha from the Real Estate AI team. Am I speaking with you",
+        }
+        for node in nodes:
+            if node.get("id") != "root_greeting":
+                continue
+            if node.get("response") in bad_responses:
+                node["response"] = f"Hello, this is {agent_name}. Am I speaking with {{{{name}}}}?"
+            instruction = node.get("instruction")
+            if isinstance(instruction, dict) and instruction.get("text") == "Greet the user warmly as Neha and confirm identity.":
+                instruction["text"] = f"Greet the user warmly as {agent_name} and confirm identity using the lead name."
+
     @classmethod
-    def template_new_agent(cls, name: str, script: str, voice_id: str, data_fields: list[str]) -> dict[str, Any]:
+    def template_new_agent(
+        cls,
+        name: str,
+        script: str,
+        voice_id: str,
+        data_fields: list[str],
+        agent_type: str = "real_estate_sales",
+    ) -> dict[str, Any]:
         """Creates a new agent JSON schema based on a generic template and admin inputs."""
+        agent_name = (name or "Real Estate Specialist").strip()
+        type_label = {
+            "real_estate_sales": "Real Estate team",
+            "finance": "Finance advisory team",
+            "insurance": "Insurance advisory team",
+            "education": "Education counselling team",
+        }.get(agent_type, "Customer advisory team")
         # Use a simplified version of the standard flow with Neha as default persona if name is matching
         template = {
-            "agent_name": name or "Neha — Real Estate Specialist",
+            "agent_name": agent_name,
             "voice_id": voice_id or "en-IN-NeerjaNeural",
             "conversation_flow_id": f"flow_{uuid.uuid4().hex[:8]}",
             "global_prompt": script,
@@ -690,8 +722,8 @@ class StateManager:
                         "id": "root_greeting",
                         "name": "Initial Greeting",
                         "type": "conversation",
-                        "instruction": {"type": "prompt", "text": "Greet the user warmly as Neha and confirm identity."},
-                        "response": "Hello, this is Neha from the Real Estate AI team. Am I speaking with you?",
+                        "instruction": {"type": "prompt", "text": f"Greet the user warmly as {agent_name} and confirm identity using the lead name."},
+                        "response": f"Hello, this is {agent_name} from the {type_label}. Am I speaking with {{{{name}}}}?",
                         "intent_triggers": ["call_connected"],
                         "edges": [
                             {"id": "to_discovery", "condition": "user responds", "destination_node_id": "discovery"}

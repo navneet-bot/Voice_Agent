@@ -43,12 +43,21 @@ class TTSProviderTest(unittest.TestCase):
             provider._AGENT_SCHEMA_DIR = Path(tmpdir)
             provider._AGENT_CONFIG_CACHE.clear()
             (Path(tmpdir) / "enterprise-agent.json").write_text(
-                json.dumps({"provider_config": {"tts_provider": "cartesia"}}),
+                json.dumps({
+                    "provider_config": {
+                        "tts_provider": "cartesia",
+                        "cartesia_voice_id": "95d51f79-c397-46f9-b49a-23763d3eaa2d",
+                    }
+                }),
                 encoding="utf-8",
             )
             os.environ["TTS_PROVIDER"] = "edge"
 
             self.assertEqual(provider._configured_provider("enterprise-agent"), "cartesia")
+            self.assertEqual(
+                provider._cartesia_voice_id_for_agent("enterprise-agent"),
+                "95d51f79-c397-46f9-b49a-23763d3eaa2d",
+            )
 
             os.environ["TTS_DISABLE_AGENT_OVERRIDES"] = "true"
             provider._AGENT_CONFIG_CACHE.clear()
@@ -74,7 +83,7 @@ class TTSProviderTest(unittest.TestCase):
 
     def test_cartesia_empty_audio_falls_back_to_edge(self):
         def fake_load_provider(provider_name):
-            def fake_stream(text, preferred_language=None):
+            def fake_stream(text, preferred_language=None, **kwargs):
                 if provider_name == "cartesia":
                     yield b""
                 else:

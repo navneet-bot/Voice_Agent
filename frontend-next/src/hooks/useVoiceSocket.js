@@ -144,7 +144,7 @@ export function useVoiceSocket(agentId, activeClient) {
       const encodedLead = encodeURIComponent(leadName);
       const endpoint = isDemo 
         ? `api/voice-demo?agentId=${encodeURIComponent(agentId)}&clientId=${clientId}&leadName=${encodedLead}`
-        : `api/voice-live?agentId=${encodeURIComponent(agentId)}`;
+        : `api/voice-live?agentId=${encodeURIComponent(agentId)}&leadName=${encodedLead}`;
 
       // Build WebSocket URL from the backend API URL.
       // In production, NEXT_PUBLIC_API_URL should be set to the Railway backend URL
@@ -308,6 +308,7 @@ export function useVoiceSocket(agentId, activeClient) {
           return;
         }
         setStatusText('Reconnecting...');
+        // eslint-disable-next-line react-hooks/immutability
         reconnectTimeoutRef.current = setTimeout(() => connect(isDemo, leadName, true), 2000);
       };
       
@@ -322,7 +323,7 @@ export function useVoiceSocket(agentId, activeClient) {
       setStatusText('Mic access denied or server unreachable.');
       disconnect();
     }
-  }, [agentId, activeClient, clearPlaybackReleaseTimer, disconnect, holdMicInput, isMicInputBlocked, logMicChunkStats, scheduleMicResume, toPcm16Buffer]);
+  }, [agentId, activeClient, disconnect, holdMicInput, isMicInputBlocked, logMicChunkStats, scheduleMicResume, toPcm16Buffer]);
 
   const clearTranscripts = () => setTranscripts([]);
 

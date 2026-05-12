@@ -25,6 +25,7 @@ from flows.runtime import (
     VoiceTurnState,
 )
 from llm.pipeline_logger import pipeline_logger
+from llm.state_manager import StateManager
 
 
 pipeline_logger.log_path = os.devnull
@@ -78,6 +79,19 @@ class PhaseZeroSmokeTest(unittest.TestCase):
                 for frame in pushed_frames
             )
         )
+
+    def test_new_agent_template_uses_agent_and_lead_name(self):
+        schema = StateManager.template_new_agent(
+            name="Rani",
+            script="You are a sales agent.",
+            voice_id="voice-id",
+            data_fields=["interested"],
+            agent_type="real_estate_sales",
+        )
+        greeting = schema["conversationFlow"]["nodes"][0]
+        self.assertIn("Rani", greeting["response"])
+        self.assertIn("{{name}}", greeting["response"])
+        self.assertNotIn("Neha", greeting["response"])
 
 
 if __name__ == "__main__":

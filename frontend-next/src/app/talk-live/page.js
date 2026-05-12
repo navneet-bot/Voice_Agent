@@ -14,7 +14,7 @@ export default function TalkLive() {
 
   const toggleCall = () => {
     if (isConnected) disconnect();
-    else connect(false); // isDemo = false
+    else connect(false, user?.name || profile?.name || 'Demo User'); // isDemo = false
   };
 
   return (

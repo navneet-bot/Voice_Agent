@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PROVIDER = "edge"
 SUPPORTED_PROVIDERS = {"edge", "cartesia"}
 _AGENT_SCHEMA_DIR = Path(__file__).resolve().parents[1] / "db" / "agents"
-_AGENT_CONFIG_CACHE: dict[str, tuple[float, str | None]] = {}
+_AGENT_CONFIG_CACHE: dict[str, tuple[float, dict]] = {}
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -43,7 +43,8 @@ def _configured_provider(agent_id: str = "default") -> str:
     if _env_bool("TTS_DISABLE_AGENT_OVERRIDES", False):
         return global_provider
 
-    schema_provider = _provider_from_agent_schema(agent_id)
+    schema_config = _provider_config_from_agent_schema(agent_id)
+    schema_provider = schema_config.get("tts_provider")
     if schema_provider:
         return schema_provider
 
@@ -57,32 +58,39 @@ def _configured_provider(agent_id: str = "default") -> str:
     return global_provider
 
 
-def _provider_from_agent_schema(agent_id: str) -> str | None:
+def _provider_config_from_agent_schema(agent_id: str) -> dict:
     if not agent_id or agent_id == "default":
-        return None
+        return {}
     path = _AGENT_SCHEMA_DIR / f"{agent_id}.json"
     try:
         stat = path.stat()
     except OSError:
-        return None
+        return {}
 
     cached = _AGENT_CONFIG_CACHE.get(agent_id)
     if cached and cached[0] == stat.st_mtime:
         return cached[1]
 
-    provider = None
+    config = {}
     try:
         schema = json.loads(path.read_text(encoding="utf-8"))
         provider_config = schema.get("provider_config") or {}
         provider = provider_config.get("tts_provider") or schema.get("tts_provider")
         if provider:
-            provider = _normalize_provider(provider)
+            config["tts_provider"] = _normalize_provider(provider)
+        cartesia_voice_id = provider_config.get("cartesia_voice_id") or schema.get("cartesia_voice_id")
+        if cartesia_voice_id:
+            config["cartesia_voice_id"] = str(cartesia_voice_id).strip()
     except Exception as exc:
         logger.warning("Could not read TTS provider config for agent_id=%s: %s", agent_id, exc)
-        provider = None
+        config = {}
 
-    _AGENT_CONFIG_CACHE[agent_id] = (stat.st_mtime, provider)
-    return provider
+    _AGENT_CONFIG_CACHE[agent_id] = (stat.st_mtime, config)
+    return config
+
+
+def _cartesia_voice_id_for_agent(agent_id: str) -> str | None:
+    return _provider_config_from_agent_schema(agent_id).get("cartesia_voice_id")
 
 
 def _shadow_provider(primary_provider: str) -> str:
@@ -129,7 +137,14 @@ def _consume_shadow(provider: str, text: str, preferred_language: str | None) ->
         logger.warning("[TTS SHADOW] shadow_provider=%s failed without affecting live audio: %s", provider, exc)
 
 
-def _stream_provider(provider: str, text: str, preferred_language: str | None):
+def _stream_provider(
+    provider: str,
+    text: str,
+    preferred_language: str | None,
+    cartesia_voice_id: str | None = None,
+):
+    if provider == "cartesia":
+        return _load_provider(provider)(text, preferred_language, voice_id=cartesia_voice_id)
     return _load_provider(provider)(text, preferred_language)
 
 
@@ -140,6 +155,7 @@ def generate_speech_stream(
 ):
     """Yield live TTS audio from the selected provider."""
     primary_provider = _configured_provider(agent_id)
+    cartesia_voice_id = _cartesia_voice_id_for_agent(agent_id)
 
     if _env_bool("TTS_SHADOW_MODE", False):
         shadow = _shadow_provider(primary_provider)
@@ -152,7 +168,7 @@ def generate_speech_stream(
 
     nonempty_yielded = False
     try:
-        for chunk in _stream_provider(primary_provider, text, preferred_language):
+        for chunk in _stream_provider(primary_provider, text, preferred_language, cartesia_voice_id):
             if chunk:
                 nonempty_yielded = True
             yield chunk
@@ -172,7 +188,7 @@ def generate_speech_stream(
             DEFAULT_PROVIDER,
         )
         try:
-            for chunk in _stream_provider(DEFAULT_PROVIDER, text, preferred_language):
+            for chunk in _stream_provider(DEFAULT_PROVIDER, text, preferred_language, cartesia_voice_id):
                 yield chunk
         except Exception as fallback_exc:
             logger.exception("[TTS PROVIDER] fallback=%s failed: %s", DEFAULT_PROVIDER, fallback_exc)
