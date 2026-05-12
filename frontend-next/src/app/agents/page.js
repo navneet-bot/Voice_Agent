@@ -3,6 +3,108 @@ import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/context/AuthContext';
 
+const AGENT_TYPE_TEMPLATES = {
+  real_estate_sales: {
+    label: 'Real Estate Sales',
+    fields: 'interested, budget, location, property_type, timeline, callback',
+    prompt: `You are a professional real estate sales voice agent for a property advisory team.
+
+Primary goal:
+Qualify the lead for buying, renting, or investing in residential property and capture the next best action.
+
+Conversation style:
+Be warm, concise, consultative, and natural. Ask one question at a time. Do not sound like a form. Use the user's language style when possible: English, Hindi, Marathi, or Hinglish.
+
+Discovery questions:
+1. Confirm whether they are looking to buy, rent, or invest.
+2. Ask preferred location or project area.
+3. Ask budget range.
+4. Ask property type such as 1 BHK, 2 BHK, 3 BHK, villa, plot, or commercial.
+5. Ask timeline such as immediate, this month, 3 months, or just exploring.
+6. Ask if they want a callback, site visit, WhatsApp details, or brochure.
+
+Rules:
+Never overpromise pricing, availability, loan approval, legal clearance, or possession date. If the user asks for exact details, say the specialist will verify and share updated information.
+
+Final outcome:
+Summarize the requirement in one sentence and confirm the follow-up action.`
+  },
+  finance: {
+    label: 'Finance Advisory',
+    fields: 'interested, product_interest, income_range, loan_amount, timeline, callback',
+    prompt: `You are a compliant finance advisory voice agent.
+
+Primary goal:
+Understand the customer's interest in financial products such as personal loans, business loans, credit cards, insurance, or investments and qualify them for a human advisor.
+
+Conversation style:
+Be calm, trustworthy, and precise. Ask one question at a time. Avoid pressure tactics. Keep the conversation short and respectful.
+
+Discovery questions:
+1. Ask which financial product they are interested in.
+2. Ask the purpose, required amount, or preferred plan.
+3. Ask broad eligibility details only when appropriate, such as income range or employment type.
+4. Ask their timeline for taking a decision.
+5. Ask for permission to arrange a callback from an advisor.
+
+Compliance rules:
+Do not guarantee approval, returns, interest rates, tax benefits, or eligibility. Do not collect sensitive data such as OTPs, full card numbers, passwords, bank PINs, Aadhaar numbers, or account login details.
+
+Final outcome:
+Summarize the customer's need and confirm that an authorized advisor will follow up.`
+  },
+  insurance: {
+    label: 'Insurance Renewal',
+    fields: 'interested, policy_type, renewal_date, coverage_need, family_members, callback',
+    prompt: `You are an insurance renewal and advisory voice agent.
+
+Primary goal:
+Help the customer review or renew insurance coverage and identify whether they need a callback from an advisor.
+
+Conversation style:
+Be empathetic, clear, and low-pressure. Use plain language. Ask one question at a time.
+
+Discovery questions:
+1. Ask whether they are interested in health, life, motor, or business insurance.
+2. Ask if this is a renewal, new policy, or comparison request.
+3. Ask renewal date or urgency.
+4. Ask basic coverage preference such as individual, family, or vehicle.
+5. Ask whether they want plan options shared on WhatsApp/email or a callback.
+
+Compliance rules:
+Do not guarantee claim approval, premium, coverage, or policy issuance. Do not collect sensitive documents or payment details over the call.
+
+Final outcome:
+Confirm the requested insurance type, urgency, and preferred follow-up mode.`
+  },
+  education: {
+    label: 'Education Counselling',
+    fields: 'interested, course_interest, education_level, city, budget, callback',
+    prompt: `You are an education counselling voice agent.
+
+Primary goal:
+Understand the student's course interest and connect them with the right counsellor.
+
+Conversation style:
+Be encouraging, patient, and clear. Ask one question at a time. Support parents and students without sounding pushy.
+
+Discovery questions:
+1. Ask which course, program, exam, or career path they are interested in.
+2. Ask current education level.
+3. Ask preferred city, online/offline preference, and timeline.
+4. Ask budget or fee range only if the conversation naturally allows it.
+5. Ask whether a counsellor should call back.
+
+Rules:
+Do not guarantee admission, scholarship, visa approval, placement, or exam results.
+
+Final outcome:
+Summarize the student requirement and confirm the counselling follow-up.`
+  }
+};
+
+const DEFAULT_AGENT_TYPE = 'real_estate_sales';
+
 export default function AgentsPage() {
   const { user } = useAuth();
   const [agents, setAgents] = useState([]);
@@ -17,8 +119,10 @@ export default function AgentsPage() {
     provider: 'twilio',
     stt_provider: 'groq',
     tts_provider: 'edge',
-    script: 'Hello, I am calling about...',
-    data_fields: 'interested, budget, location'
+    assigned_email: '',
+    agent_type: DEFAULT_AGENT_TYPE,
+    script: AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].prompt,
+    data_fields: AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].fields
   });
 
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
@@ -26,8 +130,10 @@ export default function AgentsPage() {
   const fetchAgents = async () => {
     setLoading(true);
     try {
-      // If authorization is needed, we could add token
-      const res = await fetch(`${API}/api/agents`);
+      const ownAgentsQuery = user?.role === 'client' && user?.email
+        ? `?user_email=${encodeURIComponent(user.email)}`
+        : '';
+      const res = await fetch(`${API}/api/agents${ownAgentsQuery}`);
       if (res.ok) {
         const data = await res.json();
         setAgents(Array.isArray(data) ? data : []);
@@ -60,7 +166,13 @@ export default function AgentsPage() {
       });
       if (res.ok) {
         setShowModal(false);
-        setFormData({ ...formData, name: '', script: '' }); // reset some fields
+        setFormData({
+          ...formData,
+          name: '',
+          assigned_email: '',
+          script: AGENT_TYPE_TEMPLATES[formData.agent_type]?.prompt || formData.script,
+          data_fields: AGENT_TYPE_TEMPLATES[formData.agent_type]?.fields || formData.data_fields
+        });
         fetchAgents();
       } else {
         alert("Failed to create agent");
@@ -69,6 +181,16 @@ export default function AgentsPage() {
       console.error(e);
       alert("Error connecting to backend");
     }
+  };
+
+  const handleAgentTypeChange = (agentType) => {
+    const template = AGENT_TYPE_TEMPLATES[agentType] || AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE];
+    setFormData({
+      ...formData,
+      agent_type: agentType,
+      script: template.prompt,
+      data_fields: template.fields
+    });
   };
 
   return (
@@ -107,6 +229,8 @@ export default function AgentsPage() {
                   </div>
                   <p className="small text-muted mb-2"><strong>Voice:</strong> {agent.voice || 'Default'}</p>
                   <p className="small text-muted mb-3"><strong>Provider:</strong> {agent.provider || 'twilio'}</p>
+                  <p className="small text-muted mb-2"><strong>Type:</strong> {AGENT_TYPE_TEMPLATES[agent.agent_type]?.label || agent.agent_type || 'Real Estate Sales'}</p>
+                  <p className="small text-muted mb-2"><strong>Assigned:</strong> {agent.assigned_email || 'Unassigned'}</p>
                   <p className="small text-muted mb-2"><strong>STT:</strong> {agent.stt_provider || 'groq'}</p>
                   <p className="small text-muted mb-3"><strong>TTS:</strong> {agent.tts_provider || 'edge'}</p>
                   
@@ -145,6 +269,23 @@ export default function AgentsPage() {
                       <input type="text" className="form-control" required value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} placeholder="e.g. Sales Rep Priya" />
                     </div>
                     <div className="col-md-6">
+                      <label className="form-label small fw-bold">Assign to User Email</label>
+                      <input type="email" className="form-control" required value={formData.assigned_email} onChange={e => setFormData({...formData, assigned_email: e.target.value})} placeholder="client@example.com" />
+                      <div className="form-text">This agent will be isolated to this user&apos;s client account.</div>
+                    </div>
+                  </div>
+
+                  <div className="row g-3 mb-3">
+                    <div className="col-md-6">
+                      <label className="form-label small fw-bold">Agent Type</label>
+                      <select className="form-select" value={formData.agent_type} onChange={e => handleAgentTypeChange(e.target.value)}>
+                        {Object.entries(AGENT_TYPE_TEMPLATES).map(([value, config]) => (
+                          <option key={value} value={value}>{config.label}</option>
+                        ))}
+                      </select>
+                      <div className="form-text">Changing this loads a detailed editable prompt template.</div>
+                    </div>
+                    <div className="col-md-6">
                       <label className="form-label small fw-bold">Voice ID / Provider mapping</label>
                       <select className="form-select" value={formData.voice} onChange={e => setFormData({...formData, voice: e.target.value})}>
                         <option value="11labs-06nek6zjTCD1vCbtc8bc">ElevenLabs - Priya (Female)</option>
@@ -178,7 +319,7 @@ export default function AgentsPage() {
                         <option value="groq">Groq Whisper (Default)</option>
                         <option value="deepgram">Deepgram Nova-2</option>
                       </select>
-                      <div className="form-text">Deepgram remains isolated behind provider flags.</div>
+                      <div className="form-text">Deepgram is enabled for this agent when selected and API keys exist.</div>
                     </div>
                     <div className="col-md-6">
                       <label className="form-label small fw-bold">TTS Engine</label>
@@ -186,7 +327,7 @@ export default function AgentsPage() {
                         <option value="edge">Edge TTS (Default)</option>
                         <option value="cartesia">Cartesia Sonic</option>
                       </select>
-                      <div className="form-text">Output stays PCM16 mono at 24kHz.</div>
+                      <div className="form-text">Cartesia is enabled for this agent when selected. Output stays PCM16 mono at 24kHz.</div>
                     </div>
                   </div>
 
@@ -196,8 +337,8 @@ export default function AgentsPage() {
                   </div>
 
                   <div className="mb-4">
-                    <label className="form-label small fw-bold">Agent Prompt / Script</label>
-                    <textarea className="form-control" rows="5" required value={formData.script} onChange={e => setFormData({...formData, script: e.target.value})} placeholder="You are an AI assistant..."></textarea>
+                    <label className="form-label small fw-bold">Agent Prompt / Script (Editable)</label>
+                    <textarea className="form-control" rows="11" required value={formData.script} onChange={e => setFormData({...formData, script: e.target.value})} placeholder="You are an AI assistant..."></textarea>
                   </div>
 
                   <div className="d-flex justify-content-end gap-2">

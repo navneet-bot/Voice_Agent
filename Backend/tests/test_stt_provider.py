@@ -86,6 +86,7 @@ class STTProviderTest(unittest.TestCase):
         provider._run_provider = fake_run_provider
         os.environ["STT_PROVIDER"] = "deepgram"
         os.environ["STT_FALLBACK_ENABLED"] = "true"
+        os.environ["STT_SHADOW_MODE"] = "false"
 
         result = provider.transcribe_audio(b"\x01\x00" * 160)
 

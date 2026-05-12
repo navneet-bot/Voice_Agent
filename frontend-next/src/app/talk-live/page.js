@@ -4,9 +4,11 @@ import DashboardLayout from '@/components/DashboardLayout';
 import { useVoiceSocket } from '@/hooks/useVoiceSocket';
 
 export default function TalkLive() {
-  const { activeClient } = useAuth();
-  const profile = clientProfile[activeClient];
-  const agentId = profile?.agentId || 'default';
+  const { activeClient, currentRole, user } = useAuth();
+  const profile = currentRole === 'client' && user?.agentId
+    ? { name: user.clientName || user.name, agent: user.agentName || 'Assigned Agent', agentId: user.agentId }
+    : clientProfile[activeClient];
+  const agentId = profile?.agentId || user?.agentId || 'default';
   
   const { connect, disconnect, isConnected, statusText, transcripts, clearTranscripts } = useVoiceSocket(agentId, activeClient);
 

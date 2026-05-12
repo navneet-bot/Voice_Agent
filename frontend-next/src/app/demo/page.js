@@ -4,9 +4,11 @@ import DashboardLayout from '@/components/DashboardLayout';
 import { useVoiceSocket } from '@/hooks/useVoiceSocket';
 
 export default function DemoCampaign() {
-  const { activeClient } = useAuth();
-  const profile = clientProfile[activeClient];
-  const agentId = profile?.agentId || 'default';
+  const { activeClient, currentRole, user } = useAuth();
+  const profile = currentRole === 'client' && user?.agentId
+    ? { name: user.clientName || user.name, agent: user.agentName || 'Assigned Agent', agentId: user.agentId }
+    : clientProfile[activeClient];
+  const agentId = profile?.agentId || user?.agentId || 'default';
   
   const { connect, disconnect, isConnected, statusText, transcripts, events, clearTranscripts } = useVoiceSocket(agentId, activeClient);
 
@@ -142,7 +144,7 @@ export default function DemoCampaign() {
                     </span>
                   </div>
                   {latestEvent.snippet && (
-                    <div className="small text-secondary fst-italic mt-2">"{latestEvent.snippet}"</div>
+                    <div className="small text-secondary fst-italic mt-2">&quot;{latestEvent.snippet}&quot;</div>
                   )}
                   {latestEvent.type === 'call_completed' && (
                     <div className="small text-success mt-2 fw-medium">

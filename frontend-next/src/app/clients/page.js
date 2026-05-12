@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAuth, clientProfile } from '@/context/AuthContext';
+import { useAuth } from '@/context/AuthContext';
 
 export default function ClientsPage() {
   const { user } = useAuth();
@@ -12,6 +12,7 @@ export default function ClientsPage() {
   const [formData, setFormData] = useState({
     id: '',
     name: '',
+    email: '',
     agent: '',
     agentId: ''
   });
@@ -48,6 +49,7 @@ export default function ClientsPage() {
       const payload = {
         id: formData.id.toLowerCase().replace(/\s+/g, '-'),
         name: formData.name,
+        email: formData.email.trim().toLowerCase(),
         agentName: formData.agent || 'Default',
         agentId: formData.agentId || 'default'
       };
@@ -67,7 +69,7 @@ export default function ClientsPage() {
           agentId: saved.agentId
         }]);
         setShowModal(false);
-        setFormData({ id: '', name: '', agent: '', agentId: '' });
+        setFormData({ id: '', name: '', email: '', agent: '', agentId: '' });
       }
     } catch (err) {
       console.error("Failed to create client", err);
@@ -109,6 +111,7 @@ export default function ClientsPage() {
                     <div>
                       <h5 className="fw-bold mb-0">{client.name}</h5>
                       <span className="text-muted small">ID: {client.id}</span>
+                      {client.email && <div className="text-muted small">{client.email}</div>}
                     </div>
                   </div>
                   <div className="d-flex justify-content-between text-muted small mb-2">
@@ -151,6 +154,11 @@ export default function ClientsPage() {
                     <input type="text" className="form-control" required value={formData.id} onChange={e => setFormData({...formData, id: e.target.value})} placeholder="e.g. acme-corp" />
                   </div>
 
+                  <div className="mb-3">
+                    <label className="form-label small fw-bold">User Email</label>
+                    <input type="email" className="form-control" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} placeholder="client@example.com" />
+                  </div>
+
                   <div className="row g-3 mb-4">
                     <div className="col-md-6">
                       <label className="form-label small fw-bold">Default Agent Name</label>
@@ -163,7 +171,7 @@ export default function ClientsPage() {
                   </div>
 
                   <div className="alert alert-info py-2 small">
-                    Note: Adding a client here simulates creation for this session. A backend endpoint is required for persistence.
+                    Client records persist in the backend and can be matched by email during agent assignment.
                   </div>
 
                   <div className="d-flex justify-content-end gap-2">

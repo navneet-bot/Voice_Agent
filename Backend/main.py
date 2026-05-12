@@ -148,6 +148,8 @@ class AgentCreate(BaseModel):
     provider: str
     stt_provider: str = "groq"
     tts_provider: str = "edge"
+    assigned_email: Optional[str] = None
+    agent_type: str = "real_estate_sales"
     script: str
     data_fields: List[str]
 
@@ -256,14 +258,42 @@ async def get_provider_metrics():
 
 # ── Agents ────────────────────────────────────────────────────────────────────
 @app.get("/api/agents")
-async def list_agents():
-    return await db.list_agents()
+async def list_agents(client_id: Optional[str] = None, user_email: Optional[str] = None):
+    if user_email:
+        client = await db.get_client_by_email(user_email)
+        if not client:
+            return []
+        return await db.list_agents(client["id"])
+    return await db.list_agents(client_id)
+
+@app.get("/api/clients/resolve")
+async def resolve_client_by_email(email: str):
+    client = await db.get_client_by_email(email)
+    if not client:
+        return {"client": None, "assignment": None, "agents": []}
+
+    agents = await db.list_agents(client["id"])
+    assigned_agent_id = await db.get_assignment(client["id"])
+    assigned_agent = next((agent for agent in agents if agent.get("id") == assigned_agent_id), None)
+    return {
+        "client": client,
+        "assignment": {
+            "agentId": assigned_agent_id,
+            "agent": assigned_agent,
+        } if assigned_agent_id else None,
+        "agents": agents,
+    }
 
 @app.post("/api/agents", dependencies=[Depends(require_auth)])
 async def create_agent(agent: AgentCreate):
     agent_id = str(uuid.uuid4())
     voice_map = {"ElevenLabs — Priya (Female)": "11labs-06nek6zjTCD1vCbtc8bc"}
     voice_id  = voice_map.get(agent.voice, agent.voice)
+    assigned_email = (agent.assigned_email or "").strip().lower()
+    assigned_client = None
+    if assigned_email:
+        assigned_client = await db.ensure_client_for_email(assigned_email)
+
     agent_schema = StateManager.template_new_agent(
         name=agent.name,
         script=agent.script,
@@ -276,6 +306,11 @@ async def create_agent(agent: AgentCreate):
         "stt_provider": stt_provider,
         "tts_provider": tts_provider,
     }
+    agent_schema["agent_metadata"] = {
+        "agent_type": agent.agent_type,
+        "assigned_email": assigned_email,
+        "client_id": assigned_client.get("id") if assigned_client else None,
+    }
     schema_path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
     with open(schema_path, "w") as f:
         json.dump(agent_schema, f, indent=4)
@@ -283,10 +318,16 @@ async def create_agent(agent: AgentCreate):
         **agent.dict(),
         "stt_provider": stt_provider,
         "tts_provider": tts_provider,
+        "assigned_email": assigned_email,
+        "agent_type": agent.agent_type,
+        "client_id": assigned_client.get("id") if assigned_client else None,
         "schema_path": schema_path,
         "created_at": datetime.now().isoformat(),
     }
-    return await db.create_agent(agent_id, data)
+    created = await db.create_agent(agent_id, data)
+    if assigned_client:
+        await db.set_assignment(assigned_client["id"], agent_id)
+    return created
 
 
 # ── Leads ─────────────────────────────────────────────────────────────────────

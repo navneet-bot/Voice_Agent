@@ -42,7 +42,9 @@ export const AuthProvider = ({ children }) => {
   const [currentRole, setCurrentRole] = useState(null);   // 'admin' | 'client' | null
   const [firebaseUser, setFirebaseUser] = useState(null);
   const [activeClient, setActiveClient] = useState('realty-demo');
+  const [clientAssignment, setClientAssignment] = useState(null);
   const [loading, setLoading] = useState(true);            // prevents flash of login page
+  const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (user) => {
@@ -52,6 +54,35 @@ export const AuthProvider = ({ children }) => {
     });
     return unsub;
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const email = firebaseUser?.email?.toLowerCase();
+
+    if (!email || currentRole !== 'client') {
+      Promise.resolve().then(() => {
+        if (!cancelled) setClientAssignment(null);
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    fetch(`${API}/api/clients/resolve?email=${encodeURIComponent(email)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled) return;
+        setClientAssignment(data);
+        if (data?.client?.id) setActiveClient(data.client.id);
+      })
+      .catch(() => {
+        if (!cancelled) setClientAssignment(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [API, currentRole, firebaseUser]);
 
   // Kept for backward-compat (DashboardLayout calls logout())
   const logout = async () => {
@@ -72,6 +103,10 @@ export const AuthProvider = ({ children }) => {
       role: currentRole,
       initials: getInitials(firebaseUser.displayName, firebaseUser.email),
       photoURL: firebaseUser.photoURL,
+      clientId: clientAssignment?.client?.id || null,
+      clientName: clientAssignment?.client?.name || null,
+      agentId: clientAssignment?.assignment?.agentId || null,
+      agentName: clientAssignment?.assignment?.agent?.name || null,
     }
     : null;
 
@@ -84,6 +119,7 @@ export const AuthProvider = ({ children }) => {
         login,
         logout,
         firebaseUser,
+        clientAssignment,
         user,
         loading,
       }}

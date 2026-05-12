@@ -24,6 +24,7 @@ import logging
 import os
 import sqlite3
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,15 @@ _LIVE_STATE_FILE  = _DB_DIR / "live_state.json"
 
 # Agents schemas stay as files — never in SQLite
 AGENTS_SCHEMA_DIR = _DB_DIR / "agents"
+
+
+def _normalize_email(email: str | None) -> str:
+    return (email or "").strip().lower()
+
+
+def _client_id_for_email(email: str) -> str:
+    normalized = _normalize_email(email)
+    return f"user-{uuid.uuid5(uuid.NAMESPACE_DNS, normalized).hex[:12]}"
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +101,8 @@ def _init_schema() -> None:
             provider        TEXT,
             stt_provider    TEXT DEFAULT 'groq',
             tts_provider    TEXT DEFAULT 'edge',
+            assigned_email  TEXT,
+            agent_type      TEXT DEFAULT 'real_estate_sales',
             script          TEXT,
             data_fields     TEXT,          -- JSON array as text
             schema_path     TEXT,          -- path to the .json agent schema file
@@ -182,6 +194,14 @@ def _init_schema() -> None:
             pass
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN tts_provider TEXT DEFAULT 'edge'")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN assigned_email TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN agent_type TEXT DEFAULT 'real_estate_sales'")
         except sqlite3.OperationalError:
             pass
         conn.commit()
@@ -319,7 +339,7 @@ class DatabaseManager:
             try:
                 if client_id:
                     rows = conn.execute(
-                        "SELECT * FROM agents WHERE client_id=? OR client_id IS NULL ORDER BY created_at DESC",
+                        "SELECT * FROM agents WHERE client_id=? ORDER BY created_at DESC",
                         (client_id,)
                     ).fetchall()
                 else:
@@ -339,13 +359,14 @@ class DatabaseManager:
             conn = _get_connection()
             try:
                 conn.execute(
-                    """INSERT INTO agents (id, name, voice, language, max_duration, provider, stt_provider, tts_provider, script, data_fields, schema_path, client_id, created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    """INSERT INTO agents (id, name, voice, language, max_duration, provider, stt_provider, tts_provider, assigned_email, agent_type, script, data_fields, schema_path, client_id, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         agent_id, data.get("name"), data.get("voice"),
                         data.get("language", "en"), data.get("max_duration", 300),
                         data.get("provider"), data.get("stt_provider", "groq"),
-                        data.get("tts_provider", "edge"), data.get("script"),
+                        data.get("tts_provider", "edge"), data.get("assigned_email"),
+                        data.get("agent_type", "real_estate_sales"), data.get("script"),
                         json.dumps(data.get("data_fields", [])),
                         data.get("schema_path"), data.get("client_id"),
                         datetime.now().isoformat(),
@@ -734,6 +755,52 @@ class DatabaseManager:
             try:
                 rows = conn.execute("SELECT * FROM clients ORDER BY created_at DESC").fetchall()
                 return [dict(r) for r in rows]
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
+    async def get_client_by_email(self, email: str) -> Optional[dict]:
+        normalized = _normalize_email(email)
+        if not normalized:
+            return None
+
+        def _sync():
+            conn = _get_connection()
+            try:
+                row = conn.execute(
+                    "SELECT * FROM clients WHERE lower(email)=?",
+                    (normalized,),
+                ).fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
+    async def ensure_client_for_email(self, email: str, name: Optional[str] = None) -> dict:
+        normalized = _normalize_email(email)
+        if not normalized:
+            raise ValueError("email is required")
+
+        def _sync():
+            conn = _get_connection()
+            try:
+                existing = conn.execute(
+                    "SELECT * FROM clients WHERE lower(email)=?",
+                    (normalized,),
+                ).fetchone()
+                if existing:
+                    return dict(existing)
+
+                client_id = _client_id_for_email(normalized)
+                display_name = name or normalized.split("@")[0].replace(".", " ").title()
+                conn.execute(
+                    """INSERT OR IGNORE INTO clients (id, name, email, plan, created_at)
+                       VALUES (?,?,?,?,?)""",
+                    (client_id, display_name, normalized, "assigned", datetime.now().isoformat()),
+                )
+                conn.commit()
+                row = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+                return dict(row)
             finally:
                 conn.close()
         return await run_in_executor(_sync)
