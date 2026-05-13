@@ -82,7 +82,7 @@ export default function TalkLive() {
               })}
             </div>
             <div className="card-footer bg-white border-top p-3 small text-muted text-center">
-              Low-latency WebRTC Audio via Pipecat and Groq Whisper.
+              Low-latency browser audio via Google Cloud Speech-to-Text Enterprise.
             </div>
           </div>
         </div>

@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/context/AuthContext';
+import { getProviderLabel } from '@/lib/providerDisplay';
 
 const AGENT_TYPE_TEMPLATES = {
   real_estate_sales: {
@@ -300,13 +301,13 @@ export default function AgentsPage() {
                     <span className="badge bg-light text-dark border">{agent.language || 'English'}</span>
                   </div>
                   <p className="small text-muted mb-2"><strong>Voice:</strong> {agent.voice || 'Default'}</p>
-                  <p className="small text-muted mb-3"><strong>Provider:</strong> {agent.provider || 'twilio'}</p>
+                  <p className="small text-muted mb-3"><strong>Provider:</strong> {getProviderLabel('telephony', agent.provider || 'twilio')}</p>
                   <p className="small text-muted mb-2"><strong>Type:</strong> {AGENT_TYPE_TEMPLATES[agent.agent_type]?.label || agent.agent_type || 'Real Estate Sales'}</p>
                   <p className="small text-muted mb-2"><strong>Assigned:</strong> {agent.assigned_email || 'Unassigned'}</p>
-                  <p className="small text-muted mb-2"><strong>STT:</strong> {agent.stt_provider || 'groq'}</p>
-                  <p className="small text-muted mb-3"><strong>TTS:</strong> {agent.tts_provider || 'edge'}</p>
+                  <p className="small text-muted mb-2"><strong>STT:</strong> {getProviderLabel('stt', agent.stt_provider || 'groq')}</p>
+                  <p className="small text-muted mb-3"><strong>TTS:</strong> {getProviderLabel('tts', agent.tts_provider || 'edge')}</p>
                   {agent.tts_provider === 'cartesia' && (
-                    <p className="small text-muted mb-3"><strong>Cartesia Voice:</strong> {CARTESIA_FEMALE_VOICES.find(v => v.value === agent.cartesia_voice_id)?.label || agent.cartesia_voice_id || 'Hinglish Speaking Lady'}</p>
+                    <p className="small text-muted mb-3"><strong>Premium Voice:</strong> {CARTESIA_FEMALE_VOICES.find(v => v.value === agent.cartesia_voice_id)?.label || agent.cartesia_voice_id || 'Hinglish Speaking Lady'}</p>
                   )}
                   
                   <div className="small text-muted">
@@ -384,8 +385,8 @@ export default function AgentsPage() {
                     <div className="col-md-4">
                       <label className="form-label small fw-bold">Provider</label>
                       <select className="form-select" value={formData.provider} onChange={e => setFormData({...formData, provider: e.target.value})}>
-                        <option value="twilio">Twilio</option>
-                        <option value="demo">Demo Web</option>
+                        <option value="twilio">{getProviderLabel('telephony', 'twilio')}</option>
+                        <option value="demo">{getProviderLabel('telephony', 'demo')}</option>
                       </select>
                     </div>
                     <div className="col-md-4">
@@ -398,24 +399,24 @@ export default function AgentsPage() {
                     <div className="col-md-6">
                       <label className="form-label small fw-bold">STT Engine</label>
                       <select className="form-select" value={formData.stt_provider} onChange={e => setFormData({...formData, stt_provider: e.target.value})}>
-                        <option value="groq">Groq Whisper (Default)</option>
-                        <option value="deepgram">Deepgram Nova-2</option>
+                        <option value="groq">{getProviderLabel('stt', 'groq')} (Default)</option>
+                        <option value="deepgram">{getProviderLabel('stt', 'deepgram')}</option>
                       </select>
-                      <div className="form-text">Deepgram is enabled for this agent when selected and API keys exist.</div>
+                      <div className="form-text">Enhanced transcription is enabled for this agent when selected and API keys exist.</div>
                     </div>
                     <div className="col-md-6">
                       <label className="form-label small fw-bold">TTS Engine</label>
                       <select className="form-select" value={formData.tts_provider} onChange={e => setFormData({...formData, tts_provider: e.target.value})}>
-                        <option value="edge">Edge TTS (Default)</option>
-                        <option value="cartesia">Cartesia Sonic 3.5</option>
+                        <option value="edge">{getProviderLabel('tts', 'edge')} (Default)</option>
+                        <option value="cartesia">{getProviderLabel('tts', 'cartesia')}</option>
                       </select>
-                      <div className="form-text">Cartesia is enabled for this agent when selected. Output stays PCM16 mono at 24kHz.</div>
+                      <div className="form-text">Premium voice synthesis is enabled for this agent when selected.</div>
                     </div>
                   </div>
 
                   {formData.tts_provider === 'cartesia' && (
                     <div className="mb-3">
-                      <label className="form-label small fw-bold">Cartesia Voice</label>
+                      <label className="form-label small fw-bold">Premium Voice</label>
                       <select className="form-select" value={formData.cartesia_voice_id} onChange={e => setFormData({...formData, cartesia_voice_id: e.target.value})}>
                         {CARTESIA_FEMALE_VOICES.map((voice) => (
                           <option key={voice.value} value={voice.value}>{voice.label}</option>

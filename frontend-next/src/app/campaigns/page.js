@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/context/AuthContext';
+import { getProviderLabel } from '@/lib/providerDisplay';
 
 export default function CampaignsPage() {
   const { user } = useAuth();
@@ -42,7 +43,9 @@ export default function CampaignsPage() {
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCreate = async (e) => {
@@ -109,7 +112,7 @@ export default function CampaignsPage() {
           <div className="card-body p-5 text-center text-muted">
             <div className="fs-1 mb-3">🚀</div>
             <h6>No active campaigns</h6>
-            <p className="small">Click 'New Campaign' to start dialing.</p>
+            <p className="small">Click &apos;New Campaign&apos; to start dialing.</p>
           </div>
         </div>
       ) : (
@@ -132,7 +135,7 @@ export default function CampaignsPage() {
                     <td className="py-3">
                       <span className={`badge ${c.status === 'Active' ? 'bg-success' : 'bg-secondary'}`}>{c.status || 'Pending'}</span>
                     </td>
-                    <td className="py-3"><span className="badge bg-light text-dark border">{c.telephony_provider || 'demo'}</span></td>
+                    <td className="py-3"><span className="badge bg-light text-dark border">{getProviderLabel('telephony', c.telephony_provider || 'demo')}</span></td>
                     <td className="py-3 text-muted">{c.agent_id}</td>
                     <td className="py-3 px-4 text-end text-muted small">{new Date(c.created_at).toLocaleString()}</td>
                   </tr>
@@ -171,8 +174,8 @@ export default function CampaignsPage() {
                     <div className="col-md-6">
                       <label className="form-label small fw-bold">Telephony Provider</label>
                       <select className="form-select" value={formData.telephonyProvider} onChange={e => setFormData({...formData, telephonyProvider: e.target.value})}>
-                        <option value="twilio">Twilio</option>
-                        <option value="demo">Demo Web</option>
+                        <option value="twilio">{getProviderLabel('telephony', 'twilio')}</option>
+                        <option value="demo">{getProviderLabel('telephony', 'demo')}</option>
                       </select>
                     </div>
                   </div>

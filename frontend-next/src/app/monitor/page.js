@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
+import { formatProviderMetricKey, getProviderLabel } from '@/lib/providerDisplay';
 
 export default function AdminMonitor() {
   const [metrics, setMetrics] = useState({
@@ -167,7 +168,7 @@ export default function AdminMonitor() {
               {Object.entries(providerMetrics).map(([key, metric]) => (
                 <div key={key} className="col-md-3">
                   <div className="border rounded-3 p-3 h-100">
-                    <div className="small text-muted text-uppercase fw-semibold mb-1">{key.replace(':', ' / ')}</div>
+                    <div className="small text-muted text-uppercase fw-semibold mb-1">{formatProviderMetricKey(key)}</div>
                     <div className="fw-bold">{Math.round(metric.latest_ms || 0)} ms latest</div>
                     <div className="small text-muted">p50 {Math.round(metric.p50_ms || 0)} ms - p95 {Math.round(metric.p95_ms || 0)} ms</div>
                   </div>
@@ -212,7 +213,7 @@ export default function AdminMonitor() {
                     </div>
                   </td>
                   <td className="py-3">
-                    <span className="badge bg-light text-dark shadow-sm border">{call.provider || 'twilio'}</span>
+                    <span className="badge bg-light text-dark shadow-sm border">{getProviderLabel('telephony', call.provider || 'twilio')}</span>
                   </td>
                   <td className="py-3">
                     {getStatusBadge(call.status)}

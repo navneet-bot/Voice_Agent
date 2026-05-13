@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/context/AuthContext';
+import { getProviderLabel } from '@/lib/providerDisplay';
 
 export default function MyNumbers() {
   const { activeClient } = useAuth();
@@ -61,10 +62,10 @@ export default function MyNumbers() {
           <div style={{ minWidth: '200px' }}>
             <label className="form-label small fw-semibold text-muted">Provider</label>
             <select className="form-select shadow-none" value={searchProvider} onChange={(e) => setSearchProvider(e.target.value)}>
-              <option value="twilio">Twilio ($0.03/min)</option>
-              <option value="plivo">Plivo ($0.02/min)</option>
-              <option value="vapi">Vapi ($0.05/min)</option>
-              <option value="demo">Demo Mode (Free)</option>
+              <option value="twilio">{getProviderLabel('telephony', 'twilio')}</option>
+              <option value="plivo">{getProviderLabel('telephony', 'plivo')}</option>
+              <option value="vapi">{getProviderLabel('telephony', 'vapi')}</option>
+              <option value="demo">{getProviderLabel('telephony', 'demo')}</option>
             </select>
           </div>
           <div>
@@ -147,7 +148,7 @@ export default function MyNumbers() {
                       <td className="px-4 py-3 fw-bold">{n.phone}</td>
                       <td className="py-3 text-muted">{n.region || '—'}</td>
                       <td className="py-3">
-                        <span className="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill">{n.provider}</span>
+                        <span className="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill">{getProviderLabel('telephony', n.provider)}</span>
                       </td>
                       <td className="py-3">
                         <span className="badge bg-success-subtle text-success border border-success-subtle rounded-pill">Active</span>
