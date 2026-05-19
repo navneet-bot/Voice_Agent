@@ -20,6 +20,9 @@ from typing import Dict, Set
 
 from fastapi import WebSocket
 
+from platform_migration import feature_flags
+from platform_migration.auth_context import build_ws_event_scope_shadow_manifest
+
 logger = logging.getLogger("ws_hub")
 
 
@@ -56,8 +59,26 @@ class WebSocketManager:
     def _total_connections(self) -> int:
         return sum(len(v) for v in self._connections.values())
 
+    def _shadow_event_scope(self, *, broadcast_mode: str, target_client_id: str | None, message: dict) -> None:
+        if not feature_flags.is_enabled("ws.scoped_events_shadow"):
+            return
+        manifest = build_ws_event_scope_shadow_manifest(
+            event_type=str(message.get("type") or "unknown"),
+            broadcast_mode=broadcast_mode,
+            target_client_id=target_client_id,
+        )
+        logger.info(
+            "ws_scoped_event_shadow event_type=%s mode=%s target_tenant_present=%s global_broadcast=%s blockers=%s",
+            manifest["event"]["type"],
+            manifest["delivery"]["broadcast_mode"],
+            manifest["delivery"]["target_tenant_present"],
+            manifest["delivery"]["global_broadcast"],
+            ",".join(manifest["decision"]["blockers"]),
+        )
+
     async def broadcast_to_client(self, client_id: str, message: dict) -> None:
         """Send a message to all browsers connected under a specific client_id."""
+        self._shadow_event_scope(broadcast_mode="client", target_client_id=client_id, message=message)
         payload = json.dumps(message, default=str)
         dead: list[WebSocket] = []
 
@@ -72,12 +93,19 @@ class WebSocketManager:
             await self.disconnect(ws, client_id)
 
     async def broadcast_all(self, message: dict) -> None:
-        """Send a message to every connected browser across all clients."""
+        """Send a message to the global/admin channel.
+
+        Legacy behavior fans this out to every bucket. When ws.scoped_events is
+        enabled, tenant buckets only receive explicitly targeted messages.
+        """
+        self._shadow_event_scope(broadcast_mode="all", target_client_id=None, message=message)
         payload = json.dumps(message, default=str)
         dead: list[tuple[WebSocket, str]] = []
 
         async with self._lock:
             snapshot = {cid: set(sockets) for cid, sockets in self._connections.items()}
+        if feature_flags.is_enabled("ws.scoped_events"):
+            snapshot = {"global": snapshot.get("global", set())}
 
         for client_id, sockets in snapshot.items():
             for ws in sockets:

@@ -131,6 +131,32 @@ _RENT_HINTS = (
     "rent pe", "kiraye pe", "kiraya", "on rent", "rent ke liye", "looking to rent",
     "for rent", "to rent",
 )
+_LOCATION_SUGGESTION_HINTS = (
+    "suggest city", "suggest cities", "suggest me city", "suggest me cities",
+    "suggest area", "suggest areas", "recommend city", "recommend cities",
+    "recommend area", "recommend areas", "which city", "which area",
+    "best city", "best cities", "best area", "best location", "good location",
+    "any options", "available options",
+)
+_PURPOSE_QUESTION_HINTS = (
+    "what is it", "what is this", "what's it", "whats it",
+    "what is this about", "what's this about", "whats this about",
+    "what are you talking about", "why are you calling", "why did you call",
+    "purpose of call", "reason for call", "kya hai", "kis baare",
+)
+_CONFIRMATION_TEXTS = {
+    "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "go ahead",
+    "tell me", "go on", "continue", "haan", "han", "ji", "theek hai",
+}
+_DENIAL_TEXTS = {"no", "nope", "nah", "nahi", "nai", "na", "nako"}
+_BUSY_HINTS = (
+    "busy", "call later", "call me later", "not now", "in a meeting",
+    "cant talk", "can't talk", "driving", "not a good time",
+)
+_NOT_INTERESTED_HINTS = (
+    "not interested", "not looking", "no requirement", "dont need", "don't need",
+)
+_WRONG_PERSON_HINTS = ("wrong number", "wrong person", "not prashant", "this is not")
 
 
 def _normalize_budget_unit(unit: str) -> str:
@@ -151,6 +177,63 @@ def _extract_budget_entity(user_text: str) -> str | None:
     number = match.group(1)
     unit = _normalize_budget_unit(match.group(2))
     return f"{number} {unit}"
+
+
+def _classify_local_intent(user_text: str) -> dict[str, Any] | None:
+    clean_text = re.sub(r"[^\w\s'?]", " ", (user_text or "").strip().lower())
+    clean_text = re.sub(r"\s+", " ", clean_text).strip()
+    if not clean_text:
+        return None
+
+    entities: dict[str, Any] = {
+        "location": None,
+        "budget": None,
+        "property_type": None,
+        "intent_value": None,
+        "timeline": None,
+        "confirmation": None,
+    }
+
+    if any(phrase in clean_text for phrase in _PURPOSE_QUESTION_HINTS):
+        return {"intent": "user_question", "entities": entities}
+    has_location_suggestion = any(phrase in clean_text for phrase in _LOCATION_SUGGESTION_HINTS)
+    has_location_suggestion = has_location_suggestion or (
+        ("suggest" in clean_text or "recommend" in clean_text)
+        and any(word in clean_text.split() for word in {"city", "cities", "area", "areas", "location", "locations"})
+    )
+    if has_location_suggestion:
+        return {"intent": "ask_location_suggestion", "entities": entities}
+
+    budget = _extract_budget_entity(user_text)
+    if budget:
+        entities["budget"] = budget
+        return {"intent": "provide_budget", "entities": entities}
+
+    if any(phrase in clean_text for phrase in _WRONG_PERSON_HINTS):
+        return {"intent": "deny_identity", "entities": entities}
+    if any(phrase in clean_text for phrase in _NOT_INTERESTED_HINTS):
+        return {"intent": "deny_interest", "entities": entities}
+    if any(phrase in clean_text for phrase in _BUSY_HINTS):
+        return {"intent": "deny_time", "entities": entities}
+
+    if any(phrase in clean_text for phrase in _BUY_HINTS) or clean_text in {"buy", "purchase"}:
+        entities["intent_value"] = "buy"
+        return {"intent": "provide_intent", "entities": entities}
+    if any(phrase in clean_text for phrase in _INVEST_HINTS):
+        entities["intent_value"] = "invest"
+        return {"intent": "provide_intent", "entities": entities}
+    if any(phrase in clean_text for phrase in _RENT_HINTS) or clean_text == "rent":
+        entities["intent_value"] = "rent"
+        return {"intent": "provide_intent", "entities": entities}
+
+    if clean_text in _CONFIRMATION_TEXTS:
+        entities["confirmation"] = "yes"
+        return {"intent": "confirm", "entities": entities}
+    if clean_text in _DENIAL_TEXTS:
+        entities["confirmation"] = "no"
+        return {"intent": "deny", "entities": entities}
+
+    return None
 
 
 def _enrich_intent_entities(user_text: str, intent: str, entities: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -231,6 +314,10 @@ async def extract_intent(user_text: str) -> dict[str, Any]:
     """
     if not user_text or not user_text.strip():
         return dict(_EMPTY_INTENT)
+
+    local_intent = _classify_local_intent(user_text)
+    if local_intent:
+        return local_intent
 
     messages = [
         {"role": "system", "content": INTENT_EXTRACTION_SYSTEM_PROMPT},

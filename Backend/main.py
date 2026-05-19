@@ -37,14 +37,18 @@ _force_utf8_streams()
 # ─────────────────────────────────────────────────────────────────────────────
 
 import asyncio
+import array
 import json
 import logging
 import os
 import secrets
+import tempfile
 import uuid
+import wave
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+from urllib.parse import parse_qs, urlencode
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -61,6 +65,55 @@ from agent_runner import run_campaign
 from telephony.provider_registry import get_provider, list_providers
 from metrics.provider_metrics import snapshot_provider_metrics
 from call_recording import SessionRecorder as TimelineSessionRecorder
+from campaigns.worker_v2 import CampaignWorkerV2Config, CampaignWorkerV2ControlPlane
+from crm import CRMIntegrationService
+from flows.v2 import FlowSpecValidationError, build_flow_preview, build_flow_spec_from_agent, validate_flow_spec
+from intelligence.crawler import CrawlError
+from intelligence.pipeline import ScrapeLimits, WebsiteIntelligencePipeline
+from intelligence.url_guard import URLSafetyError
+from memory import AgentMemoryService
+from platform_migration import feature_flags
+from platform_migration.auth_context import (
+    audit_context,
+    build_http_tenant_context,
+    build_ws_tenant_context,
+    build_tenant_enforcement_readiness,
+    build_tenant_scoped_read_policy_manifest,
+    build_tenant_scoped_read_guard_decision,
+    build_tenant_scoped_read_canary,
+    build_tenant_leak_regression_matrix_manifest,
+    build_result_asset_readiness_manifest,
+    build_final_rollout_report_readiness_manifest,
+    build_rollout_approval_packet_manifest,
+    build_rollout_canary_plan_manifest,
+    build_rollback_drill_readiness_manifest,
+    build_rollout_evidence_bundle_manifest,
+    build_canary_observation_checklist_manifest,
+    build_production_go_no_go_gate_manifest,
+    build_production_activation_contract_stub_manifest,
+    build_production_activation_permission_shadow_manifest,
+    build_production_activation_payload_dry_run_manifest,
+    build_production_activation_readiness_manifest,
+    build_production_activation_rollback_confirmation_manifest,
+    build_controlled_handoff_readiness_manifest,
+    build_recording_access_shadow_manifest,
+    build_recording_owner_lookup_shadow_manifest,
+    build_recording_access_enforcement_readiness_manifest,
+    build_recording_access_gate_dry_run_manifest,
+    build_transcript_access_shadow_manifest,
+    build_transcript_access_canary_manifest,
+    build_transcript_access_enforcement_readiness_manifest,
+    build_transcript_access_gate_dry_run_manifest,
+    build_transcript_protected_route_stub_manifest,
+    build_transcript_protected_route_permission_shadow_manifest,
+    build_transcript_protected_response_shape_canary_manifest,
+    build_transcript_protected_payload_dry_run_manifest,
+    build_transcript_protected_enforcement_readiness_manifest,
+    build_transcript_protected_live_activation_plan_manifest,
+    build_transcript_protected_rollback_readiness_manifest,
+    build_transcript_frontend_migration_readiness_manifest,
+    should_reject_http_request,
+)
 
 _PIPECAT_AVAILABLE = False
 try:
@@ -151,6 +204,117 @@ os.makedirs("recordings", exist_ok=True)
 app.mount("/recordings", StaticFiles(directory="recordings"), name="recordings")
 
 
+def _shadow_recording_access(context, request_path: str) -> None:
+    if not feature_flags.is_enabled("recordings.access_shadow"):
+        return
+    manifest = build_recording_access_shadow_manifest(context, request_path=request_path)
+    if not manifest["recording"]["recording_path_requested"]:
+        return
+    logger.info(
+        "recording_access_shadow requested=%s extension=%s tenant_present=%s blockers=%s",
+        manifest["recording"]["recording_path_requested"],
+        manifest["recording"]["file_extension"],
+        manifest["requester"]["tenant_present"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+
+
+async def _shadow_recording_owner_lookup(context, request_path: str) -> None:
+    if not (
+        feature_flags.is_enabled("recordings.access_shadow")
+        and feature_flags.is_enabled("recordings.owner_lookup_shadow")
+    ):
+        return
+    if not request_path.startswith("/recordings/"):
+        return
+
+    try:
+        owner = await db.get_recording_asset_owner(request_path)
+    except Exception as exc:
+        logger.warning(
+            "recording_owner_lookup_shadow failed error_type=%s",
+            type(exc).__name__,
+        )
+        return
+    manifest = build_recording_owner_lookup_shadow_manifest(
+        context,
+        recording_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    logger.info(
+        "recording_owner_lookup_shadow found=%s owner_tenant_present=%s allowed=%s blockers=%s",
+        manifest["recording"]["found"],
+        manifest["recording"]["owner_tenant_present"],
+        manifest["decision"]["current_requester_allowed_if_enforced"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    if feature_flags.is_enabled("recordings.access_enforcement_shadow"):
+        readiness = build_recording_access_enforcement_readiness_manifest(
+            context,
+            recording_found=owner["found"],
+            owner_tenant_id=owner.get("owner_client_id"),
+            campaign_id_present=owner.get("campaign_id_present", False),
+        )
+        logger.info(
+            "recording_access_enforcement_shadow ready=%s would_allow=%s blockers=%s",
+            readiness["decision"]["ready_for_future_enforcement"],
+            readiness["decision"]["would_allow_if_recording_access_enforced"],
+            ",".join(readiness["decision"]["blockers"]),
+        )
+    if feature_flags.is_enabled("recordings.access_gate_dry_run"):
+        dry_run = build_recording_access_gate_dry_run_manifest(
+            context,
+            recording_found=owner["found"],
+            owner_tenant_id=owner.get("owner_client_id"),
+            campaign_id_present=owner.get("campaign_id_present", False),
+        )
+        logger.info(
+            "recording_access_gate_dry_run ready=%s would_allow=%s blockers=%s",
+            dry_run["decision"]["ready_for_future_gate"],
+            dry_run["decision"]["would_allow_if_gate_active"],
+            ",".join(dry_run["decision"]["blockers"]),
+        )
+
+
+@app.middleware("http")
+async def tenant_auth_audit_middleware(request: Request, call_next):
+    context = build_http_tenant_context(request, api_key_secret=_PLATFORM_API_KEY)
+    request.state.tenant_context = context
+    _shadow_recording_access(context, request.url.path)
+    await _shadow_recording_owner_lookup(context, request.url.path)
+    audit_context(logger, context, surface="http", method=request.method, route=request.url.path)
+    if should_reject_http_request(context, request.url.path):
+        return JSONResponse(status_code=401, content={"detail": "Authentication required"})
+    return await call_next(request)
+
+
+def _audit_ws_connection(websocket: WebSocket, route: str, client_id: str | None = None):
+    context = build_ws_tenant_context(
+        websocket,
+        path_tenant_id=client_id,
+        api_key_secret=_PLATFORM_API_KEY,
+    )
+    audit_context(logger, context, surface="websocket", route=route)
+    return context
+
+
+def _should_enforce_global_monitor_admin() -> bool:
+    return (
+        feature_flags.is_enabled("ws.scoped_events")
+        or feature_flags.is_enabled("auth.enforce_backend")
+    )
+
+
+def _require_global_monitor_admin(context, surface: str) -> None:
+    if not _should_enforce_global_monitor_admin():
+        return
+    if context and context.is_admin:
+        return
+    logger.warning("Global monitor access rejected: surface=%s", surface)
+    raise HTTPException(status_code=403, detail=f"{surface} requires admin access")
+
+
 # ── Pydantic Models ───────────────────────────────────────────────────────────
 class AgentCreate(BaseModel):
     name: str
@@ -182,6 +346,10 @@ class AgentUpdate(BaseModel):
 
 class LeadsUpload(BaseModel):
     campaignId: str
+    campaignName: Optional[str] = None
+    agentId: Optional[str] = None
+    telephonyProvider: Optional[str] = "demo"
+    clientId: Optional[str] = None
     leads: List[dict]
 
 class CampaignCreate(BaseModel):
@@ -193,6 +361,11 @@ class CampaignStart(BaseModel):
     campaignId: str
     agentId: Optional[str] = None
     telephonyProvider: Optional[str] = "demo"
+    clientId: Optional[str] = None
+
+class CampaignLifecycleRequest(BaseModel):
+    reason: Optional[str] = None
+    actorEmail: Optional[str] = None
 
 class AssignmentUpdate(BaseModel):
     clientId: str
@@ -213,16 +386,144 @@ class PhoneNumberAssign(BaseModel):
     numberId: str
     clientId: str
 
+class PhoneNumberRouteUpdate(BaseModel):
+    numberId: str
+    clientId: str
+    agentId: Optional[str] = None
+    campaignId: Optional[str] = None
+    routingMode: str = "tenant_default"
+    metadata: Optional[dict] = None
+
 class ClientCreate(BaseModel):
     id: str
     name: str
     email: Optional[str] = None
     plan: Optional[str] = "free"
+
+class WebsiteScrapeStart(BaseModel):
+    url: str
+    agentId: Optional[str] = None
+    clientId: Optional[str] = None
+    requestedBy: Optional[str] = None
+    reuseExisting: bool = True
+
+class WebsiteScrapeDispatch(BaseModel):
+    industryHint: Optional[str] = None
+    requestedBy: Optional[str] = None
+
+class WebsiteScrapeCancel(BaseModel):
+    reason: Optional[str] = None
+    requestedBy: Optional[str] = None
+
+class WebsiteScrapeStaleRecovery(BaseModel):
+    staleAfterMinutes: int = 15
+    reason: Optional[str] = None
+    requestedBy: Optional[str] = None
+
+class WebsiteScriptDraftCreate(BaseModel):
+    jobId: str
+    agentId: str
+    industryHint: Optional[str] = None
     agentName: Optional[str] = None
     agentId: Optional[str] = None
 
+class FlowTransitionDraftUpdate(BaseModel):
+    intent: str
+    target: str
+    label: Optional[str] = None
+
+class FlowNodeDraftUpdate(BaseModel):
+    id: str
+    type: Optional[str] = None
+    label: Optional[str] = None
+    response_en: Optional[str] = None
+    collects: Optional[List[str]] = None
+    transitions: Optional[List[FlowTransitionDraftUpdate]] = None
+
+class FlowDraftUpdate(BaseModel):
+    nodes: List[FlowNodeDraftUpdate]
+
 
 # ── Health Check ──────────────────────────────────────────────────────────────
+class AgentMemoryCollectionCreate(BaseModel):
+    clientId: Optional[str] = None
+    sourceType: str = "manual"
+    sourceId: Optional[str] = None
+    metadata: Optional[dict] = None
+
+class AgentMemoryItemCreate(BaseModel):
+    clientId: Optional[str] = None
+    collectionId: str
+    content: str
+    metadata: Optional[dict] = None
+
+class AgentMemoryResetRequest(BaseModel):
+    clientId: Optional[str] = None
+    reason: Optional[str] = None
+
+class CRMConnectionCreate(BaseModel):
+    clientId: Optional[str] = None
+    provider: str
+    displayName: Optional[str] = None
+    externalAccountId: Optional[str] = None
+    config: Optional[dict] = None
+    requestedBy: Optional[str] = None
+
+class CRMSecretReferenceUpdate(BaseModel):
+    clientId: Optional[str] = None
+    vaultProvider: str = "external"
+    referenceId: str
+    rotationDueAt: Optional[str] = None
+    metadata: Optional[dict] = None
+    requestedBy: Optional[str] = None
+
+class CRMSyncPlanCreate(BaseModel):
+    clientId: Optional[str] = None
+    connectionId: str
+    campaignId: Optional[str] = None
+    direction: str = "outbound"
+    requestedBy: Optional[str] = None
+    idempotencyKey: Optional[str] = None
+
+class CRMSyncDryRunExecute(BaseModel):
+    clientId: Optional[str] = None
+    requestedBy: Optional[str] = None
+
+class CRMSyncPreflightExecute(BaseModel):
+    clientId: Optional[str] = None
+    requestedBy: Optional[str] = None
+
+class CRMSyncOutboxQueue(BaseModel):
+    clientId: Optional[str] = None
+    requestedBy: Optional[str] = None
+    idempotencyKey: Optional[str] = None
+
+class CRMSyncOutboxShadowRun(BaseModel):
+    clientId: Optional[str] = None
+    requestedBy: Optional[str] = None
+
+class CRMSyncOutboxRetryUpdate(BaseModel):
+    clientId: Optional[str] = None
+    error: str
+    nextRetryAt: Optional[str] = None
+    requestedBy: Optional[str] = None
+
+class CRMSyncOutboxRequeue(BaseModel):
+    clientId: Optional[str] = None
+    requestedBy: Optional[str] = None
+
+class CRMDeliveryApprovalCreate(BaseModel):
+    clientId: Optional[str] = None
+    approvedBy: Optional[str] = None
+    requestedBy: Optional[str] = None
+    idempotencyKey: Optional[str] = None
+
+class CRMDeliveryApprovalRevoke(BaseModel):
+    clientId: Optional[str] = None
+    revokedBy: Optional[str] = None
+    reason: Optional[str] = None
+
+
 @app.get("/health")
 async def health():
     """
@@ -279,8 +580,16 @@ async def get_dashboard():
     return await db.get_dashboard_stats()
 
 @app.get("/api/provider-metrics")
-async def get_provider_metrics():
+async def get_provider_metrics(request: Request):
+    _require_global_monitor_admin(_tenant_context_from_request(request), "Provider metrics")
     return snapshot_provider_metrics()
+
+@app.get("/api/demo/qa/readiness", dependencies=[Depends(require_auth)])
+async def get_demo_call_qa_readiness(request: Request):
+    if not feature_flags.is_enabled("demo.runtime_qa_readiness"):
+        raise HTTPException(status_code=403, detail="demo.runtime_qa_readiness is disabled")
+    _require_global_monitor_admin(_tenant_context_from_request(request), "Demo call QA")
+    return _build_demo_call_qa_readiness()
 
 def _voice_id_for_agent(voice: str | None) -> str:
     raw_voice = (voice or "11labs-06nek6zjTCD1vCbtc8bc").strip()
@@ -402,7 +711,2902 @@ def _write_agent_runtime_schema(
         json.dump(schema, schema_file, indent=4)
 
 
+def _write_agent_flow_v2_shadow(
+    agent_id: str,
+    schema_path: str,
+    agent_data: dict,
+    assigned_client: Optional[dict],
+) -> dict | None:
+    if not feature_flags.is_enabled("flow.v2_shadow"):
+        return None
+
+    flow = build_flow_spec_from_agent(
+        agent_id=agent_id,
+        agent_name=agent_data["name"],
+        agent_type=agent_data["agent_type"],
+        script=agent_data["script"],
+        data_fields=agent_data["data_fields"],
+        language=agent_data["language"],
+    )
+    artifact_path = f"{os.path.splitext(schema_path)[0]}.flow.v2.json"
+    with open(artifact_path, "w", encoding="utf-8") as flow_file:
+        json.dump(flow, flow_file, indent=2)
+    return {
+        "artifact_path": artifact_path,
+        "client_id": assigned_client.get("id") if assigned_client else None,
+        "validation": flow.get("validation", {}),
+    }
+
+
 # ── Agents ────────────────────────────────────────────────────────────────────
+def _read_agent_flow_v2_artifact(agent_id: str, artifact_path: Optional[str]) -> Optional[dict]:
+    if not artifact_path:
+        return None
+    agents_root = os.path.abspath(AGENTS_DIR)
+    candidate = os.path.abspath(artifact_path)
+    try:
+        if os.path.commonpath([agents_root, candidate]) != agents_root:
+            logger.warning("Ignoring flow preview artifact outside agents dir: agent=%s path=%s", agent_id, artifact_path)
+            return None
+    except ValueError:
+        return None
+    if not candidate.endswith(".flow.v2.json"):
+        logger.warning("Ignoring flow preview artifact with unexpected suffix: agent=%s path=%s", agent_id, artifact_path)
+        return None
+    if not os.path.exists(candidate):
+        return None
+    with open(candidate, "r", encoding="utf-8") as flow_file:
+        data = json.load(flow_file)
+    if data.get("agent_id") != agent_id:
+        logger.warning("Ignoring flow preview artifact with agent mismatch: agent=%s path=%s", agent_id, artifact_path)
+        return None
+    return data
+
+
+async def _load_agent_flow_v2_spec(agent: dict) -> tuple[dict, dict]:
+    source = {"type": "generated_from_agent"}
+    flow = None
+    for version in await db.list_agent_flow_versions(agent["id"]):
+        flow = _read_agent_flow_v2_artifact(agent["id"], version.get("artifact_path"))
+        if flow:
+            source = {
+                "type": "flow_v2_artifact",
+                "version_id": version.get("id"),
+                "artifact_path": version.get("artifact_path"),
+            }
+            break
+    if not flow:
+        flow = build_flow_spec_from_agent(
+            agent_id=agent["id"],
+            agent_name=agent.get("name") or "Voice Agent",
+            agent_type=agent.get("agent_type") or "real_estate_sales",
+            script=agent.get("script") or "",
+            data_fields=agent.get("data_fields") or [],
+            language=agent.get("language") or "English",
+        )
+    return flow, source
+
+
+def _build_editable_flow_payload(flow: dict) -> dict:
+    nodes = []
+    for node in flow.get("nodes") or []:
+        response = node.get("response") if isinstance(node.get("response"), dict) else {}
+        nodes.append(
+            {
+                "id": node.get("id"),
+                "type": node.get("type"),
+                "label": node.get("label") or node.get("id"),
+                "response_en": response.get("en") or next((value for value in response.values() if str(value).strip()), ""),
+                "collects": list(node.get("collects") or []),
+                "transitions": [
+                    {
+                        "intent": transition.get("intent"),
+                        "label": transition.get("label") or str(transition.get("intent") or "").replace("_", " ").title(),
+                        "target": transition.get("target"),
+                    }
+                    for transition in (node.get("transitions") or [])
+                ],
+            }
+        )
+    return {
+        "nodes": nodes,
+        "node_options": [
+            {"id": node.get("id"), "label": node.get("label") or node.get("id")}
+            for node in flow.get("nodes") or []
+        ],
+        "editable_fields": ("label", "response_en", "collects", "transitions"),
+        "runtime_mode": flow.get("runtime_mode"),
+        "status": flow.get("status"),
+        "live_runtime_unchanged": True,
+    }
+
+
+async def _load_agent_flow_preview(agent: dict) -> dict:
+    flow, source = await _load_agent_flow_v2_spec(agent)
+    preview = build_flow_preview(flow)
+    preview["agent"] = {
+        "id": agent["id"],
+        "name": agent.get("name"),
+        "agent_type": agent.get("agent_type"),
+        "client_id": agent.get("client_id"),
+    }
+    preview["source"] = source
+    preview["editable_flow"] = _build_editable_flow_payload(flow)
+    return preview
+
+
+def _write_flow_v2_draft_artifact(agent: dict, flow: dict) -> str:
+    schema_path = agent.get("schema_path") or os.path.join(AGENTS_DIR, f"{agent['id']}.json")
+    base_path = os.path.splitext(schema_path)[0]
+    artifact_path = f"{base_path}.{uuid.uuid4().hex[:8]}.flow.v2.json"
+    os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
+    with open(artifact_path, "w", encoding="utf-8") as flow_file:
+        json.dump(flow, flow_file, indent=2)
+    return artifact_path
+
+
+def _apply_flow_v2_draft_updates(flow: dict, updates: FlowDraftUpdate) -> dict:
+    draft = json.loads(json.dumps(flow))
+    nodes = draft.get("nodes")
+    if not isinstance(nodes, list):
+        nodes = []
+        draft["nodes"] = nodes
+    node_map = {node.get("id"): node for node in nodes}
+    for update in updates.nodes:
+        node = node_map.get(update.id)
+        if not node:
+            node = {
+                "id": update.id,
+                "type": update.type or "message",
+                "label": update.label or update.id,
+                "response": {"en": update.response_en or "Continue."},
+                "transitions": [],
+            }
+            nodes.append(node)
+            node_map[update.id] = node
+        if update.type is not None:
+            node["type"] = str(update.type).strip() or "message"
+        if update.label is not None:
+            node["label"] = str(update.label).strip() or update.id
+        if update.response_en is not None:
+            response = node.get("response")
+            if not isinstance(response, dict):
+                response = {}
+                node["response"] = response
+            response["en"] = str(update.response_en).strip()
+        if update.collects is not None:
+            node["collects"] = [str(slot).strip() for slot in update.collects if str(slot).strip()]
+        if update.transitions is not None:
+            node["transitions"] = [
+                {
+                    "intent": str(transition.intent).strip(),
+                    "target": str(transition.target).strip(),
+                    **({"label": str(transition.label).strip()} if transition.label else {}),
+                }
+                for transition in update.transitions
+            ]
+
+    draft["status"] = "draft"
+    draft["runtime_mode"] = "shadow"
+    return validate_flow_spec(draft)
+
+
+def _prepare_generated_script_flow_for_agent(script_draft: dict, agent: dict) -> dict:
+    flow = json.loads(json.dumps(script_draft.get("draft") or {}))
+    if flow.get("agent_id") and flow["agent_id"] != agent["id"]:
+        raise HTTPException(status_code=400, detail="Generated draft does not belong to this agent")
+    flow["agent_id"] = agent["id"]
+    flow["agent_name"] = agent.get("name") or flow.get("agent_name") or "Voice Agent"
+    flow["status"] = "draft"
+    flow["runtime_mode"] = "shadow"
+    metadata = flow.get("metadata") if isinstance(flow.get("metadata"), dict) else {}
+    metadata["applied_from_script_draft_id"] = script_draft.get("id")
+    metadata["review_required"] = True
+    metadata["live_runtime_unchanged"] = True
+    flow["metadata"] = metadata
+    return flow
+
+
+def _build_generated_script_review_policy(
+    script_draft: dict,
+    flow: dict,
+    *,
+    review_acknowledged: bool = False,
+) -> dict:
+    """Build a non-enforcing review gate manifest for generated scripts."""
+    metadata = flow.get("metadata") if isinstance(flow.get("metadata"), dict) else {}
+    website = metadata.get("website_intelligence") if isinstance(metadata.get("website_intelligence"), dict) else {}
+    knowledge = script_draft.get("knowledge") if isinstance(script_draft.get("knowledge"), dict) else {}
+    quality = (
+        knowledge.get("quality")
+        if isinstance(knowledge.get("quality"), dict)
+        else website.get("quality") if isinstance(website.get("quality"), dict) else {}
+    )
+    checklist = website.get("review_checklist") if isinstance(website.get("review_checklist"), list) else []
+    failed_checks = [
+        item
+        for item in checklist
+        if isinstance(item, dict) and not bool(item.get("passed"))
+    ]
+    blockers: list[str] = []
+    warnings: list[str] = []
+
+    if not review_acknowledged:
+        blockers.append("human_review_not_acknowledged")
+    if not bool(quality.get("ready_for_review")):
+        blockers.append("quality_not_ready_for_review")
+    if not (website.get("evidence_urls") or knowledge.get("source_url")):
+        blockers.append("source_evidence_missing")
+    if not bool(knowledge.get("products_or_services")):
+        blockers.append("services_not_detected")
+    if bool(website.get("auto_publish")):
+        blockers.append("auto_publish_must_remain_off")
+
+    warnings.extend(str(item) for item in (quality.get("warnings") or []) if str(item).strip())
+    warnings.extend(
+        str(item.get("label") or item.get("key"))
+        for item in failed_checks
+        if str(item.get("label") or item.get("key") or "").strip()
+    )
+
+    would_allow = not blockers
+    return {
+        "enabled": feature_flags.is_enabled("scrape.review_gate_shadow"),
+        "mode": "shadow",
+        "enforced": False,
+        "can_save_flow_draft": True,
+        "would_allow_if_enforced": would_allow,
+        "would_block_if_enforced": not would_allow,
+        "blockers": blockers,
+        "warnings": list(dict.fromkeys(warnings))[:8],
+        "review_acknowledged": review_acknowledged,
+        "quality": {
+            "score": quality.get("score", 0),
+            "level": quality.get("level", "unknown"),
+            "ready_for_review": bool(quality.get("ready_for_review")),
+        },
+        "checklist": {
+            "total": len(checklist),
+            "failed": len(failed_checks),
+        },
+        "auto_publish": False,
+        "runtime_live_changed": False,
+        "rollback": {
+            "disable_shadow": feature_flags.env_name("scrape.review_gate_shadow"),
+        },
+    }
+
+
+_LIVE_QA_PLACEHOLDER_DOMAINS = {
+    "example.com",
+    "example.org",
+    "example.net",
+    "localhost",
+}
+
+
+async def _build_website_live_qa_readiness(client_id: Optional[str] = None) -> dict:
+    """Build a read-only production QA snapshot for real website scrape evidence."""
+    jobs = await db.list_scrape_jobs(client_id=client_id, limit=50)
+    production_samples: list[dict] = []
+    recent_failures: list[dict] = []
+    placeholder_count = 0
+
+    for job in jobs:
+        domain = str(job.get("domain") or "").strip().lower()
+        if not domain:
+            continue
+        is_placeholder = domain in _LIVE_QA_PLACEHOLDER_DOMAINS or domain.endswith(".localhost")
+        if is_placeholder:
+            placeholder_count += 1
+            continue
+        if job.get("status") == "failed":
+            recent_failures.append({
+                "job_id": job.get("id"),
+                "domain": domain,
+                "error": job.get("error"),
+            })
+            continue
+        if job.get("status") not in {"completed", "draft_ready"}:
+            continue
+
+        details = await db.get_scrape_job_diagnostics(job["id"])
+        if not details:
+            continue
+        extraction = (
+            details.get("latest_extraction", {}).get("extraction", {})
+            if isinstance(details.get("latest_extraction"), dict)
+            else {}
+        )
+        quality = extraction.get("quality") if isinstance(extraction.get("quality"), dict) else {}
+        production_samples.append({
+            "job_id": job.get("id"),
+            "domain": domain,
+            "status": job.get("status"),
+            "pages": details.get("diagnostics", {}).get("page_count", 0),
+            "drafts": details.get("diagnostics", {}).get("draft_count", 0),
+            "quality_level": quality.get("level", "unknown"),
+            "quality_score": quality.get("score", 0),
+            "ready_for_review": bool(quality.get("ready_for_review")),
+        })
+
+    unique_domains = {item["domain"] for item in production_samples}
+    ready_samples = [item for item in production_samples if item["ready_for_review"]]
+    medium_or_high = [
+        item
+        for item in production_samples
+        if item["quality_level"] in {"medium", "high"}
+    ]
+    draft_ready = [item for item in production_samples if int(item.get("drafts") or 0) > 0]
+
+    criteria = [
+        {
+            "key": "live_worker_enabled",
+            "label": "Live scrape worker is enabled for QA",
+            "passed": feature_flags.is_enabled("scrape.worker_v1"),
+        },
+        {
+            "key": "live_real_domain_coverage",
+            "label": "At least 3 non-placeholder domains completed",
+            "passed": len(unique_domains) >= 3,
+            "value": len(unique_domains),
+            "required": 3,
+        },
+        {
+            "key": "pages_captured",
+            "label": "Completed samples captured website pages",
+            "passed": len(production_samples) >= 3 and all(int(item.get("pages") or 0) > 0 for item in production_samples[:3]),
+        },
+        {
+            "key": "quality_ready",
+            "label": "At least 2 samples are ready for human review",
+            "passed": len(ready_samples) >= 2 and len(medium_or_high) >= 2,
+            "value": len(ready_samples),
+            "required": 2,
+        },
+        {
+            "key": "drafts_generated",
+            "label": "At least 2 QA samples generated review drafts",
+            "passed": len(draft_ready) >= 2,
+            "value": len(draft_ready),
+            "required": 2,
+        },
+        {
+            "key": "no_recent_failures",
+            "label": "No recent non-placeholder scrape failures",
+            "passed": len(recent_failures) == 0,
+            "value": len(recent_failures),
+        },
+    ]
+    blockers = [item["key"] for item in criteria if not item["passed"]]
+    return {
+        "status": "ready" if not blockers else "not_ready",
+        "ready_for_production_push": not blockers,
+        "mode": "read_only",
+        "client_id": client_id,
+        "criteria": criteria,
+        "blockers": blockers,
+        "summary": {
+            "jobs_considered": len(jobs),
+            "placeholder_jobs_ignored": placeholder_count,
+            "production_domains": len(unique_domains),
+            "ready_samples": len(ready_samples),
+            "draft_ready_samples": len(draft_ready),
+            "recent_failures": len(recent_failures),
+        },
+        "samples": production_samples[:10],
+        "recent_failures": recent_failures[:5],
+        "runtime_live_changed": False,
+        "rollback": {
+            "disable_live_qa_readiness": feature_flags.env_name("scrape.live_qa_readiness"),
+        },
+    }
+
+
+async def _build_generated_draft_qa_readiness(client_id: Optional[str] = None) -> dict:
+    """Build a read-only QA snapshot for generated script review/save evidence."""
+    jobs = await db.list_scrape_jobs(client_id=client_id, limit=50)
+    generated_count = 0
+    reviewed_saved_count = 0
+    valid_flow_artifact_count = 0
+    auto_published_count = 0
+    invalid_saved: list[dict] = []
+    samples: list[dict] = []
+    flow_versions_by_agent: dict[str, list[dict]] = {}
+
+    async def versions_for(agent_id: str) -> list[dict]:
+        if agent_id not in flow_versions_by_agent:
+            flow_versions_by_agent[agent_id] = await db.list_agent_flow_versions(agent_id)
+        return flow_versions_by_agent[agent_id]
+
+    for job in jobs:
+        details = await db.get_scrape_job_diagnostics(job["id"])
+        if not details:
+            continue
+        for draft in details.get("drafts") or []:
+            generated_count += 1
+            draft_metadata = draft.get("draft", {}).get("metadata", {}) if isinstance(draft.get("draft"), dict) else {}
+            website_metadata = (
+                draft_metadata.get("website_intelligence")
+                if isinstance(draft_metadata.get("website_intelligence"), dict)
+                else {}
+            )
+            if draft.get("published_at") or website_metadata.get("auto_publish"):
+                auto_published_count += 1
+
+            is_saved = bool(
+                draft.get("status") == "flow_draft_saved"
+                and draft.get("reviewed_at")
+                and draft.get("flow_version_id")
+            )
+            sample = {
+                "draft_id": draft.get("id"),
+                "job_id": job.get("id"),
+                "domain": job.get("domain"),
+                "agent_id": draft.get("agent_id"),
+                "status": draft.get("status"),
+                "reviewed_at": draft.get("reviewed_at"),
+                "flow_version_id": draft.get("flow_version_id"),
+                "quality_level": (draft.get("knowledge", {}).get("quality", {}) or {}).get("level", "unknown")
+                if isinstance(draft.get("knowledge"), dict)
+                else "unknown",
+                "runtime_live_changed": False,
+            }
+            if not is_saved:
+                samples.append({**sample, "flow_artifact_valid": False})
+                continue
+
+            reviewed_saved_count += 1
+            agent_id = draft.get("agent_id")
+            if not agent_id:
+                invalid_saved.append({**sample, "reason": "agent_id_missing"})
+                samples.append({**sample, "flow_artifact_valid": False})
+                continue
+            matched_version = None
+            for version in await versions_for(agent_id):
+                if version.get("id") == draft.get("flow_version_id"):
+                    matched_version = version
+                    break
+            if not matched_version:
+                invalid_saved.append({**sample, "reason": "flow_version_missing"})
+                samples.append({**sample, "flow_artifact_valid": False})
+                continue
+
+            try:
+                artifact = _read_agent_flow_v2_artifact(agent_id, matched_version.get("artifact_path"))
+                if not artifact:
+                    raise ValueError("flow_artifact_missing")
+                validated = validate_flow_spec(artifact)
+                metadata = validated.get("metadata") if isinstance(validated.get("metadata"), dict) else {}
+                if validated.get("runtime_mode") != "shadow" or validated.get("status") != "draft":
+                    raise ValueError("flow_artifact_not_shadow_draft")
+                if metadata.get("applied_from_script_draft_id") != draft.get("id"):
+                    raise ValueError("flow_artifact_draft_mismatch")
+                if metadata.get("live_runtime_unchanged") is not True:
+                    raise ValueError("live_runtime_marker_missing")
+                editable = _build_editable_flow_payload(validated)
+                if not editable.get("nodes"):
+                    raise ValueError("editable_flow_missing_nodes")
+                valid_flow_artifact_count += 1
+                samples.append({**sample, "flow_artifact_valid": True, "node_count": len(validated.get("nodes") or [])})
+            except Exception as exc:
+                invalid_saved.append({**sample, "reason": str(exc) or type(exc).__name__})
+                samples.append({**sample, "flow_artifact_valid": False})
+
+    criteria = [
+        {
+            "key": "flow_visualization_enabled",
+            "label": "Flow visualization is enabled for review/edit",
+            "passed": feature_flags.is_enabled("flow.visualization"),
+        },
+        {
+            "key": "flow_v2_shadow_enabled",
+            "label": "Flow V2 shadow draft saving is enabled",
+            "passed": feature_flags.is_enabled("flow.v2_shadow"),
+        },
+        {
+            "key": "generated_drafts_present",
+            "label": "At least 1 generated website script draft exists",
+            "passed": generated_count >= 1,
+            "value": generated_count,
+            "required": 1,
+        },
+        {
+            "key": "review_saved_present",
+            "label": "At least 1 generated draft was reviewed and saved",
+            "passed": reviewed_saved_count >= 1,
+            "value": reviewed_saved_count,
+            "required": 1,
+        },
+        {
+            "key": "saved_flow_artifact_valid",
+            "label": "Saved generated draft has a valid Flow V2 shadow artifact",
+            "passed": valid_flow_artifact_count >= 1 and not invalid_saved,
+            "value": valid_flow_artifact_count,
+            "required": 1,
+        },
+        {
+            "key": "no_auto_publish",
+            "label": "Generated drafts remain draft-only and not auto-published",
+            "passed": auto_published_count == 0,
+            "value": auto_published_count,
+        },
+    ]
+    blockers = [item["key"] for item in criteria if not item["passed"]]
+    return {
+        "status": "ready" if not blockers else "not_ready",
+        "ready_for_production_push": not blockers,
+        "mode": "read_only",
+        "client_id": client_id,
+        "criteria": criteria,
+        "blockers": blockers,
+        "summary": {
+            "jobs_considered": len(jobs),
+            "generated_drafts": generated_count,
+            "reviewed_saved_drafts": reviewed_saved_count,
+            "valid_flow_artifacts": valid_flow_artifact_count,
+            "invalid_saved_artifacts": len(invalid_saved),
+            "auto_published_drafts": auto_published_count,
+        },
+        "samples": samples[:10],
+        "invalid_saved_artifacts": invalid_saved[:5],
+        "runtime_live_changed": False,
+        "rollback": {
+            "disable_generated_draft_qa_readiness": feature_flags.env_name("scrape.generated_draft_qa_readiness"),
+        },
+    }
+
+
+def _demo_qa_criterion(
+    key: str,
+    label: str,
+    passed: bool,
+    *,
+    value: Any = None,
+    detail: Optional[str] = None,
+) -> dict:
+    item = {
+        "key": key,
+        "label": label,
+        "passed": bool(passed),
+    }
+    if value is not None:
+        item["value"] = value
+    if detail:
+        item["detail"] = detail
+    return item
+
+
+def _pcm_constant(sample_rate: int, seconds: float, amplitude: int) -> bytes:
+    count = max(1, int(sample_rate * seconds))
+    return array.array("h", [int(amplitude)] * count).tobytes()
+
+
+def _recording_dry_run_evidence() -> dict:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, "demo_qa.wav")
+        recorder = TimelineSessionRecorder(sample_rate=24000)
+        recorder.add_user_audio(_pcm_constant(24000, 0.2, 9000), sample_rate=24000)
+        recorder.add_agent_audio(_pcm_constant(24000, 0.2, 9000), sample_rate=24000)
+        duration = recorder.finalize(path)
+        with wave.open(path, "rb") as wf:
+            channels = wf.getnchannels()
+            sample_width = wf.getsampwidth()
+            sample_rate = wf.getframerate()
+            frames = wf.readframes(wf.getnframes())
+
+    samples = array.array("h")
+    samples.frombytes(frames)
+    left = samples[0::2]
+    right = samples[1::2]
+    user_window = left[1000:3000] or left
+    agent_window = right[1000:3000] or right
+    user_mean = sum(abs(value) for value in user_window) / max(1, len(user_window))
+    agent_mean = sum(abs(value) for value in agent_window) / max(1, len(agent_window))
+    return {
+        "duration_s": round(duration, 3),
+        "channels": channels,
+        "sample_width": sample_width,
+        "sample_rate": sample_rate,
+        "user_mean": round(user_mean, 2),
+        "agent_mean": round(agent_mean, 2),
+        "agent_audible": agent_mean > 10000,
+        "user_ducked_during_agent": user_mean < 3000,
+    }
+
+
+def _build_demo_call_qa_readiness() -> dict:
+    """Run deterministic demo-runtime QA without opening websockets or live audio."""
+    from demo_runner import AI_PROCESS_DELAY_S, HUMAN_THINK_MAX_S, MAX_TURNS
+    from llm.llm import _classify_local_intent
+    from llm.llm_response_generator import generate_response_for_turn_sync
+
+    criteria: list[dict] = []
+    evidence: dict[str, Any] = {
+        "mode": "deterministic_dry_run",
+        "websocket_opened": False,
+        "live_audio_changed": False,
+        "recording_asset_written": False,
+    }
+    errors: list[str] = []
+
+    criteria.append(_demo_qa_criterion(
+        "demo_latency_constants",
+        "Demo timing constants stay within QA thresholds",
+        AI_PROCESS_DELAY_S <= 0.75 and HUMAN_THINK_MAX_S <= 2.5 and MAX_TURNS <= 12,
+        value={
+            "ai_process_delay_s": AI_PROCESS_DELAY_S,
+            "human_think_max_s": HUMAN_THINK_MAX_S,
+            "max_turns": MAX_TURNS,
+        },
+    ))
+
+    schema_path = os.path.join(os.path.dirname(__file__), "Updated_Real_Estate_Agent.json")
+    try:
+        manager = StateManager(schema_path)
+        first = manager.execute_transition("yes", {"intent": "confirm", "entities": {"confirmation": "yes"}})
+        purpose_turn = manager.execute_transition("Yes, what is it?", {"intent": "user_question", "entities": {}})
+        purpose_response = generate_response_for_turn_sync(purpose_turn)
+        purpose_ok = (
+            first.node_id == "node-1735264873079"
+            and purpose_turn.node_id == "node-1735264921453"
+            and purpose_turn.node_changed
+            and "property interest" in purpose_response.lower()
+            and "two minutes" not in purpose_response.lower()
+        )
+        evidence["purpose_response_sample"] = purpose_response
+        criteria.append(_demo_qa_criterion(
+            "availability_loop_guard",
+            "Availability confirmation advances without repeating the two-minute prompt",
+            purpose_ok,
+            value={"node_id": purpose_turn.node_id, "user_question": purpose_turn.user_question},
+        ))
+    except Exception as exc:
+        errors.append(f"availability_loop_guard:{type(exc).__name__}")
+        criteria.append(_demo_qa_criterion(
+            "availability_loop_guard",
+            "Availability confirmation advances without repeating the two-minute prompt",
+            False,
+            detail=type(exc).__name__,
+        ))
+
+    try:
+        local_intent = _classify_local_intent("Suggest me the cities.")
+        intent_ok = bool(local_intent and local_intent.get("intent") == "ask_location_suggestion")
+        evidence["location_intent"] = local_intent
+        criteria.append(_demo_qa_criterion(
+            "location_intent_guard",
+            "Local intent detects location suggestion without LLM fallback",
+            intent_ok,
+            value=local_intent,
+        ))
+
+        manager = StateManager(schema_path)
+        manager.current_node_id = "node-1735267546732"
+        manager.conversation_data["budget"] = "60 lakhs"
+        location_turn = manager.execute_transition("Suggest me the cities", {"intent": "unclear", "entities": {}})
+        location_response = generate_response_for_turn_sync(location_turn)
+        location_ok = (
+            location_turn.node_id == "fallback_location"
+            and "wakad" in location_response.lower()
+            and "didn't catch" not in location_response.lower()
+        )
+        evidence["location_response_sample"] = location_response
+        criteria.append(_demo_qa_criterion(
+            "location_fallback_guard",
+            "Unclear location requests receive useful city guidance",
+            location_ok,
+            value={"node_id": location_turn.node_id},
+        ))
+
+        offer_turn = manager.execute_transition(
+            "Buy, ask, can you offer me?",
+            {"intent": "provide_intent", "entities": {"intent_value": "buy"}},
+        )
+        offer_response = generate_response_for_turn_sync(offer_turn)
+        offer_ok = (
+            offer_turn.node_id == "fallback_location"
+            and "wakad" in offer_response.lower()
+            and "didn't catch" not in offer_response.lower()
+        )
+        evidence["unclear_offer_response_sample"] = offer_response
+        criteria.append(_demo_qa_criterion(
+            "unclear_offer_fallback_guard",
+            "Unclear offer requests avoid generic fallback loops",
+            offer_ok,
+            value={"node_id": offer_turn.node_id},
+        ))
+    except Exception as exc:
+        errors.append(f"fallback_guard:{type(exc).__name__}")
+        criteria.append(_demo_qa_criterion(
+            "location_fallback_guard",
+            "Unclear location requests receive useful city guidance",
+            False,
+            detail=type(exc).__name__,
+        ))
+
+    try:
+        recording = _recording_dry_run_evidence()
+        evidence["recording"] = recording
+        recording_ok = (
+            recording["duration_s"] > 0
+            and recording["channels"] == 2
+            and recording["sample_width"] == 2
+            and recording["sample_rate"] == 24000
+            and recording["agent_audible"]
+            and recording["user_ducked_during_agent"]
+        )
+        criteria.append(_demo_qa_criterion(
+            "recording_playback_quality_guard",
+            "Recording dry-run keeps stereo audio, audible agent, and echo ducking",
+            recording_ok,
+            value=recording,
+        ))
+    except Exception as exc:
+        errors.append(f"recording_guard:{type(exc).__name__}")
+        criteria.append(_demo_qa_criterion(
+            "recording_playback_quality_guard",
+            "Recording dry-run keeps stereo audio, audible agent, and echo ducking",
+            False,
+            detail=type(exc).__name__,
+        ))
+
+    blockers = [item["key"] for item in criteria if not item["passed"]]
+    return {
+        "status": "ready" if not blockers else "not_ready",
+        "ready_for_production_push": not blockers,
+        "mode": "read_only_dry_run",
+        "criteria": criteria,
+        "blockers": blockers,
+        "errors": errors,
+        "evidence": evidence,
+        "runtime_live_changed": False,
+        "audio_contract_changed": False,
+        "websocket_contract_changed": False,
+        "recording_assets_changed": False,
+        "rollback": {
+            "disable_demo_qa_readiness": feature_flags.env_name("demo.runtime_qa_readiness"),
+        },
+    }
+
+
+def _tenant_context_from_request(request: Request):
+    return getattr(request.state, "tenant_context", None)
+
+
+def _resolve_intelligence_client_id(request: Request, requested_client_id: Optional[str]) -> Optional[str]:
+    context = _tenant_context_from_request(request)
+    tenant_id = getattr(context, "tenant_id", None)
+    if context and context.is_admin:
+        return requested_client_id or tenant_id
+    if tenant_id:
+        if requested_client_id and requested_client_id != tenant_id:
+            raise HTTPException(status_code=403, detail="Tenant scope mismatch")
+        return tenant_id
+    if feature_flags.is_enabled("tenant.scoped_reads") or feature_flags.is_enabled("auth.enforce_backend"):
+        raise HTTPException(status_code=403, detail="Tenant context required")
+    return requested_client_id
+
+
+def _assert_intelligence_scope(
+    request: Request,
+    resource_client_id: Optional[str],
+    resource_name: str,
+    *,
+    allow_unassigned: bool = False,
+) -> None:
+    context = _tenant_context_from_request(request)
+    if context and context.is_admin:
+        return
+    tenant_id = getattr(context, "tenant_id", None)
+    if tenant_id:
+        if resource_client_id == tenant_id:
+            return
+        if allow_unassigned and not resource_client_id:
+            return
+        raise HTTPException(status_code=403, detail=f"{resource_name} is outside tenant scope")
+    if feature_flags.is_enabled("tenant.scoped_reads") or feature_flags.is_enabled("auth.enforce_backend"):
+        raise HTTPException(status_code=403, detail="Tenant context required")
+
+
+def _build_website_intelligence_readiness() -> dict:
+    scrape_flags = [
+        "scrape.generate_script",
+        "scrape.worker_v1",
+        "scrape.job_cancel",
+        "scrape.stale_recovery",
+        "scrape.job_events",
+        "scrape.review_gate_shadow",
+        "scrape.live_qa_readiness",
+        "scrape.generated_draft_qa_readiness",
+    ]
+    support_flags = [
+        "flow.visualization",
+        "flow.v2_shadow",
+        "tenant.scoped_reads",
+        "auth.enforce_backend",
+    ]
+    flag_state = {
+        flag: {
+            "enabled": feature_flags.is_enabled(flag),
+            "env": feature_flags.env_name(flag),
+        }
+        for flag in [*scrape_flags, *support_flags]
+    }
+    live_required = [
+        "scrape.generate_script",
+        "scrape.worker_v1",
+        "scrape.job_cancel",
+        "scrape.stale_recovery",
+        "scrape.job_events",
+    ]
+    blockers = [
+        f"{flag}.disabled"
+        for flag in live_required
+        if not flag_state[flag]["enabled"]
+    ]
+    flow_warnings = [
+        f"{flag}.disabled"
+        for flag in ("flow.visualization", "flow.v2_shadow")
+        if not flag_state[flag]["enabled"]
+    ]
+    isolation_warnings = [
+        f"{flag}.disabled"
+        for flag in ("tenant.scoped_reads", "auth.enforce_backend")
+        if not flag_state[flag]["enabled"]
+    ]
+    defaults = ScrapeLimits()
+    return {
+        "status": "ready" if not blockers else "not_ready",
+        "advisory_only": True,
+        "crawler_provider": "bounded_http",
+        "draft_publication": "review_required",
+        "flags": flag_state,
+        "frontend_flags": {
+            "NEXT_PUBLIC_SCRAPE_GENERATE_SCRIPT_ENABLED": "shows Generate Script and Intelligence UI",
+            "NEXT_PUBLIC_SCRAPE_WORKER_V1_ENABLED": "allows live worker dispatch from UI",
+            "NEXT_PUBLIC_SCRAPE_JOB_CANCEL_ENABLED": "shows cancel controls",
+            "NEXT_PUBLIC_SCRAPE_STALE_RECOVERY_ENABLED": "shows stale recovery controls",
+            "NEXT_PUBLIC_SCRAPE_JOB_EVENTS_ENABLED": "shows job event history",
+            "NEXT_PUBLIC_SCRAPE_LIVE_QA_READINESS_ENABLED": "shows real-URL live QA readiness evidence",
+            "NEXT_PUBLIC_SCRAPE_GENERATED_DRAFT_QA_ENABLED": "shows generated draft review/edit/save QA evidence",
+        },
+        "limits": {
+            "max_pages": defaults.max_pages,
+            "max_bytes": defaults.max_bytes,
+            "timeout_s": defaults.timeout_s,
+            "crawler_hard_caps": {
+                "max_pages": 50,
+                "max_bytes": 10_000_000,
+                "timeout_s": 60,
+            },
+        },
+        "safety": {
+            "ssrf_guard": True,
+            "dns_private_ip_rejection": True,
+            "same_domain_crawl": True,
+            "draft_only_generation": True,
+            "draft_review_audit": True,
+            "auto_publish": False,
+            "tenant_scoped_jobs": True,
+            "duplicate_dispatch_guard": True,
+            "cancel_and_stale_recovery": True,
+            "event_history_available": True,
+            "review_gate_shadow": True,
+            "live_qa_readiness": True,
+            "generated_draft_qa_readiness": True,
+        },
+        "blockers": blockers,
+        "warnings": [*flow_warnings, *isolation_warnings],
+        "rollback": {
+            "disable_live_worker": feature_flags.env_name("scrape.worker_v1"),
+            "hide_ui": feature_flags.env_name("scrape.generate_script"),
+            "disable_events": feature_flags.env_name("scrape.job_events"),
+            "disable_review_gate_shadow": feature_flags.env_name("scrape.review_gate_shadow"),
+            "disable_live_qa_readiness": feature_flags.env_name("scrape.live_qa_readiness"),
+            "disable_generated_draft_qa_readiness": feature_flags.env_name("scrape.generated_draft_qa_readiness"),
+        },
+    }
+
+
+def _shadow_tenant_scoped_read(
+    request: Request,
+    resource_type: str,
+    resource_client_id: Optional[str],
+    *,
+    resource_found: bool = True,
+) -> None:
+    if not feature_flags.is_enabled("tenant.scoped_read_endpoint_shadow"):
+        return
+    context = _tenant_context_from_request(request)
+    if not context:
+        return
+    decision = build_tenant_scoped_read_guard_decision(
+        context,
+        resource_found=resource_found,
+        owner_tenant_id=resource_client_id,
+        requested_tenant_id=getattr(context, "requested_tenant_id", None) or getattr(context, "tenant_id", None),
+    )
+    logger.info(
+        "tenant_scoped_read_endpoint_shadow resource_type=%s allowed=%s active_enforcement=%s blockers=%s",
+        resource_type,
+        decision["decision"]["current_requester_allowed_if_enforced"],
+        decision["decision"]["active_enforcement"],
+        ",".join(decision["decision"]["blockers"]),
+    )
+
+
+async def _shadow_transcript_access(request: Request, lead_id: str) -> None:
+    if not feature_flags.is_enabled("transcripts.access_shadow"):
+        return
+    context = _tenant_context_from_request(request)
+    if not context:
+        return
+    try:
+        owner = await db.get_call_result_owner_for_transcript(lead_id)
+    except Exception as exc:
+        logger.warning(
+            "transcript_access_shadow failed error_type=%s",
+            type(exc).__name__,
+        )
+        return
+
+    manifest = build_transcript_access_shadow_manifest(
+        context,
+        transcript_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    logger.info(
+        "transcript_access_shadow found=%s owner_tenant_present=%s allowed=%s blockers=%s",
+        manifest["transcript"]["found"],
+        manifest["transcript"]["owner_tenant_present"],
+        manifest["decision"]["current_requester_allowed_if_enforced"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+
+
+def _require_campaign_lifecycle_enabled() -> None:
+    if not feature_flags.is_enabled("campaign.lifecycle_management"):
+        raise HTTPException(status_code=403, detail="campaign.lifecycle_management is disabled")
+
+
+def _actor_email(request: Request, explicit_email: Optional[str] = None) -> Optional[str]:
+    context = _tenant_context_from_request(request)
+    return explicit_email or getattr(context, "user_email", None)
+
+
+def _assert_campaign_startable(campaign: dict) -> None:
+    if campaign.get("deleted_at"):
+        raise HTTPException(status_code=409, detail="Campaign is soft-deleted")
+    if campaign.get("archived_at"):
+        raise HTTPException(status_code=409, detail="Campaign is archived")
+
+
+def _campaign_lead_limit() -> int:
+    try:
+        return max(1, int(os.getenv("MAX_CAMPAIGN_LEADS", "5000")))
+    except ValueError:
+        return 5000
+
+
+def _campaign_lead_key(phone: str) -> str:
+    return "".join(ch for ch in str(phone or "") if ch.isdigit()) or str(phone or "").strip().lower()
+
+
+def _normalize_campaign_leads(raw_leads: list[dict]) -> tuple[list[dict], dict[str, int]]:
+    seen: set[str] = set()
+    accepted: list[dict] = []
+    duplicate_count = 0
+    invalid_count = 0
+
+    for raw in raw_leads:
+        if not isinstance(raw, dict):
+            invalid_count += 1
+            continue
+        name = str(raw.get("name") or "").strip()
+        phone = str(raw.get("phone") or "").strip()
+        key = _campaign_lead_key(phone)
+        if not name or not phone or len(key) < 6:
+            invalid_count += 1
+            continue
+        if key in seen:
+            duplicate_count += 1
+            continue
+        seen.add(key)
+        extra = {k: v for k, v in raw.items() if k not in ("name", "phone")}
+        accepted.append({"name": name, "phone": phone, **extra})
+
+    return accepted, {
+        "submitted": len(raw_leads),
+        "accepted": len(accepted),
+        "duplicates": duplicate_count,
+        "invalid": invalid_count,
+        "limit": _campaign_lead_limit(),
+    }
+
+
+async def _resolve_campaign_launch_client_id(request: Request, requested_client_id: Optional[str]) -> Optional[str]:
+    client_id = _resolve_intelligence_client_id(request, requested_client_id)
+    if not client_id:
+        return None
+    clients = await db.list_clients()
+    if any(client.get("id") == client_id for client in clients):
+        return client_id
+    if feature_flags.is_enabled("tenant.scoped_reads") or feature_flags.is_enabled("auth.enforce_backend"):
+        raise HTTPException(status_code=400, detail="Campaign clientId is not registered")
+    logger.warning("Campaign launch requested unknown client_id=%s; preserving legacy unscoped campaign behavior", client_id)
+    return None
+
+
+def _require_tenant_numbers_enabled() -> None:
+    if not feature_flags.is_enabled("telephony.tenant_numbers"):
+        raise HTTPException(status_code=403, detail="telephony.tenant_numbers is disabled")
+
+
+def _require_memory_enabled() -> None:
+    if not feature_flags.is_enabled("memory.rag_enabled"):
+        raise HTTPException(status_code=403, detail="memory.rag_enabled is disabled")
+
+
+def _require_tenant_enforcement_readiness_enabled() -> None:
+    if not feature_flags.is_enabled("tenant.enforcement_readiness"):
+        raise HTTPException(status_code=403, detail="tenant.enforcement_readiness is disabled")
+
+
+def _require_tenant_scoped_read_canary_enabled() -> None:
+    _require_tenant_enforcement_readiness_enabled()
+    if not feature_flags.is_enabled("tenant.scoped_read_canary"):
+        raise HTTPException(status_code=403, detail="tenant.scoped_read_canary is disabled")
+
+
+def _require_tenant_scoped_read_policy_enabled() -> None:
+    _require_tenant_enforcement_readiness_enabled()
+    if not feature_flags.is_enabled("tenant.scoped_read_policy_shadow"):
+        raise HTTPException(status_code=403, detail="tenant.scoped_read_policy_shadow is disabled")
+
+
+def _require_tenant_leak_regression_matrix_enabled() -> None:
+    _require_tenant_scoped_read_canary_enabled()
+    if not feature_flags.is_enabled("tenant.leak_regression_matrix"):
+        raise HTTPException(status_code=403, detail="tenant.leak_regression_matrix is disabled")
+
+
+def _require_recording_owner_lookup_shadow_enabled() -> None:
+    _require_tenant_enforcement_readiness_enabled()
+    if not feature_flags.is_enabled("recordings.access_shadow"):
+        raise HTTPException(status_code=403, detail="recordings.access_shadow is disabled")
+    if not feature_flags.is_enabled("recordings.owner_lookup_shadow"):
+        raise HTTPException(status_code=403, detail="recordings.owner_lookup_shadow is disabled")
+
+
+def _require_recording_access_enforcement_shadow_enabled() -> None:
+    _require_recording_owner_lookup_shadow_enabled()
+    if not feature_flags.is_enabled("recordings.access_enforcement_shadow"):
+        raise HTTPException(status_code=403, detail="recordings.access_enforcement_shadow is disabled")
+
+
+def _require_recording_access_gate_dry_run_enabled() -> None:
+    _require_recording_access_enforcement_shadow_enabled()
+    if not feature_flags.is_enabled("recordings.access_gate_dry_run"):
+        raise HTTPException(status_code=403, detail="recordings.access_gate_dry_run is disabled")
+
+
+def _require_transcript_access_canary_enabled() -> None:
+    _require_tenant_enforcement_readiness_enabled()
+    if not feature_flags.is_enabled("transcripts.access_shadow"):
+        raise HTTPException(status_code=403, detail="transcripts.access_shadow is disabled")
+    if not feature_flags.is_enabled("transcripts.access_canary"):
+        raise HTTPException(status_code=403, detail="transcripts.access_canary is disabled")
+
+
+def _require_transcript_access_enforcement_shadow_enabled() -> None:
+    _require_tenant_enforcement_readiness_enabled()
+    if not feature_flags.is_enabled("transcripts.access_shadow"):
+        raise HTTPException(status_code=403, detail="transcripts.access_shadow is disabled")
+    if not feature_flags.is_enabled("transcripts.access_enforcement_shadow"):
+        raise HTTPException(status_code=403, detail="transcripts.access_enforcement_shadow is disabled")
+
+
+def _require_transcript_access_gate_dry_run_enabled() -> None:
+    _require_transcript_access_enforcement_shadow_enabled()
+    if not feature_flags.is_enabled("transcripts.access_gate_dry_run"):
+        raise HTTPException(status_code=403, detail="transcripts.access_gate_dry_run is disabled")
+
+
+def _require_transcript_protected_route_stub_enabled() -> None:
+    if not feature_flags.is_enabled("transcripts.protected_route_stub"):
+        raise HTTPException(status_code=404, detail="Transcript route not found")
+    _require_transcript_access_gate_dry_run_enabled()
+
+
+def _require_transcript_protected_enforcement_readiness_enabled() -> None:
+    _require_transcript_access_gate_dry_run_enabled()
+    if not feature_flags.is_enabled("transcripts.protected_route_stub"):
+        raise HTTPException(status_code=403, detail="transcripts.protected_route_stub is disabled")
+    if not feature_flags.is_enabled("transcripts.protected_route_permission_shadow"):
+        raise HTTPException(status_code=403, detail="transcripts.protected_route_permission_shadow is disabled")
+    if not feature_flags.is_enabled("transcripts.protected_response_shape_canary"):
+        raise HTTPException(status_code=403, detail="transcripts.protected_response_shape_canary is disabled")
+    if not feature_flags.is_enabled("transcripts.protected_payload_dry_run"):
+        raise HTTPException(status_code=403, detail="transcripts.protected_payload_dry_run is disabled")
+    if not feature_flags.is_enabled("transcripts.protected_enforcement_readiness"):
+        raise HTTPException(status_code=403, detail="transcripts.protected_enforcement_readiness is disabled")
+
+
+def _require_transcript_protected_live_activation_plan_enabled() -> None:
+    _require_transcript_protected_enforcement_readiness_enabled()
+    if not feature_flags.is_enabled("transcripts.protected_live_activation_plan"):
+        raise HTTPException(status_code=403, detail="transcripts.protected_live_activation_plan is disabled")
+
+
+def _require_transcript_protected_rollback_readiness_enabled() -> None:
+    _require_transcript_protected_live_activation_plan_enabled()
+    if not feature_flags.is_enabled("transcripts.protected_rollback_readiness"):
+        raise HTTPException(status_code=403, detail="transcripts.protected_rollback_readiness is disabled")
+
+
+def _require_transcript_frontend_migration_readiness_enabled() -> None:
+    _require_transcript_protected_rollback_readiness_enabled()
+    if not feature_flags.is_enabled("transcripts.frontend_migration_readiness"):
+        raise HTTPException(status_code=403, detail="transcripts.frontend_migration_readiness is disabled")
+
+
+def _require_result_asset_readiness_enabled() -> None:
+    _require_transcript_frontend_migration_readiness_enabled()
+    _require_recording_access_gate_dry_run_enabled()
+    _require_tenant_leak_regression_matrix_enabled()
+    if not feature_flags.is_enabled("tenant.result_asset_readiness"):
+        raise HTTPException(status_code=403, detail="tenant.result_asset_readiness is disabled")
+
+
+def _require_final_rollout_report_enabled() -> None:
+    _require_result_asset_readiness_enabled()
+    if not feature_flags.is_enabled("tenant.final_rollout_report"):
+        raise HTTPException(status_code=403, detail="tenant.final_rollout_report is disabled")
+
+
+def _require_rollout_approval_packet_enabled() -> None:
+    _require_final_rollout_report_enabled()
+    if not feature_flags.is_enabled("tenant.rollout_approval_packet"):
+        raise HTTPException(status_code=403, detail="tenant.rollout_approval_packet is disabled")
+
+
+def _require_rollout_canary_plan_enabled() -> None:
+    _require_rollout_approval_packet_enabled()
+    if not feature_flags.is_enabled("tenant.rollout_canary_plan"):
+        raise HTTPException(status_code=403, detail="tenant.rollout_canary_plan is disabled")
+
+
+def _require_rollback_drill_readiness_enabled() -> None:
+    _require_rollout_canary_plan_enabled()
+    if not feature_flags.is_enabled("tenant.rollback_drill_readiness"):
+        raise HTTPException(status_code=403, detail="tenant.rollback_drill_readiness is disabled")
+
+
+def _require_rollout_evidence_bundle_enabled() -> None:
+    _require_rollback_drill_readiness_enabled()
+    if not feature_flags.is_enabled("tenant.rollout_evidence_bundle"):
+        raise HTTPException(status_code=403, detail="tenant.rollout_evidence_bundle is disabled")
+
+
+def _require_canary_observation_checklist_enabled() -> None:
+    _require_rollout_evidence_bundle_enabled()
+    if not feature_flags.is_enabled("tenant.canary_observation_checklist"):
+        raise HTTPException(status_code=403, detail="tenant.canary_observation_checklist is disabled")
+
+
+def _require_production_go_no_go_gate_enabled() -> None:
+    _require_canary_observation_checklist_enabled()
+    if not feature_flags.is_enabled("tenant.production_go_no_go_gate"):
+        raise HTTPException(status_code=403, detail="tenant.production_go_no_go_gate is disabled")
+
+
+def _require_production_activation_contract_stub_enabled() -> None:
+    _require_production_go_no_go_gate_enabled()
+    if not feature_flags.is_enabled("tenant.production_activation_contract_stub"):
+        raise HTTPException(status_code=403, detail="tenant.production_activation_contract_stub is disabled")
+
+
+def _require_production_activation_permission_shadow_enabled() -> None:
+    _require_production_activation_contract_stub_enabled()
+    if not feature_flags.is_enabled("tenant.production_activation_permission_shadow"):
+        raise HTTPException(status_code=403, detail="tenant.production_activation_permission_shadow is disabled")
+
+
+def _require_production_activation_payload_dry_run_enabled() -> None:
+    _require_production_activation_permission_shadow_enabled()
+    if not feature_flags.is_enabled("tenant.production_activation_payload_dry_run"):
+        raise HTTPException(status_code=403, detail="tenant.production_activation_payload_dry_run is disabled")
+
+
+def _require_production_activation_readiness_enabled() -> None:
+    _require_production_activation_payload_dry_run_enabled()
+    if not feature_flags.is_enabled("tenant.production_activation_readiness"):
+        raise HTTPException(status_code=403, detail="tenant.production_activation_readiness is disabled")
+
+
+def _require_production_activation_rollback_confirmation_enabled() -> None:
+    _require_production_activation_readiness_enabled()
+    if not feature_flags.is_enabled("tenant.production_activation_rollback_confirmation"):
+        raise HTTPException(status_code=403, detail="tenant.production_activation_rollback_confirmation is disabled")
+
+
+def _require_controlled_handoff_readiness_enabled() -> None:
+    _require_production_activation_rollback_confirmation_enabled()
+    if not feature_flags.is_enabled("tenant.controlled_handoff_readiness"):
+        raise HTTPException(status_code=403, detail="tenant.controlled_handoff_readiness is disabled")
+
+
+def _require_crm_enabled() -> None:
+    if not feature_flags.is_enabled("crm.sync_enabled"):
+        raise HTTPException(status_code=403, detail="crm.sync_enabled is disabled")
+
+
+def _require_crm_preflight_enabled() -> None:
+    _require_crm_enabled()
+    if not feature_flags.is_enabled("crm.sync_preflight"):
+        raise HTTPException(status_code=403, detail="crm.sync_preflight is disabled")
+
+
+def _require_crm_outbox_enabled() -> None:
+    _require_crm_preflight_enabled()
+    if not feature_flags.is_enabled("crm.sync_outbox"):
+        raise HTTPException(status_code=403, detail="crm.sync_outbox is disabled")
+
+
+def _require_crm_worker_shadow_enabled() -> None:
+    _require_crm_outbox_enabled()
+    if not feature_flags.is_enabled("crm.sync_worker_shadow"):
+        raise HTTPException(status_code=403, detail="crm.sync_worker_shadow is disabled")
+
+
+def _require_crm_worker_retries_enabled() -> None:
+    _require_crm_worker_shadow_enabled()
+    if not feature_flags.is_enabled("crm.sync_worker_retries"):
+        raise HTTPException(status_code=403, detail="crm.sync_worker_retries is disabled")
+
+
+def _require_crm_observability_enabled() -> None:
+    _require_crm_outbox_enabled()
+    if not feature_flags.is_enabled("crm.sync_observability"):
+        raise HTTPException(status_code=403, detail="crm.sync_observability is disabled")
+
+
+def _require_crm_provider_contracts_enabled() -> None:
+    _require_crm_enabled()
+    if not feature_flags.is_enabled("crm.provider_contracts"):
+        raise HTTPException(status_code=403, detail="crm.provider_contracts is disabled")
+
+
+def _require_crm_delivery_plan_enabled() -> None:
+    _require_crm_outbox_enabled()
+    _require_crm_provider_contracts_enabled()
+    if not feature_flags.is_enabled("crm.delivery_plan_shadow"):
+        raise HTTPException(status_code=403, detail="crm.delivery_plan_shadow is disabled")
+
+
+def _require_crm_delivery_approval_enabled() -> None:
+    _require_crm_delivery_plan_enabled()
+    if not feature_flags.is_enabled("crm.delivery_approval_shadow"):
+        raise HTTPException(status_code=403, detail="crm.delivery_approval_shadow is disabled")
+
+
+def _require_crm_delivery_approval_revoke_enabled() -> None:
+    _require_crm_delivery_approval_enabled()
+    if not feature_flags.is_enabled("crm.delivery_approval_revoke"):
+        raise HTTPException(status_code=403, detail="crm.delivery_approval_revoke is disabled")
+
+
+def _require_crm_live_readiness_enabled() -> None:
+    _require_crm_delivery_approval_revoke_enabled()
+    if not feature_flags.is_enabled("crm.live_readiness_shadow"):
+        raise HTTPException(status_code=403, detail="crm.live_readiness_shadow is disabled")
+
+
+def _require_crm_provider_sandbox_enabled() -> None:
+    _require_crm_live_readiness_enabled()
+    if not feature_flags.is_enabled("crm.provider_sandbox_shadow"):
+        raise HTTPException(status_code=403, detail="crm.provider_sandbox_shadow is disabled")
+
+
+def _require_crm_dispatch_canary_enabled() -> None:
+    _require_crm_provider_sandbox_enabled()
+    if not feature_flags.is_enabled("crm.dispatch_canary_shadow"):
+        raise HTTPException(status_code=403, detail="crm.dispatch_canary_shadow is disabled")
+
+
+def _resolve_memory_client_id(request: Request, agent: dict, requested_client_id: Optional[str]) -> str:
+    agent_client_id = agent.get("client_id")
+    client_id = requested_client_id or agent_client_id
+    if not client_id:
+        raise HTTPException(status_code=400, detail="Agent must be tenant-assigned before memory can be created")
+    _assert_intelligence_scope(request, client_id, "Agent memory")
+    if agent_client_id and agent_client_id != client_id:
+        raise HTTPException(status_code=403, detail="Agent is outside memory tenant scope")
+    return client_id
+
+
+def _require_resolved_client_id(client_id: Optional[str], resource_name: str) -> str:
+    if not client_id:
+        raise HTTPException(status_code=400, detail=f"{resource_name} requires a tenant clientId")
+    return client_id
+
+
+def _crm_value_error(exc: ValueError) -> HTTPException:
+    detail = str(exc)
+    if "outside" in detail or "tenant scope" in detail:
+        return HTTPException(status_code=403, detail=detail)
+    if "not found" in detail:
+        return HTTPException(status_code=404, detail=detail)
+    return HTTPException(status_code=400, detail=detail)
+
+
+async def _assert_phone_number_scope(request: Request, number_id: str, client_id: Optional[str] = None) -> dict:
+    number = await db.get_phone_number(number_id)
+    if not number:
+        raise HTTPException(status_code=404, detail="Phone number not found")
+    requested_client_id = client_id or number.get("client_id")
+    if requested_client_id:
+        _assert_intelligence_scope(request, requested_client_id, "Phone number")
+    if number.get("client_id") and requested_client_id and number["client_id"] != requested_client_id:
+        raise HTTPException(status_code=403, detail="Phone number is assigned to another tenant")
+    return number
+
+
+async def _resolve_tenant_phone_route_from_webhook(request: Request, provider: str = "twilio") -> Optional[dict]:
+    if not feature_flags.is_enabled("telephony.tenant_numbers"):
+        return None
+
+    candidates = [
+        request.query_params.get("To"),
+        request.query_params.get("Called"),
+        request.query_params.get("to"),
+        request.query_params.get("phone"),
+    ]
+    if not any(candidates):
+        body = await request.body()
+        if body:
+            form = parse_qs(body.decode("utf-8", errors="ignore"))
+            candidates.extend([
+                (form.get("To") or [None])[0],
+                (form.get("Called") or [None])[0],
+                (form.get("to") or [None])[0],
+                (form.get("phone") or [None])[0],
+            ])
+
+    phone = next((str(value).strip() for value in candidates if value and str(value).strip()), None)
+    if not phone:
+        logger.warning("telephony tenant routing enabled but webhook did not include a destination number")
+        return None
+
+    route = await db.resolve_phone_number_route(phone, provider)
+    if not route:
+        raise HTTPException(status_code=403, detail="Phone number is not routed to a tenant")
+    await db.append_tenant_audit_event(
+        client_id=route.get("client_id"),
+        action="telephony.webhook_route_resolved",
+        resource_type="phone_number",
+        resource_id=route.get("number_id") or phone,
+        metadata={"phone": phone, "provider": provider, "routing_mode": route.get("routing_mode")},
+    )
+    return route
+
+
+@app.get("/api/tenant/enforcement-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_enforcement_readiness(
+    request: Request,
+    path: str = "/api/campaigns",
+):
+    _require_tenant_enforcement_readiness_enabled()
+    context = _tenant_context_from_request(request)
+    manifest = build_tenant_enforcement_readiness(context, path=path)
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "db_query_executed": False,
+        "tenant_data_returned": False,
+        "readiness": manifest,
+    }
+
+
+@app.get("/api/tenant/scoped-read-policy", dependencies=[Depends(require_auth)])
+async def get_tenant_scoped_read_policy(request: Request):
+    _require_tenant_scoped_read_policy_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant scoped-read policy requires admin context")
+    manifest = build_tenant_scoped_read_policy_manifest(context)
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "db_query_executed": False,
+        "db_write_performed": False,
+        "tenant_data_returned": False,
+        "policy": manifest,
+    }
+
+
+@app.get("/api/tenant/scoped-read-canary", dependencies=[Depends(require_auth)])
+async def get_tenant_scoped_read_canary(
+    request: Request,
+    resourceType: str,
+    resourceId: str,
+    clientId: Optional[str] = None,
+):
+    _require_tenant_scoped_read_canary_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant scoped-read canary requires admin context")
+    try:
+        owner = await db.get_tenant_scoped_resource_owner(resourceType, resourceId)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    manifest = build_tenant_scoped_read_canary(
+        context,
+        resource_type=owner["resource_type"],
+        resource_label=owner["resource_label"],
+        resource_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "db_write_performed": False,
+        "resource_payload_returned": False,
+        "tenant_data_returned": False,
+        "scoped_read_canary": manifest,
+    }
+
+
+@app.get("/api/tenant/leak-regression-matrix", dependencies=[Depends(require_auth)])
+async def get_tenant_leak_regression_matrix(
+    request: Request,
+    leadId: Optional[str] = None,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_tenant_leak_regression_matrix_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant leak regression matrix requires admin context")
+
+    scenarios: list[dict[str, Any]] = []
+    if leadId:
+        owner = await db.get_call_result_owner_for_transcript(leadId)
+        scenarios.append({
+            "resource_type": "transcript",
+            "resource_label": "Transcript",
+            "resource_found": owner["found"],
+            "owner_tenant_id": owner.get("owner_client_id"),
+            "requested_tenant_id": clientId or context.requested_tenant_id or context.tenant_id,
+        })
+        scenarios.append({
+            "resource_type": "call_result",
+            "resource_label": "Call result",
+            "resource_found": owner["found"],
+            "owner_tenant_id": owner.get("owner_client_id"),
+            "requested_tenant_id": clientId or context.requested_tenant_id or context.tenant_id,
+        })
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        owner = await db.get_recording_asset_owner(recordingUrl)
+        scenarios.append({
+            "resource_type": "recording_asset",
+            "resource_label": "Recording asset",
+            "resource_found": owner["found"],
+            "owner_tenant_id": owner.get("owner_client_id"),
+            "requested_tenant_id": clientId or context.requested_tenant_id or context.tenant_id,
+        })
+    if campaignId:
+        owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+        scenarios.append({
+            "resource_type": owner["resource_type"],
+            "resource_label": owner["resource_label"],
+            "resource_found": owner["found"],
+            "owner_tenant_id": owner.get("owner_client_id"),
+            "requested_tenant_id": clientId or context.requested_tenant_id or context.tenant_id,
+        })
+
+    manifest = build_tenant_leak_regression_matrix_manifest(
+        context,
+        scenarios=scenarios,
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+    )
+    logger.info(
+        "tenant_leak_regression_matrix ready=%s scenarios=%s leak_detected=%s blockers=%s",
+        manifest["decision"]["matrix_ready"],
+        manifest["decision"]["scenario_count"],
+        manifest["decision"]["cross_tenant_leak_detected"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "db_write_performed": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "tenant_leak_regression_matrix": manifest,
+    }
+
+
+@app.get("/api/tenant/recording-access-canary", dependencies=[Depends(require_auth)])
+async def get_tenant_recording_access_canary(
+    request: Request,
+    recordingUrl: str,
+    clientId: Optional[str] = None,
+):
+    _require_recording_owner_lookup_shadow_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant recording-access canary requires admin context")
+    if not str(recordingUrl or "").startswith("/recordings/"):
+        raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+
+    owner = await db.get_recording_asset_owner(recordingUrl)
+    manifest = build_recording_owner_lookup_shadow_manifest(
+        context,
+        recording_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "db_write_performed": False,
+        "resource_payload_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "tenant_data_returned": False,
+        "recording_access_canary": manifest,
+    }
+
+
+@app.get("/api/tenant/recording-access-enforcement-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_recording_access_enforcement_readiness(
+    request: Request,
+    recordingUrl: str,
+    clientId: Optional[str] = None,
+):
+    _require_recording_access_enforcement_shadow_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant recording-access enforcement readiness requires admin context")
+    if not str(recordingUrl or "").startswith("/recordings/"):
+        raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+
+    owner = await db.get_recording_asset_owner(recordingUrl)
+    manifest = build_recording_access_enforcement_readiness_manifest(
+        context,
+        recording_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "recording_response_changed": False,
+        "db_write_performed": False,
+        "resource_payload_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "tenant_data_returned": False,
+        "recording_access_enforcement": manifest,
+    }
+
+
+@app.get("/api/tenant/recording-access-gate-dry-run", dependencies=[Depends(require_auth)])
+async def get_tenant_recording_access_gate_dry_run(
+    request: Request,
+    recordingUrl: str,
+    clientId: Optional[str] = None,
+):
+    _require_recording_access_gate_dry_run_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant recording-access gate dry run requires admin context")
+    if not str(recordingUrl or "").startswith("/recordings/"):
+        raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+
+    owner = await db.get_recording_asset_owner(recordingUrl)
+    manifest = build_recording_access_gate_dry_run_manifest(
+        context,
+        recording_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "recording_response_changed": False,
+        "protected_recording_route_activated": False,
+        "db_write_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "tenant_data_returned": False,
+        "recording_access_gate_dry_run": manifest,
+    }
+
+
+@app.get("/api/tenant/transcript-access-canary", dependencies=[Depends(require_auth)])
+async def get_tenant_transcript_access_canary(
+    request: Request,
+    leadId: str,
+    clientId: Optional[str] = None,
+):
+    _require_transcript_access_canary_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant transcript-access canary requires admin context")
+
+    owner = await db.get_call_result_owner_for_transcript(leadId)
+    manifest = build_transcript_access_canary_manifest(
+        context,
+        transcript_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "transcript_response_changed": False,
+        "db_write_performed": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "transcript_access_canary": manifest,
+    }
+
+
+@app.get("/api/tenant/transcript-access-enforcement-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_transcript_access_enforcement_readiness(
+    request: Request,
+    leadId: str,
+    clientId: Optional[str] = None,
+):
+    _require_transcript_access_enforcement_shadow_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant transcript-access enforcement readiness requires admin context")
+
+    owner = await db.get_call_result_owner_for_transcript(leadId)
+    manifest = build_transcript_access_enforcement_readiness_manifest(
+        context,
+        transcript_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "transcript_response_changed": False,
+        "db_write_performed": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "transcript_access_enforcement": manifest,
+    }
+
+
+@app.get("/api/tenant/transcript-access-gate-dry-run", dependencies=[Depends(require_auth)])
+async def get_tenant_transcript_access_gate_dry_run(
+    request: Request,
+    leadId: str,
+    clientId: Optional[str] = None,
+):
+    _require_transcript_access_gate_dry_run_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant transcript-access gate dry run requires admin context")
+
+    owner = await db.get_call_result_owner_for_transcript(leadId)
+    manifest = build_transcript_access_gate_dry_run_manifest(
+        context,
+        transcript_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "transcript_response_changed": False,
+        "protected_transcript_route_activated": False,
+        "db_write_performed": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "transcript_access_gate_dry_run": manifest,
+    }
+
+
+@app.get("/api/protected/transcripts/{lead_id}", dependencies=[Depends(require_auth)])
+async def get_protected_transcript_contract_stub(
+    request: Request,
+    lead_id: str,
+    clientId: Optional[str] = None,
+):
+    _require_transcript_protected_route_stub_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_verified:
+        raise HTTPException(status_code=403, detail="protected transcript route stub requires verified backend identity")
+    if not context.is_admin and not context.tenant_id:
+        raise HTTPException(status_code=403, detail="protected transcript route stub requires tenant context")
+
+    owner = await db.get_call_result_owner_for_transcript(lead_id)
+    manifest = build_transcript_protected_route_stub_manifest(
+        context,
+        transcript_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    permission_shadow = None
+    response_shape_canary = None
+    payload_dry_run = None
+    if feature_flags.is_enabled("transcripts.protected_route_permission_shadow"):
+        permission_shadow = build_transcript_protected_route_permission_shadow_manifest(
+            context,
+            transcript_found=owner["found"],
+            owner_tenant_id=owner.get("owner_client_id"),
+            requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+            campaign_id_present=owner.get("campaign_id_present", False),
+        )
+        logger.info(
+            "transcript_protected_route_permission_shadow would_allow_payload=%s blockers=%s",
+            permission_shadow["permission"]["would_allow_payload_if_enforced"],
+            ",".join(permission_shadow["permission"]["blockers"]),
+        )
+    if feature_flags.is_enabled("transcripts.protected_response_shape_canary"):
+        response_shape_canary = build_transcript_protected_response_shape_canary_manifest(
+            context,
+            transcript_found=owner["found"],
+            owner_tenant_id=owner.get("owner_client_id"),
+            requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+            campaign_id_present=owner.get("campaign_id_present", False),
+        )
+        logger.info(
+            "transcript_protected_response_shape_canary schema_ready=%s blockers=%s",
+            response_shape_canary["decision"]["schema_ready_for_future_payload"],
+            ",".join(response_shape_canary["decision"]["blockers"]),
+        )
+    if feature_flags.is_enabled("transcripts.protected_payload_dry_run"):
+        payload_dry_run = build_transcript_protected_payload_dry_run_manifest(
+            context,
+            transcript_found=owner["found"],
+            owner_tenant_id=owner.get("owner_client_id"),
+            requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+            campaign_id_present=owner.get("campaign_id_present", False),
+        )
+        logger.info(
+            "transcript_protected_payload_dry_run ready_for_payload_read=%s blockers=%s",
+            payload_dry_run["decision"]["ready_for_future_payload_read"],
+            ",".join(payload_dry_run["decision"]["blockers"]),
+        )
+    logger.info(
+        "transcript_protected_route_stub ready=%s would_allow=%s blockers=%s",
+        manifest["decision"]["contract_route_ready"],
+        manifest["decision"]["would_allow_contract_route"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    response = {
+        "status": "stub",
+        "runtime_enforcement_changed": False,
+        "transcript_response_changed": False,
+        "protected_transcript_route_activated": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "transcript_protected_route_stub": manifest,
+    }
+    if permission_shadow is not None:
+        response["transcript_protected_route_permission_shadow"] = permission_shadow
+    if response_shape_canary is not None:
+        response["transcript_protected_response_shape_canary"] = response_shape_canary
+    if payload_dry_run is not None:
+        response["transcript_protected_payload_dry_run"] = payload_dry_run
+    return response
+
+
+@app.get("/api/tenant/transcript-protected-enforcement-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_transcript_protected_enforcement_readiness(
+    request: Request,
+    leadId: str,
+    clientId: Optional[str] = None,
+):
+    _require_transcript_protected_enforcement_readiness_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant transcript protected enforcement readiness requires admin context")
+
+    owner = await db.get_call_result_owner_for_transcript(leadId)
+    manifest = build_transcript_protected_enforcement_readiness_manifest(
+        context,
+        transcript_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    logger.info(
+        "transcript_protected_enforcement_readiness ready=%s blockers=%s",
+        manifest["decision"]["ready_for_future_enforcement_candidate"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "transcript_response_changed": False,
+        "protected_transcript_route_activated": False,
+        "live_payload_route_enabled": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "transcript_protected_enforcement_readiness": manifest,
+    }
+
+
+@app.get("/api/tenant/transcript-protected-live-activation-plan", dependencies=[Depends(require_auth)])
+async def get_tenant_transcript_protected_live_activation_plan(
+    request: Request,
+    leadId: str,
+    clientId: Optional[str] = None,
+):
+    _require_transcript_protected_live_activation_plan_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant transcript protected live activation plan requires admin context")
+
+    owner = await db.get_call_result_owner_for_transcript(leadId)
+    manifest = build_transcript_protected_live_activation_plan_manifest(
+        context,
+        transcript_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    logger.info(
+        "transcript_protected_live_activation_plan ready=%s blockers=%s",
+        manifest["decision"]["activation_plan_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "planned",
+        "runtime_enforcement_changed": False,
+        "transcript_response_changed": False,
+        "protected_transcript_route_activated": False,
+        "live_payload_route_enabled": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "transcript_protected_live_activation_plan": manifest,
+    }
+
+
+@app.get("/api/tenant/transcript-protected-rollback-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_transcript_protected_rollback_readiness(
+    request: Request,
+    leadId: str,
+    clientId: Optional[str] = None,
+):
+    _require_transcript_protected_rollback_readiness_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant transcript protected rollback readiness requires admin context")
+
+    owner = await db.get_call_result_owner_for_transcript(leadId)
+    manifest = build_transcript_protected_rollback_readiness_manifest(
+        context,
+        transcript_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    logger.info(
+        "transcript_protected_rollback_readiness ready=%s blockers=%s",
+        manifest["decision"]["rollback_ready_for_future_live_activation"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "transcript_response_changed": False,
+        "protected_transcript_route_activated": False,
+        "live_payload_route_enabled": False,
+        "rollback_action_performed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "transcript_protected_rollback_readiness": manifest,
+    }
+
+
+@app.get("/api/tenant/transcript-frontend-migration-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_transcript_frontend_migration_readiness(
+    request: Request,
+    leadId: str,
+    clientId: Optional[str] = None,
+):
+    _require_transcript_frontend_migration_readiness_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant transcript frontend migration readiness requires admin context")
+
+    owner = await db.get_call_result_owner_for_transcript(leadId)
+    manifest = build_transcript_frontend_migration_readiness_manifest(
+        context,
+        transcript_found=owner["found"],
+        owner_tenant_id=owner.get("owner_client_id"),
+        requested_tenant_id=clientId or context.requested_tenant_id or context.tenant_id,
+        campaign_id_present=owner.get("campaign_id_present", False),
+    )
+    logger.info(
+        "transcript_frontend_migration_readiness ready=%s blockers=%s",
+        manifest["decision"]["frontend_migration_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "transcript_response_changed": False,
+        "protected_transcript_route_activated": False,
+        "frontend_code_changed": False,
+        "live_payload_route_enabled": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "transcript_frontend_migration_readiness": manifest,
+    }
+
+
+@app.get("/api/tenant/result-asset-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_result_asset_readiness(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_result_asset_readiness_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant result asset readiness requires admin context")
+
+    requested_scope = clientId or context.requested_tenant_id or context.tenant_id
+    transcript_owner = await db.get_call_result_owner_for_transcript(leadId)
+    recording_owner: dict[str, Any] = {"found": False, "owner_client_id": None, "campaign_id_present": False}
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        recording_owner = await db.get_recording_asset_owner(recordingUrl)
+    campaign_owner: dict[str, Any] = {"found": False, "owner_client_id": None}
+    if campaignId:
+        campaign_owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+
+    manifest = build_result_asset_readiness_manifest(
+        context,
+        transcript_found=transcript_owner["found"],
+        transcript_owner_tenant_id=transcript_owner.get("owner_client_id"),
+        recording_found=recording_owner["found"],
+        recording_owner_tenant_id=recording_owner.get("owner_client_id"),
+        campaign_found=campaign_owner["found"],
+        campaign_owner_tenant_id=campaign_owner.get("owner_client_id"),
+        requested_tenant_id=requested_scope,
+        transcript_campaign_id_present=transcript_owner.get("campaign_id_present", False),
+        recording_campaign_id_present=recording_owner.get("campaign_id_present", False),
+        recording_required=bool(recordingUrl),
+        campaign_required=bool(campaignId),
+    )
+    logger.info(
+        "result_asset_readiness ready=%s transcript_ready=%s recording_ready=%s leak_ready=%s blockers=%s",
+        manifest["decision"]["result_asset_readiness_ready"],
+        manifest["assets"]["transcript_ready"],
+        manifest["assets"]["recording_ready"],
+        manifest["assets"]["leak_matrix_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "protected_transcript_route_activated": False,
+        "protected_recording_route_activated": False,
+        "live_payload_route_enabled": False,
+        "frontend_code_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "campaign_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "result_asset_readiness": manifest,
+    }
+
+
+@app.get("/api/tenant/final-rollout-report", dependencies=[Depends(require_auth)])
+async def get_tenant_final_rollout_report(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_final_rollout_report_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant final rollout report requires admin context")
+
+    requested_scope = clientId or context.requested_tenant_id or context.tenant_id
+    transcript_owner = await db.get_call_result_owner_for_transcript(leadId)
+    recording_owner: dict[str, Any] = {"found": False, "owner_client_id": None, "campaign_id_present": False}
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        recording_owner = await db.get_recording_asset_owner(recordingUrl)
+    campaign_owner: dict[str, Any] = {"found": False, "owner_client_id": None}
+    if campaignId:
+        campaign_owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+
+    manifest = build_final_rollout_report_readiness_manifest(
+        context,
+        transcript_found=transcript_owner["found"],
+        transcript_owner_tenant_id=transcript_owner.get("owner_client_id"),
+        recording_found=recording_owner["found"],
+        recording_owner_tenant_id=recording_owner.get("owner_client_id"),
+        campaign_found=campaign_owner["found"],
+        campaign_owner_tenant_id=campaign_owner.get("owner_client_id"),
+        requested_tenant_id=requested_scope,
+        transcript_campaign_id_present=transcript_owner.get("campaign_id_present", False),
+        recording_campaign_id_present=recording_owner.get("campaign_id_present", False),
+        recording_required=bool(recordingUrl),
+        campaign_required=bool(campaignId),
+    )
+    logger.info(
+        "final_rollout_report ready=%s result_assets_ready=%s blockers=%s",
+        manifest["decision"]["final_rollout_report_ready"],
+        manifest["components"]["result_asset_readiness_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "protected_transcript_route_activated": False,
+        "protected_recording_route_activated": False,
+        "live_payload_route_enabled": False,
+        "frontend_code_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "campaign_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "final_rollout_report": manifest,
+    }
+
+
+@app.get("/api/tenant/rollout-approval-packet", dependencies=[Depends(require_auth)])
+async def get_tenant_rollout_approval_packet(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_rollout_approval_packet_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant rollout approval packet requires admin context")
+
+    requested_scope = clientId or context.requested_tenant_id or context.tenant_id
+    transcript_owner = await db.get_call_result_owner_for_transcript(leadId)
+    recording_owner: dict[str, Any] = {"found": False, "owner_client_id": None, "campaign_id_present": False}
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        recording_owner = await db.get_recording_asset_owner(recordingUrl)
+    campaign_owner: dict[str, Any] = {"found": False, "owner_client_id": None}
+    if campaignId:
+        campaign_owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+
+    manifest = build_rollout_approval_packet_manifest(
+        context,
+        transcript_found=transcript_owner["found"],
+        transcript_owner_tenant_id=transcript_owner.get("owner_client_id"),
+        recording_found=recording_owner["found"],
+        recording_owner_tenant_id=recording_owner.get("owner_client_id"),
+        campaign_found=campaign_owner["found"],
+        campaign_owner_tenant_id=campaign_owner.get("owner_client_id"),
+        requested_tenant_id=requested_scope,
+        transcript_campaign_id_present=transcript_owner.get("campaign_id_present", False),
+        recording_campaign_id_present=recording_owner.get("campaign_id_present", False),
+        recording_required=bool(recordingUrl),
+        campaign_required=bool(campaignId),
+    )
+    logger.info(
+        "rollout_approval_packet ready=%s final_report_ready=%s blockers=%s",
+        manifest["decision"]["rollout_approval_packet_ready"],
+        manifest["components"]["final_rollout_report_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "approval_state_changed": False,
+        "feature_flags_modified": False,
+        "protected_transcript_route_activated": False,
+        "protected_recording_route_activated": False,
+        "live_payload_route_enabled": False,
+        "frontend_code_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "campaign_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "rollout_approval_packet": manifest,
+    }
+
+
+@app.get("/api/tenant/rollout-canary-plan", dependencies=[Depends(require_auth)])
+async def get_tenant_rollout_canary_plan(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_rollout_canary_plan_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant rollout canary plan requires admin context")
+
+    requested_scope = clientId or context.requested_tenant_id or context.tenant_id
+    transcript_owner = await db.get_call_result_owner_for_transcript(leadId)
+    recording_owner: dict[str, Any] = {"found": False, "owner_client_id": None, "campaign_id_present": False}
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        recording_owner = await db.get_recording_asset_owner(recordingUrl)
+    campaign_owner: dict[str, Any] = {"found": False, "owner_client_id": None}
+    if campaignId:
+        campaign_owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+
+    manifest = build_rollout_canary_plan_manifest(
+        context,
+        transcript_found=transcript_owner["found"],
+        transcript_owner_tenant_id=transcript_owner.get("owner_client_id"),
+        recording_found=recording_owner["found"],
+        recording_owner_tenant_id=recording_owner.get("owner_client_id"),
+        campaign_found=campaign_owner["found"],
+        campaign_owner_tenant_id=campaign_owner.get("owner_client_id"),
+        requested_tenant_id=requested_scope,
+        transcript_campaign_id_present=transcript_owner.get("campaign_id_present", False),
+        recording_campaign_id_present=recording_owner.get("campaign_id_present", False),
+        recording_required=bool(recordingUrl),
+        campaign_required=bool(campaignId),
+    )
+    logger.info(
+        "rollout_canary_plan ready=%s approval_ready=%s blockers=%s",
+        manifest["decision"]["rollout_canary_plan_ready"],
+        manifest["components"]["approval_packet_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "approval_state_changed": False,
+        "feature_flags_modified": False,
+        "canary_started": False,
+        "traffic_shifted": False,
+        "protected_transcript_route_activated": False,
+        "protected_recording_route_activated": False,
+        "live_payload_route_enabled": False,
+        "frontend_code_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "campaign_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "rollout_canary_plan": manifest,
+    }
+
+
+@app.get("/api/tenant/rollback-drill-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_rollback_drill_readiness(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_rollback_drill_readiness_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant rollback drill readiness requires admin context")
+
+    requested_scope = clientId or context.requested_tenant_id or context.tenant_id
+    transcript_owner = await db.get_call_result_owner_for_transcript(leadId)
+    recording_owner: dict[str, Any] = {"found": False, "owner_client_id": None, "campaign_id_present": False}
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        recording_owner = await db.get_recording_asset_owner(recordingUrl)
+    campaign_owner: dict[str, Any] = {"found": False, "owner_client_id": None}
+    if campaignId:
+        campaign_owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+
+    manifest = build_rollback_drill_readiness_manifest(
+        context,
+        transcript_found=transcript_owner["found"],
+        transcript_owner_tenant_id=transcript_owner.get("owner_client_id"),
+        recording_found=recording_owner["found"],
+        recording_owner_tenant_id=recording_owner.get("owner_client_id"),
+        campaign_found=campaign_owner["found"],
+        campaign_owner_tenant_id=campaign_owner.get("owner_client_id"),
+        requested_tenant_id=requested_scope,
+        transcript_campaign_id_present=transcript_owner.get("campaign_id_present", False),
+        recording_campaign_id_present=recording_owner.get("campaign_id_present", False),
+        recording_required=bool(recordingUrl),
+        campaign_required=bool(campaignId),
+    )
+    logger.info(
+        "rollback_drill_readiness ready=%s canary_ready=%s blockers=%s",
+        manifest["decision"]["rollback_drill_readiness_ready"],
+        manifest["components"]["canary_plan_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "approval_state_changed": False,
+        "feature_flags_modified": False,
+        "canary_started": False,
+        "traffic_shifted": False,
+        "rollback_action_performed": False,
+        "routes_modified": False,
+        "protected_transcript_route_activated": False,
+        "protected_recording_route_activated": False,
+        "live_payload_route_enabled": False,
+        "frontend_code_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "campaign_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "rollback_drill_readiness": manifest,
+    }
+
+
+@app.get("/api/tenant/rollout-evidence-bundle", dependencies=[Depends(require_auth)])
+async def get_tenant_rollout_evidence_bundle(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_rollout_evidence_bundle_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant rollout evidence bundle requires admin context")
+
+    requested_scope = clientId or context.requested_tenant_id or context.tenant_id
+    transcript_owner = await db.get_call_result_owner_for_transcript(leadId)
+    recording_owner: dict[str, Any] = {"found": False, "owner_client_id": None, "campaign_id_present": False}
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        recording_owner = await db.get_recording_asset_owner(recordingUrl)
+    campaign_owner: dict[str, Any] = {"found": False, "owner_client_id": None}
+    if campaignId:
+        campaign_owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+
+    manifest = build_rollout_evidence_bundle_manifest(
+        context,
+        transcript_found=transcript_owner["found"],
+        transcript_owner_tenant_id=transcript_owner.get("owner_client_id"),
+        recording_found=recording_owner["found"],
+        recording_owner_tenant_id=recording_owner.get("owner_client_id"),
+        campaign_found=campaign_owner["found"],
+        campaign_owner_tenant_id=campaign_owner.get("owner_client_id"),
+        requested_tenant_id=requested_scope,
+        transcript_campaign_id_present=transcript_owner.get("campaign_id_present", False),
+        recording_campaign_id_present=recording_owner.get("campaign_id_present", False),
+        recording_required=bool(recordingUrl),
+        campaign_required=bool(campaignId),
+    )
+    logger.info(
+        "rollout_evidence_bundle ready=%s rollback_ready=%s blockers=%s",
+        manifest["decision"]["rollout_evidence_bundle_ready"],
+        manifest["components"]["rollback_drill_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "approval_state_changed": False,
+        "feature_flags_modified": False,
+        "canary_started": False,
+        "traffic_shifted": False,
+        "rollback_action_performed": False,
+        "routes_modified": False,
+        "evidence_record_created": False,
+        "live_data_collected": False,
+        "metrics_sampled": False,
+        "protected_transcript_route_activated": False,
+        "protected_recording_route_activated": False,
+        "live_payload_route_enabled": False,
+        "frontend_code_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "campaign_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "rollout_evidence_bundle": manifest,
+    }
+
+
+@app.get("/api/tenant/canary-observation-checklist", dependencies=[Depends(require_auth)])
+async def get_tenant_canary_observation_checklist(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_canary_observation_checklist_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant canary observation checklist requires admin context")
+
+    requested_scope = clientId or context.requested_tenant_id or context.tenant_id
+    transcript_owner = await db.get_call_result_owner_for_transcript(leadId)
+    recording_owner: dict[str, Any] = {"found": False, "owner_client_id": None, "campaign_id_present": False}
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        recording_owner = await db.get_recording_asset_owner(recordingUrl)
+    campaign_owner: dict[str, Any] = {"found": False, "owner_client_id": None}
+    if campaignId:
+        campaign_owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+
+    manifest = build_canary_observation_checklist_manifest(
+        context,
+        transcript_found=transcript_owner["found"],
+        transcript_owner_tenant_id=transcript_owner.get("owner_client_id"),
+        recording_found=recording_owner["found"],
+        recording_owner_tenant_id=recording_owner.get("owner_client_id"),
+        campaign_found=campaign_owner["found"],
+        campaign_owner_tenant_id=campaign_owner.get("owner_client_id"),
+        requested_tenant_id=requested_scope,
+        transcript_campaign_id_present=transcript_owner.get("campaign_id_present", False),
+        recording_campaign_id_present=recording_owner.get("campaign_id_present", False),
+        recording_required=bool(recordingUrl),
+        campaign_required=bool(campaignId),
+    )
+    logger.info(
+        "canary_observation_checklist ready=%s evidence_ready=%s blockers=%s",
+        manifest["decision"]["canary_observation_checklist_ready"],
+        manifest["components"]["evidence_bundle_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "approval_state_changed": False,
+        "feature_flags_modified": False,
+        "canary_started": False,
+        "traffic_shifted": False,
+        "rollback_action_performed": False,
+        "routes_modified": False,
+        "evidence_record_created": False,
+        "observation_record_created": False,
+        "live_data_collected": False,
+        "metrics_sampled": False,
+        "protected_transcript_route_activated": False,
+        "protected_recording_route_activated": False,
+        "live_payload_route_enabled": False,
+        "frontend_code_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "campaign_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "canary_observation_checklist": manifest,
+    }
+
+
+@app.get("/api/tenant/production-go-no-go-gate", dependencies=[Depends(require_auth)])
+async def get_tenant_production_go_no_go_gate(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_production_go_no_go_gate_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant production go/no-go gate requires admin context")
+
+    requested_scope = clientId or context.requested_tenant_id or context.tenant_id
+    transcript_owner = await db.get_call_result_owner_for_transcript(leadId)
+    recording_owner: dict[str, Any] = {"found": False, "owner_client_id": None, "campaign_id_present": False}
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        recording_owner = await db.get_recording_asset_owner(recordingUrl)
+    campaign_owner: dict[str, Any] = {"found": False, "owner_client_id": None}
+    if campaignId:
+        campaign_owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+
+    manifest = build_production_go_no_go_gate_manifest(
+        context,
+        transcript_found=transcript_owner["found"],
+        transcript_owner_tenant_id=transcript_owner.get("owner_client_id"),
+        recording_found=recording_owner["found"],
+        recording_owner_tenant_id=recording_owner.get("owner_client_id"),
+        campaign_found=campaign_owner["found"],
+        campaign_owner_tenant_id=campaign_owner.get("owner_client_id"),
+        requested_tenant_id=requested_scope,
+        transcript_campaign_id_present=transcript_owner.get("campaign_id_present", False),
+        recording_campaign_id_present=recording_owner.get("campaign_id_present", False),
+        recording_required=bool(recordingUrl),
+        campaign_required=bool(campaignId),
+    )
+    logger.info(
+        "production_go_no_go_gate ready=%s observation_ready=%s blockers=%s",
+        manifest["decision"]["production_go_no_go_gate_ready"],
+        manifest["components"]["canary_observation_checklist_ready"],
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "approval_state_changed": False,
+        "feature_flags_modified": False,
+        "canary_started": False,
+        "traffic_shifted": False,
+        "rollback_action_performed": False,
+        "routes_modified": False,
+        "evidence_record_created": False,
+        "observation_record_created": False,
+        "decision_record_created": False,
+        "production_activation_started": False,
+        "live_data_collected": False,
+        "metrics_sampled": False,
+        "protected_transcript_route_activated": False,
+        "protected_recording_route_activated": False,
+        "live_payload_route_enabled": False,
+        "frontend_code_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "campaign_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "production_go_no_go_gate": manifest,
+    }
+
+
+async def _build_production_activation_admin_report(
+    request: Request,
+    leadId: str,
+    *,
+    recordingUrl: Optional[str],
+    campaignId: Optional[str],
+    clientId: Optional[str],
+    builder: Any,
+    manifest_key: str,
+    log_name: str,
+    ready_decision_key: str,
+    component_ready_key: str,
+    admin_detail: str,
+):
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail=admin_detail)
+
+    requested_scope = clientId or context.requested_tenant_id or context.tenant_id
+    transcript_owner = await db.get_call_result_owner_for_transcript(leadId)
+    recording_owner: dict[str, Any] = {"found": False, "owner_client_id": None, "campaign_id_present": False}
+    if recordingUrl:
+        if not str(recordingUrl or "").startswith("/recordings/"):
+            raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+        recording_owner = await db.get_recording_asset_owner(recordingUrl)
+    campaign_owner: dict[str, Any] = {"found": False, "owner_client_id": None}
+    if campaignId:
+        campaign_owner = await db.get_tenant_scoped_resource_owner("campaign", campaignId)
+
+    manifest = builder(
+        context,
+        transcript_found=transcript_owner["found"],
+        transcript_owner_tenant_id=transcript_owner.get("owner_client_id"),
+        recording_found=recording_owner["found"],
+        recording_owner_tenant_id=recording_owner.get("owner_client_id"),
+        campaign_found=campaign_owner["found"],
+        campaign_owner_tenant_id=campaign_owner.get("owner_client_id"),
+        requested_tenant_id=requested_scope,
+        transcript_campaign_id_present=transcript_owner.get("campaign_id_present", False),
+        recording_campaign_id_present=recording_owner.get("campaign_id_present", False),
+        recording_required=bool(recordingUrl),
+        campaign_required=bool(campaignId),
+    )
+    logger.info(
+        "%s ready=%s upstream_ready=%s blockers=%s",
+        log_name,
+        manifest["decision"].get(ready_decision_key),
+        manifest["components"].get(component_ready_key),
+        ",".join(manifest["decision"]["blockers"]),
+    )
+    return {
+        "status": "ready",
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "static_file_serving_changed": False,
+        "recording_playback_changed": False,
+        "approval_state_changed": False,
+        "feature_flags_modified": False,
+        "canary_started": False,
+        "traffic_shifted": False,
+        "rollback_action_performed": False,
+        "routes_modified": False,
+        "evidence_record_created": False,
+        "observation_record_created": False,
+        "decision_record_created": False,
+        "activation_request_recorded": False,
+        "activation_executed": False,
+        "rollback_token_issued": False,
+        "handoff_record_created": False,
+        "production_activation_started": False,
+        "live_activation_performed": False,
+        "live_data_collected": False,
+        "metrics_sampled": False,
+        "protected_transcript_route_activated": False,
+        "protected_recording_route_activated": False,
+        "live_payload_route_enabled": False,
+        "frontend_code_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "lead_id_returned": False,
+        "call_result_id_returned": False,
+        "campaign_id_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "transcript_content_returned": False,
+        "transcript_turn_count_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        manifest_key: manifest,
+    }
+
+
+@app.get("/api/tenant/production-activation-contract-stub", dependencies=[Depends(require_auth)])
+async def get_tenant_production_activation_contract_stub(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_production_activation_contract_stub_enabled()
+    return await _build_production_activation_admin_report(
+        request,
+        leadId,
+        recordingUrl=recordingUrl,
+        campaignId=campaignId,
+        clientId=clientId,
+        builder=build_production_activation_contract_stub_manifest,
+        manifest_key="production_activation_contract_stub",
+        log_name="production_activation_contract_stub",
+        ready_decision_key="production_activation_contract_stub_ready",
+        component_ready_key="production_go_no_go_gate_ready",
+        admin_detail="tenant production activation contract stub requires admin context",
+    )
+
+
+@app.get("/api/tenant/production-activation-permission-shadow", dependencies=[Depends(require_auth)])
+async def get_tenant_production_activation_permission_shadow(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_production_activation_permission_shadow_enabled()
+    return await _build_production_activation_admin_report(
+        request,
+        leadId,
+        recordingUrl=recordingUrl,
+        campaignId=campaignId,
+        clientId=clientId,
+        builder=build_production_activation_permission_shadow_manifest,
+        manifest_key="production_activation_permission_shadow",
+        log_name="production_activation_permission_shadow",
+        ready_decision_key="production_activation_permission_shadow_ready",
+        component_ready_key="activation_contract_ready",
+        admin_detail="tenant production activation permission shadow requires admin context",
+    )
+
+
+@app.get("/api/tenant/production-activation-payload-dry-run", dependencies=[Depends(require_auth)])
+async def get_tenant_production_activation_payload_dry_run(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_production_activation_payload_dry_run_enabled()
+    return await _build_production_activation_admin_report(
+        request,
+        leadId,
+        recordingUrl=recordingUrl,
+        campaignId=campaignId,
+        clientId=clientId,
+        builder=build_production_activation_payload_dry_run_manifest,
+        manifest_key="production_activation_payload_dry_run",
+        log_name="production_activation_payload_dry_run",
+        ready_decision_key="production_activation_payload_dry_run_ready",
+        component_ready_key="permission_shadow_ready",
+        admin_detail="tenant production activation payload dry-run requires admin context",
+    )
+
+
+@app.get("/api/tenant/production-activation-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_production_activation_readiness(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_production_activation_readiness_enabled()
+    return await _build_production_activation_admin_report(
+        request,
+        leadId,
+        recordingUrl=recordingUrl,
+        campaignId=campaignId,
+        clientId=clientId,
+        builder=build_production_activation_readiness_manifest,
+        manifest_key="production_activation_readiness",
+        log_name="production_activation_readiness",
+        ready_decision_key="production_activation_readiness_ready",
+        component_ready_key="payload_dry_run_ready",
+        admin_detail="tenant production activation readiness requires admin context",
+    )
+
+
+@app.get("/api/tenant/production-activation-rollback-confirmation", dependencies=[Depends(require_auth)])
+async def get_tenant_production_activation_rollback_confirmation(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_production_activation_rollback_confirmation_enabled()
+    return await _build_production_activation_admin_report(
+        request,
+        leadId,
+        recordingUrl=recordingUrl,
+        campaignId=campaignId,
+        clientId=clientId,
+        builder=build_production_activation_rollback_confirmation_manifest,
+        manifest_key="production_activation_rollback_confirmation",
+        log_name="production_activation_rollback_confirmation",
+        ready_decision_key="production_activation_rollback_confirmation_ready",
+        component_ready_key="activation_readiness_ready",
+        admin_detail="tenant production activation rollback confirmation requires admin context",
+    )
+
+
+@app.get("/api/tenant/controlled-handoff-readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_controlled_handoff_readiness(
+    request: Request,
+    leadId: str,
+    recordingUrl: Optional[str] = None,
+    campaignId: Optional[str] = None,
+    clientId: Optional[str] = None,
+):
+    _require_controlled_handoff_readiness_enabled()
+    return await _build_production_activation_admin_report(
+        request,
+        leadId,
+        recordingUrl=recordingUrl,
+        campaignId=campaignId,
+        clientId=clientId,
+        builder=build_controlled_handoff_readiness_manifest,
+        manifest_key="controlled_handoff_readiness",
+        log_name="controlled_handoff_readiness",
+        ready_decision_key="controlled_handoff_readiness_ready",
+        component_ready_key="rollback_confirmation_ready",
+        admin_detail="tenant controlled handoff readiness requires admin context",
+    )
+
+
 @app.get("/api/agents")
 async def list_agents(client_id: Optional[str] = None, user_email: Optional[str] = None):
     if user_email:
@@ -442,12 +3646,23 @@ async def create_agent(agent: AgentCreate):
 
     schema_path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
     _write_agent_runtime_schema(agent_id, schema_path, data, voice_id, assigned_client)
+    flow_v2_shadow = _write_agent_flow_v2_shadow(agent_id, schema_path, data, assigned_client)
     data.update({
         "client_id": assigned_client.get("id") if assigned_client else None,
         "schema_path": schema_path,
         "created_at": datetime.now().isoformat(),
     })
     created = await db.create_agent(agent_id, data)
+    if flow_v2_shadow:
+        await db.create_agent_flow_version(
+            agent_id,
+            client_id=flow_v2_shadow["client_id"],
+            schema_version="2.0",
+            status="draft",
+            runtime_mode="shadow",
+            artifact_path=flow_v2_shadow["artifact_path"],
+            validation=flow_v2_shadow["validation"],
+        )
     if assigned_client:
         await db.set_assignment(assigned_client["id"], agent_id)
     return created
@@ -470,6 +3685,7 @@ async def update_agent(agent_id: str, agent: AgentUpdate):
 
     schema_path = _agent_schema_path(agent_id, existing.get("schema_path"))
     _write_agent_runtime_schema(agent_id, schema_path, merged, voice_id, assigned_client)
+    flow_v2_shadow = _write_agent_flow_v2_shadow(agent_id, schema_path, merged, assigned_client)
     merged.update({
         "client_id": assigned_client.get("id") if assigned_client else None,
         "schema_path": schema_path,
@@ -478,6 +3694,16 @@ async def update_agent(agent_id: str, agent: AgentUpdate):
     updated = await db.update_agent(agent_id, merged)
     if not updated:
         raise HTTPException(status_code=404, detail="Agent not found")
+    if flow_v2_shadow:
+        await db.create_agent_flow_version(
+            agent_id,
+            client_id=flow_v2_shadow["client_id"],
+            schema_version="2.0",
+            status="draft",
+            runtime_mode="shadow",
+            artifact_path=flow_v2_shadow["artifact_path"],
+            validation=flow_v2_shadow["validation"],
+        )
 
     new_client_id = assigned_client.get("id") if assigned_client else None
     if previous_client_id and previous_client_id != new_client_id:
@@ -487,55 +3713,1734 @@ async def update_agent(agent_id: str, agent: AgentUpdate):
 
     return updated
 
+@app.get("/api/agents/{agent_id}/flow-preview", dependencies=[Depends(require_auth)])
+async def get_agent_flow_preview(agent_id: str, request: Request):
+    if not feature_flags.is_enabled("flow.visualization"):
+        raise HTTPException(status_code=403, detail="flow.visualization is disabled")
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    _assert_intelligence_scope(request, agent.get("client_id"), "Agent")
+    _shadow_tenant_scoped_read(request, "agent", agent.get("client_id"))
+    return await _load_agent_flow_preview(agent)
+
+@app.put("/api/agents/{agent_id}/flow-v2-draft", dependencies=[Depends(require_auth)])
+async def update_agent_flow_v2_draft(agent_id: str, data: FlowDraftUpdate, request: Request):
+    if not feature_flags.is_enabled("flow.visualization"):
+        raise HTTPException(status_code=403, detail="flow.visualization is disabled")
+    if not feature_flags.is_enabled("flow.v2_shadow"):
+        raise HTTPException(status_code=403, detail="flow.v2_shadow is disabled")
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    _assert_intelligence_scope(request, agent.get("client_id"), "Agent")
+    _shadow_tenant_scoped_read(request, "agent", agent.get("client_id"))
+
+    flow, _source = await _load_agent_flow_v2_spec(agent)
+    try:
+        draft = _apply_flow_v2_draft_updates(flow, data)
+    except FlowSpecValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    artifact_path = _write_flow_v2_draft_artifact(agent, draft)
+    await db.create_agent_flow_version(
+        agent_id,
+        client_id=agent.get("client_id"),
+        schema_version="2.0",
+        status="draft",
+        runtime_mode="shadow",
+        artifact_path=artifact_path,
+        validation=draft.get("validation", {}),
+    )
+    logger.info(
+        "flow_v2_draft_updated agent=%s nodes=%d runtime_live_changed=%s",
+        agent_id,
+        len(draft.get("nodes") or []),
+        False,
+    )
+    return await _load_agent_flow_preview(agent)
+
+async def _append_scrape_job_event_if_enabled(
+    job_id: str,
+    event_type: str,
+    *,
+    status: Optional[str] = None,
+    actor: Optional[str] = None,
+    metadata: Optional[dict] = None,
+) -> None:
+    if not job_id:
+        return
+    if not feature_flags.is_enabled("scrape.job_events"):
+        return
+    try:
+        await db.append_scrape_job_event(
+            job_id,
+            event_type,
+            status=status,
+            actor=actor,
+            metadata=metadata or {},
+        )
+    except Exception as exc:
+        logger.warning(
+            "scrape_job_event_append_failed job=%s event=%s error_type=%s",
+            job_id,
+            event_type,
+            type(exc).__name__,
+        )
+
+@app.get("/api/intelligence/readiness", dependencies=[Depends(require_auth)])
+async def get_website_intelligence_readiness(request: Request):
+    context = _tenant_context_from_request(request)
+    if context and context.tenant_id and not context.is_admin:
+        logger.info(
+            "[INTEL] readiness requested with tenant hint=%s auth_state=%s",
+            context.tenant_id,
+            context.auth_state,
+        )
+    return _build_website_intelligence_readiness()
+
+@app.get("/api/intelligence/live-qa/readiness", dependencies=[Depends(require_auth)])
+async def get_website_live_qa_readiness(request: Request, clientId: Optional[str] = None):
+    if not feature_flags.is_enabled("scrape.live_qa_readiness"):
+        raise HTTPException(status_code=403, detail="scrape.live_qa_readiness is disabled")
+    client_id = _resolve_intelligence_client_id(request, clientId)
+    return await _build_website_live_qa_readiness(client_id=client_id)
+
+@app.get("/api/intelligence/generated-draft-qa/readiness", dependencies=[Depends(require_auth)])
+async def get_generated_draft_qa_readiness(request: Request, clientId: Optional[str] = None):
+    if not feature_flags.is_enabled("scrape.generated_draft_qa_readiness"):
+        raise HTTPException(status_code=403, detail="scrape.generated_draft_qa_readiness is disabled")
+    client_id = _resolve_intelligence_client_id(request, clientId)
+    return await _build_generated_draft_qa_readiness(client_id=client_id)
+
+@app.post("/api/intelligence/scrape-jobs", dependencies=[Depends(require_auth)])
+async def create_scrape_job(data: WebsiteScrapeStart, request: Request):
+    if not feature_flags.is_enabled("scrape.generate_script"):
+        raise HTTPException(status_code=403, detail="scrape.generate_script is disabled")
+    client_id = _resolve_intelligence_client_id(request, data.clientId)
+    if data.agentId:
+        agent = await db.get_agent(data.agentId)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        _assert_intelligence_scope(request, agent.get("client_id"), "Agent")
+        if client_id and agent.get("client_id") and client_id != agent["client_id"]:
+            raise HTTPException(status_code=403, detail="Agent is outside tenant scope")
+        client_id = client_id or agent.get("client_id")
+    pipeline = WebsiteIntelligencePipeline(db)
+    try:
+        job = await pipeline.create_job(
+            client_id=client_id,
+            agent_id=data.agentId,
+            url=data.url,
+            requested_by=data.requestedBy,
+            reuse_existing=data.reuseExisting,
+        )
+        await _append_scrape_job_event_if_enabled(
+            job["id"],
+            "job_reused" if job.get("cache", {}).get("reused") else "job_created",
+            status=job.get("status"),
+            actor=data.requestedBy,
+            metadata={
+                "client_id": client_id,
+                "agent_id": data.agentId,
+                "domain": job.get("domain"),
+                "reused": bool(job.get("cache", {}).get("reused")),
+            },
+        )
+        return job
+    except URLSafetyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.get("/api/intelligence/scrape-jobs", dependencies=[Depends(require_auth)])
+async def list_scrape_jobs(
+    request: Request,
+    clientId: Optional[str] = None,
+    agentId: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+):
+    if not feature_flags.is_enabled("scrape.generate_script"):
+        raise HTTPException(status_code=403, detail="scrape.generate_script is disabled")
+    context = _tenant_context_from_request(request)
+    client_id = _resolve_intelligence_client_id(request, clientId)
+    if agentId:
+        agent = await db.get_agent(agentId)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        _assert_intelligence_scope(request, agent.get("client_id"), "Agent")
+        if client_id and agent.get("client_id") and client_id != agent["client_id"]:
+            raise HTTPException(status_code=403, detail="Agent is outside tenant scope")
+        client_id = client_id or agent.get("client_id")
+    if not (context and context.is_admin) and not client_id:
+        raise HTTPException(status_code=403, detail="Tenant context required")
+    jobs = await db.list_scrape_jobs(
+        client_id=client_id,
+        agent_id=agentId,
+        status=status,
+        limit=limit,
+    )
+    for job in jobs:
+        _assert_intelligence_scope(request, job.get("client_id"), "Scrape job")
+    logger.info(
+        "[INTEL] listed scrape jobs count=%d client=%s status=%s",
+        len(jobs),
+        client_id or "all",
+        status or "any",
+    )
+    return {"items": jobs, "clientId": client_id, "limit": max(1, min(int(limit or 50), 200))}
+
+@app.get("/api/intelligence/scrape-jobs/{job_id}", dependencies=[Depends(require_auth)])
+async def get_scrape_job(job_id: str, request: Request):
+    job = await db.get_scrape_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scrape job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "Scrape job")
+    _shadow_tenant_scoped_read(request, "scrape_job", job.get("client_id"))
+    return job
+
+@app.get("/api/intelligence/scrape-jobs/{job_id}/diagnostics", dependencies=[Depends(require_auth)])
+async def get_scrape_job_diagnostics(job_id: str, request: Request):
+    if not feature_flags.is_enabled("scrape.generate_script"):
+        raise HTTPException(status_code=403, detail="scrape.generate_script is disabled")
+    diagnostics = await db.get_scrape_job_diagnostics(job_id)
+    if not diagnostics:
+        raise HTTPException(status_code=404, detail="Scrape job not found")
+    _assert_intelligence_scope(request, diagnostics.get("client_id"), "Scrape job")
+    _shadow_tenant_scoped_read(request, "scrape_job", diagnostics.get("client_id"))
+    return diagnostics
+
+async def _run_scrape_job_background(job_id: str, industry_hint: Optional[str] = None) -> None:
+    pipeline = WebsiteIntelligencePipeline(db)
+    await _append_scrape_job_event_if_enabled(
+        job_id,
+        "worker_started",
+        status="running",
+        metadata={"industry_hint": industry_hint},
+    )
+    try:
+        result = await pipeline.run_job(job_id=job_id, industry_hint=industry_hint)
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "worker_finished",
+            status=result.get("status"),
+            metadata={
+                "pages_crawled": result.get("pages_crawled"),
+                "extraction_id": result.get("extraction_id"),
+                "skipped": bool(result.get("skipped")),
+                "cancelled": bool(result.get("cancelled")),
+            },
+        )
+    except Exception as exc:
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "worker_failed",
+            status="failed",
+            metadata={"error_type": type(exc).__name__},
+        )
+        logger.warning(
+            "scrape_worker_v1_background_failed job=%s error_type=%s",
+            job_id,
+            type(exc).__name__,
+        )
+
+@app.post("/api/intelligence/scrape-jobs/{job_id}/dispatch", dependencies=[Depends(require_auth)])
+async def dispatch_scrape_job(
+    job_id: str,
+    data: WebsiteScrapeDispatch,
+    request: Request,
+    background_tasks: BackgroundTasks,
+):
+    if not feature_flags.is_enabled("scrape.worker_v1"):
+        raise HTTPException(status_code=403, detail="scrape.worker_v1 is disabled")
+    job = await db.get_scrape_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scrape job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "Scrape job")
+    if job.get("status") == "dispatching":
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "dispatch_skipped",
+            status="already_queued",
+            actor=data.requestedBy,
+            metadata={"previous_status": job.get("status")},
+        )
+        return {"status": "already_queued", "job_id": job_id}
+    if job.get("status") == "running":
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "dispatch_skipped",
+            status="already_running",
+            actor=data.requestedBy,
+            metadata={"previous_status": job.get("status")},
+        )
+        return {"status": "already_running", "job_id": job_id}
+    if job.get("status") in {"completed", "draft_ready", "cancelled"}:
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "dispatch_skipped",
+            status=job.get("status"),
+            actor=data.requestedBy,
+            metadata={"previous_status": job.get("status")},
+        )
+        return {"status": job.get("status"), "job_id": job_id}
+    queued = await db.queue_scrape_job_for_dispatch(job_id)
+    if not queued or not queued.get("_dispatch_enqueued"):
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "dispatch_skipped",
+            status=queued.get("status") if queued else "not_found",
+            actor=data.requestedBy,
+            metadata={"reason": "state_changed_before_dispatch"},
+        )
+        return {"status": queued.get("status") if queued else "not_found", "job_id": job_id}
+    background_tasks.add_task(_run_scrape_job_background, job_id, data.industryHint)
+    await _append_scrape_job_event_if_enabled(
+        job_id,
+        "dispatch_accepted",
+        status="dispatching",
+        actor=data.requestedBy,
+        metadata={"industry_hint": data.industryHint},
+    )
+    logger.info(
+        "[INTEL] dispatched scrape job=%s requested_by=%s",
+        job_id,
+        data.requestedBy or "unknown",
+    )
+    return {"status": "accepted", "job_id": job_id, "mode": "background"}
+
+@app.post("/api/intelligence/scrape-jobs/{job_id}/cancel", dependencies=[Depends(require_auth)])
+async def cancel_scrape_job(job_id: str, data: WebsiteScrapeCancel, request: Request):
+    if not feature_flags.is_enabled("scrape.generate_script"):
+        raise HTTPException(status_code=403, detail="scrape.generate_script is disabled")
+    if not feature_flags.is_enabled("scrape.job_cancel"):
+        raise HTTPException(status_code=403, detail="scrape.job_cancel is disabled")
+    job = await db.get_scrape_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scrape job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "Scrape job")
+    if job.get("status") in {"completed", "draft_ready", "failed", "cancelled"}:
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "cancel_skipped",
+            status=job.get("status"),
+            actor=data.requestedBy,
+            metadata={"previous_status": job.get("status")},
+        )
+        return {"status": job.get("status"), "job_id": job_id, "job": job, "changed": False}
+    updated = await db.cancel_scrape_job(
+        job_id,
+        reason=data.reason or "cancelled_by_admin",
+    )
+    await _append_scrape_job_event_if_enabled(
+        job_id,
+        "job_cancelled",
+        status=updated.get("status") if updated else "cancelled",
+        actor=data.requestedBy,
+        metadata={"previous_status": job.get("status"), "reason": data.reason or "cancelled_by_admin"},
+    )
+    logger.info(
+        "[INTEL] cancelled scrape job=%s requested_by=%s previous_status=%s",
+        job_id,
+        data.requestedBy or "unknown",
+        job.get("status"),
+    )
+    return {"status": "cancelled", "job_id": job_id, "job": updated, "changed": bool(updated)}
+
+@app.post("/api/intelligence/scrape-jobs/{job_id}/recover-stale", dependencies=[Depends(require_auth)])
+async def recover_stale_scrape_job(job_id: str, data: WebsiteScrapeStaleRecovery, request: Request):
+    if not feature_flags.is_enabled("scrape.generate_script"):
+        raise HTTPException(status_code=403, detail="scrape.generate_script is disabled")
+    if not feature_flags.is_enabled("scrape.stale_recovery"):
+        raise HTTPException(status_code=403, detail="scrape.stale_recovery is disabled")
+    job = await db.get_scrape_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scrape job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "Scrape job")
+    stale_after_minutes = max(1, min(int(data.staleAfterMinutes or 15), 1440))
+    recovered = await db.recover_stale_scrape_job(
+        job_id,
+        stale_after_minutes=stale_after_minutes,
+        reason=data.reason or "stale_worker_recovered",
+    )
+    changed = bool(recovered and recovered.get("_stale_recovered"))
+    await _append_scrape_job_event_if_enabled(
+        job_id,
+        "stale_recovery" if changed else "stale_recovery_skipped",
+        status=recovered.get("status") if recovered else "not_found",
+        actor=data.requestedBy,
+        metadata={
+            "previous_status": job.get("status"),
+            "stale_after_minutes": stale_after_minutes,
+            "reason": data.reason or "stale_worker_recovered",
+        },
+    )
+    logger.info(
+        "[INTEL] stale scrape recovery job=%s changed=%s requested_by=%s previous_status=%s",
+        job_id,
+        changed,
+        data.requestedBy or "unknown",
+        job.get("status"),
+    )
+    return {
+        "status": "recovered" if changed else "not_stale",
+        "job_id": job_id,
+        "job": recovered,
+        "changed": changed,
+        "stale_after_minutes": stale_after_minutes,
+    }
+
+@app.post("/api/intelligence/scrape-jobs/{job_id}/run", dependencies=[Depends(require_auth)])
+async def run_scrape_job(job_id: str, request: Request, industryHint: Optional[str] = None):
+    if not feature_flags.is_enabled("scrape.worker_v1"):
+        raise HTTPException(status_code=403, detail="scrape.worker_v1 is disabled")
+    job = await db.get_scrape_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scrape job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "Scrape job")
+    pipeline = WebsiteIntelligencePipeline(db)
+    try:
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "manual_run_requested",
+            status=job.get("status"),
+            metadata={"industry_hint": industryHint},
+        )
+        result = await pipeline.run_job(job_id=job_id, industry_hint=industryHint)
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "manual_run_finished",
+            status=result.get("status"),
+            metadata={
+                "pages_crawled": result.get("pages_crawled"),
+                "extraction_id": result.get("extraction_id"),
+                "skipped": bool(result.get("skipped")),
+                "cancelled": bool(result.get("cancelled")),
+            },
+        )
+        return result
+    except CrawlError as exc:
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "manual_run_failed",
+            status="failed",
+            metadata={"error": str(exc), "error_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        await _append_scrape_job_event_if_enabled(
+            job_id,
+            "manual_run_failed",
+            status="failed",
+            metadata={"error": str(exc), "error_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.get("/api/intelligence/script-drafts", dependencies=[Depends(require_auth)])
+async def list_script_drafts(
+    request: Request,
+    agentId: str,
+    clientId: Optional[str] = None,
+    limit: int = 20,
+):
+    if not feature_flags.is_enabled("scrape.generate_script"):
+        raise HTTPException(status_code=403, detail="scrape.generate_script is disabled")
+    agent = await db.get_agent(agentId)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    requested_client_id = _resolve_intelligence_client_id(request, clientId)
+    _assert_intelligence_scope(request, agent.get("client_id"), "Agent")
+    if requested_client_id and agent.get("client_id") and requested_client_id != agent["client_id"]:
+        raise HTTPException(status_code=403, detail="Agent is outside tenant scope")
+    drafts = await db.list_generated_script_drafts(
+        agent_id=agentId,
+        client_id=agent.get("client_id") or requested_client_id,
+        limit=limit,
+    )
+    return {"agentId": agentId, "items": drafts}
+
+@app.post("/api/intelligence/script-drafts", dependencies=[Depends(require_auth)])
+async def create_script_draft(data: WebsiteScriptDraftCreate, request: Request):
+    if not feature_flags.is_enabled("scrape.generate_script"):
+        raise HTTPException(status_code=403, detail="scrape.generate_script is disabled")
+    agent = await db.get_agent(data.agentId)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    job = await db.get_scrape_job(data.jobId)
+    if not job:
+        raise HTTPException(status_code=404, detail="Scrape job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "Scrape job")
+    _assert_intelligence_scope(request, agent.get("client_id"), "Agent")
+    if job.get("agent_id") and job["agent_id"] != data.agentId:
+        raise HTTPException(status_code=400, detail="Scrape job does not belong to this agent")
+    if job.get("client_id") and agent.get("client_id") and job["client_id"] != agent["client_id"]:
+        raise HTTPException(status_code=403, detail="Agent is outside scrape job tenant scope")
+    existing_draft = await db.get_generated_script_draft_for_job(job_id=data.jobId, agent_id=data.agentId)
+    if existing_draft:
+        logger.info(
+            "[INTEL] reused existing generated draft=%s job=%s agent=%s",
+            existing_draft.get("id"),
+            data.jobId,
+            data.agentId,
+        )
+        await _append_scrape_job_event_if_enabled(
+            data.jobId,
+            "draft_reused",
+            status=job.get("status"),
+            actor=data.agentName,
+            metadata={"draft_id": existing_draft.get("id"), "agent_id": data.agentId},
+        )
+        return existing_draft
+    pipeline = WebsiteIntelligencePipeline(db)
+    try:
+        draft = await pipeline.create_draft_from_job(
+            job_id=data.jobId,
+            agent=agent,
+            industry_hint=data.industryHint,
+            use_live_extraction=feature_flags.is_enabled("scrape.worker_v1"),
+        )
+        await _append_scrape_job_event_if_enabled(
+            data.jobId,
+            "draft_created",
+            status="draft_ready",
+            actor=data.agentName,
+            metadata={"draft_id": draft.get("id"), "agent_id": data.agentId},
+        )
+        return draft
+    except CrawlError as exc:
+        await _append_scrape_job_event_if_enabled(
+            data.jobId,
+            "draft_failed",
+            status="failed",
+            actor=data.agentName,
+            metadata={"error": str(exc), "error_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ValueError as exc:
+        await _append_scrape_job_event_if_enabled(
+            data.jobId,
+            "draft_failed",
+            status=job.get("status"),
+            actor=data.agentName,
+            metadata={"error": str(exc), "error_type": type(exc).__name__},
+        )
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+@app.post("/api/intelligence/script-drafts/{draft_id}/preflight-flow-draft", dependencies=[Depends(require_auth)])
+async def preflight_script_draft_to_agent_flow(draft_id: str, request: Request):
+    if not feature_flags.is_enabled("scrape.generate_script"):
+        raise HTTPException(status_code=403, detail="scrape.generate_script is disabled")
+    if not feature_flags.is_enabled("flow.visualization"):
+        raise HTTPException(status_code=403, detail="flow.visualization is disabled")
+    if not feature_flags.is_enabled("flow.v2_shadow"):
+        raise HTTPException(status_code=403, detail="flow.v2_shadow is disabled")
+
+    script_draft = await db.get_generated_script_draft(draft_id)
+    if not script_draft:
+        raise HTTPException(status_code=404, detail="Generated script draft not found")
+    agent = await db.get_agent(script_draft.get("agent_id"))
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    _assert_intelligence_scope(request, script_draft.get("client_id"), "Generated script draft")
+    _assert_intelligence_scope(request, agent.get("client_id"), "Agent")
+    if script_draft.get("client_id") and agent.get("client_id") and script_draft["client_id"] != agent["client_id"]:
+        raise HTTPException(status_code=403, detail="Generated draft is outside agent tenant scope")
+
+    try:
+        draft = validate_flow_spec(_prepare_generated_script_flow_for_agent(script_draft, agent))
+    except FlowSpecValidationError as exc:
+        await _append_scrape_job_event_if_enabled(
+            script_draft.get("job_id"),
+            "draft_preflight_failed",
+            status="invalid",
+            metadata={"draft_id": draft_id, "agent_id": agent["id"], "error": str(exc)},
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    preview = build_flow_preview(draft)
+    preview["agent"] = {
+        "id": agent["id"],
+        "name": agent.get("name"),
+        "agent_type": agent.get("agent_type"),
+        "client_id": agent.get("client_id"),
+    }
+    preview["source"] = "generated_script_preflight"
+    preview["editable_flow"] = _build_editable_flow_payload(draft)
+    review_policy = _build_generated_script_review_policy(
+        script_draft,
+        draft,
+        review_acknowledged=False,
+    )
+    if review_policy["enabled"]:
+        preview["review_policy"] = review_policy
+    preview["preflight"] = {
+        "status": "valid",
+        "draft_id": draft_id,
+        "can_save_flow_draft": True,
+        "would_block_if_enforced": review_policy["would_block_if_enforced"],
+        "persisted": False,
+        "runtime_live_changed": False,
+    }
+    if script_draft.get("job_id"):
+        await _append_scrape_job_event_if_enabled(
+            script_draft["job_id"],
+            "draft_preflight_valid",
+            status="valid",
+            metadata={"draft_id": draft_id, "agent_id": agent["id"]},
+        )
+    return preview
+
+@app.post("/api/intelligence/script-drafts/{draft_id}/apply-flow-draft", dependencies=[Depends(require_auth)])
+async def apply_script_draft_to_agent_flow(draft_id: str, request: Request):
+    if not feature_flags.is_enabled("scrape.generate_script"):
+        raise HTTPException(status_code=403, detail="scrape.generate_script is disabled")
+    if not feature_flags.is_enabled("flow.visualization"):
+        raise HTTPException(status_code=403, detail="flow.visualization is disabled")
+    if not feature_flags.is_enabled("flow.v2_shadow"):
+        raise HTTPException(status_code=403, detail="flow.v2_shadow is disabled")
+
+    script_draft = await db.get_generated_script_draft(draft_id)
+    if not script_draft:
+        raise HTTPException(status_code=404, detail="Generated script draft not found")
+    agent = await db.get_agent(script_draft.get("agent_id"))
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    _assert_intelligence_scope(request, script_draft.get("client_id"), "Generated script draft")
+    _assert_intelligence_scope(request, agent.get("client_id"), "Agent")
+    if script_draft.get("client_id") and agent.get("client_id") and script_draft["client_id"] != agent["client_id"]:
+        raise HTTPException(status_code=403, detail="Generated draft is outside agent tenant scope")
+
+    flow = _prepare_generated_script_flow_for_agent(script_draft, agent)
+    try:
+        draft = validate_flow_spec(flow)
+    except FlowSpecValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    apply_payload = {}
+    try:
+        apply_payload = await request.json()
+    except Exception:
+        apply_payload = {}
+    if not isinstance(apply_payload, dict):
+        apply_payload = {}
+    actor = _actor_email(request)
+    review_notes = str(apply_payload.get("reviewNotes") or "").strip()[:500] or None
+    raw_review_acknowledged = apply_payload.get("reviewAcknowledged", True)
+    review_acknowledged = (
+        raw_review_acknowledged
+        if isinstance(raw_review_acknowledged, bool)
+        else feature_flags.parse_bool(str(raw_review_acknowledged), default=True)
+    )
+    review_policy = _build_generated_script_review_policy(
+        script_draft,
+        draft,
+        review_acknowledged=review_acknowledged,
+    )
+
+    artifact_path = _write_flow_v2_draft_artifact(agent, draft)
+    flow_version = await db.create_agent_flow_version(
+        agent["id"],
+        client_id=agent.get("client_id"),
+        schema_version="2.0",
+        status="draft",
+        runtime_mode="shadow",
+        artifact_path=artifact_path,
+        validation=draft.get("validation", {}),
+    )
+    reviewed_draft = await db.mark_generated_script_draft_reviewed(
+        draft_id,
+        status="flow_draft_saved",
+        reviewed_by=actor,
+        review_notes=review_notes,
+        flow_version_id=flow_version.get("id"),
+    )
+    logger.info(
+        "generated_script_draft_applied draft=%s agent=%s flow_version=%s review_acknowledged=%s runtime_live_changed=%s",
+        draft_id,
+        agent["id"],
+        flow_version.get("id"),
+        review_acknowledged,
+        False,
+    )
+    if script_draft.get("job_id"):
+        await _append_scrape_job_event_if_enabled(
+            script_draft["job_id"],
+            "flow_draft_saved",
+            status="draft_ready",
+            actor=actor,
+            metadata={
+                "draft_id": draft_id,
+                "agent_id": agent["id"],
+                "flow_version_id": flow_version.get("id"),
+                "review_acknowledged": review_acknowledged,
+                "review_gate_shadow": {
+                    "enabled": review_policy["enabled"],
+                    "would_block_if_enforced": review_policy["would_block_if_enforced"],
+                    "blockers": review_policy["blockers"],
+                },
+                "runtime_live_changed": False,
+            },
+        )
+    preview = await _load_agent_flow_preview(agent)
+    preview["generated_script_review"] = {
+        "draft_id": draft_id,
+        "status": reviewed_draft.get("status"),
+        "reviewed_at": reviewed_draft.get("reviewed_at"),
+        "reviewed_by": reviewed_draft.get("reviewed_by"),
+        "flow_version_id": reviewed_draft.get("flow_version_id"),
+        "review_acknowledged": review_acknowledged,
+        "review_policy": review_policy if review_policy["enabled"] else None,
+        "runtime_live_changed": False,
+        "published_live": False,
+    }
+    return preview
+
+
+@app.post("/api/memory/agents/{agent_id}/collections", dependencies=[Depends(require_auth)])
+async def create_agent_memory_collection(agent_id: str, data: AgentMemoryCollectionCreate, request: Request):
+    _require_memory_enabled()
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    client_id = _resolve_memory_client_id(request, agent, data.clientId)
+    service = AgentMemoryService(db)
+    try:
+        collection = await service.create_collection(
+            client_id=client_id,
+            agent_id=agent_id,
+            source_type=data.sourceType,
+            source_id=data.sourceId,
+            metadata=data.metadata or {},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "created", "collection": collection, "runtime_injection": False}
+
+
+@app.post("/api/memory/agents/{agent_id}/seed", dependencies=[Depends(require_auth)])
+async def seed_agent_memory(agent_id: str, data: AgentMemoryCollectionCreate, request: Request):
+    _require_memory_enabled()
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    client_id = _resolve_memory_client_id(request, agent, data.clientId)
+    service = AgentMemoryService(db)
+    try:
+        result = await service.seed_from_agent(client_id=client_id, agent=agent)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "seeded", **result, "runtime_injection": False}
+
+
+@app.post("/api/memory/agents/{agent_id}/items", dependencies=[Depends(require_auth)])
+async def add_agent_memory_item(agent_id: str, data: AgentMemoryItemCreate, request: Request):
+    _require_memory_enabled()
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    client_id = _resolve_memory_client_id(request, agent, data.clientId)
+    service = AgentMemoryService(db)
+    try:
+        item = await service.add_item(
+            collection_id=data.collectionId,
+            client_id=client_id,
+            agent_id=agent_id,
+            content=data.content,
+            metadata=data.metadata or {},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "created", "item": item, "runtime_injection": False}
+
+
+@app.get("/api/memory/agents/{agent_id}/items", dependencies=[Depends(require_auth)])
+async def list_agent_memory_items(agent_id: str, request: Request, clientId: Optional[str] = None, includeDeleted: bool = False):
+    _require_memory_enabled()
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    client_id = _resolve_memory_client_id(request, agent, clientId)
+    service = AgentMemoryService(db)
+    return {
+        "agent_id": agent_id,
+        "client_id": client_id,
+        "runtime_injection": False,
+        "items": await service.list_items(
+            client_id=client_id,
+            agent_id=agent_id,
+            include_deleted=includeDeleted,
+        ),
+    }
+
+
+@app.post("/api/memory/agents/{agent_id}/reset", dependencies=[Depends(require_auth)])
+async def reset_agent_memory(agent_id: str, data: AgentMemoryResetRequest, request: Request):
+    _require_memory_enabled()
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    client_id = _resolve_memory_client_id(request, agent, data.clientId)
+    service = AgentMemoryService(db)
+    return await service.reset(client_id=client_id, agent_id=agent_id, reason=data.reason)
+
+
+@app.post("/api/crm/connections", dependencies=[Depends(require_auth)])
+async def create_crm_connection(data: CRMConnectionCreate, request: Request):
+    _require_crm_enabled()
+    client_id = _require_resolved_client_id(
+        _resolve_intelligence_client_id(request, data.clientId),
+        "CRM connection",
+    )
+    service = CRMIntegrationService(db)
+    try:
+        connection = await service.create_connection(
+            client_id=client_id,
+            provider=data.provider,
+            display_name=data.displayName,
+            external_account_id=data.externalAccountId,
+            config=data.config or {},
+            requested_by=_actor_email(request, data.requestedBy),
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "created", "connection": connection, "runtime_sync": False}
+
+
+@app.get("/api/crm/connections", dependencies=[Depends(require_auth)])
+async def list_crm_connections(
+    request: Request,
+    clientId: Optional[str] = None,
+    includeDisabled: bool = False,
+):
+    _require_crm_enabled()
+    client_id = _require_resolved_client_id(
+        _resolve_intelligence_client_id(request, clientId),
+        "CRM connection list",
+    )
+    service = CRMIntegrationService(db)
+    return {
+        "client_id": client_id,
+        "runtime_sync": False,
+        "connections": await service.list_connections(
+            client_id=client_id,
+            include_disabled=includeDisabled,
+        ),
+    }
+
+
+@app.post("/api/crm/connections/{connection_id}/secret-reference", dependencies=[Depends(require_auth)])
+async def configure_crm_connection_secret_reference(
+    connection_id: str,
+    data: CRMSecretReferenceUpdate,
+    request: Request,
+):
+    _require_crm_enabled()
+    connection = await db.get_crm_connection(connection_id)
+    if not connection:
+        raise HTTPException(status_code=404, detail="CRM connection not found")
+    _assert_intelligence_scope(request, connection.get("client_id"), "CRM connection")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or connection["client_id"]
+    if client_id != connection["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM connection is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        updated = await service.configure_secret_reference(
+            client_id=client_id,
+            connection_id=connection_id,
+            vault_provider=data.vaultProvider,
+            reference_id=data.referenceId,
+            rotation_due_at=data.rotationDueAt,
+            metadata=data.metadata or {},
+            requested_by=_actor_email(request, data.requestedBy),
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "configured", "connection": updated, "runtime_sync": False}
+
+
+@app.get("/api/crm/connections/{connection_id}/provider-contract", dependencies=[Depends(require_auth)])
+async def get_crm_provider_contract(
+    connection_id: str,
+    request: Request,
+    clientId: Optional[str] = None,
+):
+    _require_crm_provider_contracts_enabled()
+    connection = await db.get_crm_connection(connection_id)
+    if not connection:
+        raise HTTPException(status_code=404, detail="CRM connection not found")
+    _assert_intelligence_scope(request, connection.get("client_id"), "CRM connection")
+    _shadow_tenant_scoped_read(request, "crm_connection", connection.get("client_id"))
+    client_id = _resolve_intelligence_client_id(request, clientId) or connection["client_id"]
+    if client_id != connection["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM connection is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        contract = await service.get_provider_contract(
+            client_id=client_id,
+            connection_id=connection_id,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {
+        "status": "ready",
+        "runtime_sync": False,
+        "external_execution": False,
+        "contract": contract,
+    }
+
+
+@app.post("/api/crm/sync-jobs", dependencies=[Depends(require_auth)])
+async def create_crm_sync_job(data: CRMSyncPlanCreate, request: Request):
+    _require_crm_enabled()
+    client_id = _resolve_intelligence_client_id(request, data.clientId)
+    if data.campaignId:
+        campaign = await db.get_campaign(data.campaignId)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        _assert_intelligence_scope(request, campaign.get("client_id"), "Campaign")
+        if not campaign.get("client_id"):
+            raise HTTPException(status_code=400, detail="Campaign must be tenant-owned before CRM sync")
+        if client_id and client_id != campaign["client_id"]:
+            raise HTTPException(status_code=403, detail="Campaign is outside CRM tenant scope")
+        client_id = client_id or campaign["client_id"]
+    client_id = _require_resolved_client_id(client_id, "CRM sync job")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.plan_campaign_sync(
+            client_id=client_id,
+            connection_id=data.connectionId,
+            campaign_id=data.campaignId,
+            direction=data.direction,
+            requested_by=_actor_email(request, data.requestedBy),
+            idempotency_key=data.idempotencyKey,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "planned", **result, "runtime_sync": False}
+
+
+@app.get("/api/crm/campaigns/{campaign_id}/payload-preview", dependencies=[Depends(require_auth)])
+async def get_crm_campaign_payload_preview(
+    campaign_id: str,
+    request: Request,
+    clientId: Optional[str] = None,
+):
+    _require_crm_enabled()
+    campaign = await db.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    _assert_intelligence_scope(request, campaign.get("client_id"), "Campaign")
+    _shadow_tenant_scoped_read(request, "campaign", campaign.get("client_id"))
+    if not campaign.get("client_id"):
+        raise HTTPException(status_code=400, detail="Campaign must be tenant-owned before CRM payload preview")
+    client_id = _resolve_intelligence_client_id(request, clientId) or campaign["client_id"]
+    if client_id != campaign["client_id"]:
+        raise HTTPException(status_code=403, detail="Campaign is outside CRM tenant scope")
+    service = CRMIntegrationService(db)
+    try:
+        preview = await service.build_campaign_payload_preview(
+            client_id=client_id,
+            campaign_id=campaign_id,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "ready", "preview": preview, "runtime_sync": False}
+
+
+@app.get("/api/crm/sync-jobs", dependencies=[Depends(require_auth)])
+async def list_crm_sync_jobs(
+    request: Request,
+    clientId: Optional[str] = None,
+    connectionId: Optional[str] = None,
+    campaignId: Optional[str] = None,
+):
+    _require_crm_enabled()
+    client_id = _require_resolved_client_id(
+        _resolve_intelligence_client_id(request, clientId),
+        "CRM sync job list",
+    )
+    service = CRMIntegrationService(db)
+    return {
+        "client_id": client_id,
+        "runtime_sync": False,
+        "jobs": await service.list_sync_jobs(
+            client_id=client_id,
+            connection_id=connectionId,
+            campaign_id=campaignId,
+        ),
+    }
+
+
+@app.post("/api/crm/sync-jobs/{job_id}/dry-run", dependencies=[Depends(require_auth)])
+async def execute_crm_sync_job_dry_run(job_id: str, data: CRMSyncDryRunExecute, request: Request):
+    _require_crm_enabled()
+    job = await db.get_crm_sync_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="CRM sync job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "CRM sync job")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or job["client_id"]
+    if client_id != job["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM sync job is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.execute_dry_run_sync(
+            client_id=client_id,
+            job_id=job_id,
+            requested_by=_actor_email(request, data.requestedBy),
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "validated", **result, "runtime_sync": False}
+
+
+@app.post("/api/crm/sync-jobs/{job_id}/preflight", dependencies=[Depends(require_auth)])
+async def run_crm_sync_job_preflight(job_id: str, data: CRMSyncPreflightExecute, request: Request):
+    _require_crm_preflight_enabled()
+    job = await db.get_crm_sync_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="CRM sync job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "CRM sync job")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or job["client_id"]
+    if client_id != job["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM sync job is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.run_sync_preflight(
+            client_id=client_id,
+            job_id=job_id,
+            requested_by=_actor_email(request, data.requestedBy),
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "preflight_validated", **result, "runtime_sync": False}
+
+
+@app.post("/api/crm/sync-jobs/{job_id}/outbox", dependencies=[Depends(require_auth)])
+async def queue_crm_sync_job_outbox(job_id: str, data: CRMSyncOutboxQueue, request: Request):
+    _require_crm_outbox_enabled()
+    job = await db.get_crm_sync_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="CRM sync job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "CRM sync job")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or job["client_id"]
+    if client_id != job["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM sync job is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.queue_sync_outbox(
+            client_id=client_id,
+            job_id=job_id,
+            requested_by=_actor_email(request, data.requestedBy),
+            idempotency_key=data.idempotencyKey,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "queued_shadow", **result, "runtime_sync": False}
+
+
+@app.get("/api/crm/outbox", dependencies=[Depends(require_auth)])
+async def list_crm_sync_outbox(
+    request: Request,
+    clientId: Optional[str] = None,
+    jobId: Optional[str] = None,
+    status: Optional[str] = None,
+):
+    _require_crm_outbox_enabled()
+    client_id = _require_resolved_client_id(
+        _resolve_intelligence_client_id(request, clientId),
+        "CRM outbox list",
+    )
+    service = CRMIntegrationService(db)
+    try:
+        items = await service.list_sync_outbox(
+            client_id=client_id,
+            job_id=jobId,
+            status=status,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {
+        "client_id": client_id,
+        "runtime_sync": False,
+        "external_execution": False,
+        "worker_dispatch_enabled": False,
+        "outbox": items,
+    }
+
+
+@app.get("/api/crm/outbox/summary", dependencies=[Depends(require_auth)])
+async def get_crm_outbox_summary(
+    request: Request,
+    clientId: Optional[str] = None,
+    jobId: Optional[str] = None,
+    connectionId: Optional[str] = None,
+    campaignId: Optional[str] = None,
+):
+    _require_crm_observability_enabled()
+    client_id = _require_resolved_client_id(
+        _resolve_intelligence_client_id(request, clientId),
+        "CRM outbox summary",
+    )
+    service = CRMIntegrationService(db)
+    try:
+        summary = await service.get_sync_outbox_summary(
+            client_id=client_id,
+            job_id=jobId,
+            connection_id=connectionId,
+            campaign_id=campaignId,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {
+        "status": "ready",
+        "runtime_sync": False,
+        "external_execution": False,
+        "worker_dispatch_enabled": False,
+        "summary": summary,
+    }
+
+
+@app.get("/api/crm/outbox/{outbox_id}/delivery-plan", dependencies=[Depends(require_auth)])
+async def get_crm_outbox_delivery_plan(
+    outbox_id: str,
+    request: Request,
+    clientId: Optional[str] = None,
+):
+    _require_crm_delivery_plan_enabled()
+    item = await db.get_crm_sync_outbox_item(outbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="CRM outbox item not found")
+    _assert_intelligence_scope(request, item.get("client_id"), "CRM outbox item")
+    client_id = _resolve_intelligence_client_id(request, clientId) or item["client_id"]
+    if client_id != item["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM outbox item is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        plan = await service.build_outbox_delivery_plan(
+            client_id=client_id,
+            outbox_id=outbox_id,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {
+        "status": "ready",
+        "runtime_sync": False,
+        "external_execution": False,
+        "worker_dispatch_enabled": False,
+        "delivery_plan": plan,
+    }
+
+
+@app.post("/api/crm/outbox/{outbox_id}/delivery-approval", dependencies=[Depends(require_auth)])
+async def approve_crm_outbox_delivery_plan(
+    outbox_id: str,
+    data: CRMDeliveryApprovalCreate,
+    request: Request,
+):
+    _require_crm_delivery_approval_enabled()
+    item = await db.get_crm_sync_outbox_item(outbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="CRM outbox item not found")
+    _assert_intelligence_scope(request, item.get("client_id"), "CRM outbox item")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or item["client_id"]
+    if client_id != item["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM outbox item is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.approve_outbox_delivery_plan(
+            client_id=client_id,
+            outbox_id=outbox_id,
+            approved_by=_actor_email(request, data.approvedBy),
+            requested_by=_actor_email(request, data.requestedBy),
+            idempotency_key=data.idempotencyKey,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "approved_shadow", **result, "runtime_sync": False}
+
+
+@app.get("/api/crm/delivery-approvals", dependencies=[Depends(require_auth)])
+async def list_crm_delivery_approvals(
+    request: Request,
+    clientId: Optional[str] = None,
+    outboxId: Optional[str] = None,
+    status: Optional[str] = None,
+):
+    _require_crm_delivery_approval_enabled()
+    client_id = _require_resolved_client_id(
+        _resolve_intelligence_client_id(request, clientId),
+        "CRM delivery approval list",
+    )
+    service = CRMIntegrationService(db)
+    try:
+        approvals = await service.list_delivery_approvals(
+            client_id=client_id,
+            outbox_id=outboxId,
+            status=status,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {
+        "client_id": client_id,
+        "runtime_sync": False,
+        "external_execution": False,
+        "worker_dispatch_enabled": False,
+        "live_sync_enabled": False,
+        "approvals": approvals,
+    }
+
+
+@app.post("/api/crm/delivery-approvals/{approval_id}/revoke-shadow", dependencies=[Depends(require_auth)])
+async def revoke_crm_delivery_approval(
+    approval_id: str,
+    data: CRMDeliveryApprovalRevoke,
+    request: Request,
+):
+    _require_crm_delivery_approval_revoke_enabled()
+    approval = await db.get_crm_delivery_approval(approval_id)
+    if not approval:
+        raise HTTPException(status_code=404, detail="CRM delivery approval not found")
+    _assert_intelligence_scope(request, approval.get("client_id"), "CRM delivery approval")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or approval["client_id"]
+    if client_id != approval["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM delivery approval is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.revoke_delivery_approval(
+            client_id=client_id,
+            approval_id=approval_id,
+            revoked_by=_actor_email(request, data.revokedBy),
+            reason=data.reason,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "revoked_shadow", **result, "runtime_sync": False}
+
+
+@app.get("/api/crm/outbox/{outbox_id}/live-readiness", dependencies=[Depends(require_auth)])
+async def get_crm_outbox_live_readiness(
+    outbox_id: str,
+    request: Request,
+    clientId: Optional[str] = None,
+):
+    _require_crm_live_readiness_enabled()
+    item = await db.get_crm_sync_outbox_item(outbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="CRM outbox item not found")
+    _assert_intelligence_scope(request, item.get("client_id"), "CRM outbox item")
+    client_id = _resolve_intelligence_client_id(request, clientId) or item["client_id"]
+    if client_id != item["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM outbox item is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        readiness = await service.get_outbox_live_readiness(
+            client_id=client_id,
+            outbox_id=outbox_id,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {
+        "status": "ready",
+        "runtime_sync": False,
+        "external_execution": False,
+        "worker_dispatch_enabled": False,
+        "live_sync_enabled": False,
+        "readiness": readiness,
+    }
+
+
+@app.get("/api/crm/outbox/{outbox_id}/provider-sandbox", dependencies=[Depends(require_auth)])
+async def get_crm_outbox_provider_sandbox(
+    outbox_id: str,
+    request: Request,
+    clientId: Optional[str] = None,
+):
+    _require_crm_provider_sandbox_enabled()
+    item = await db.get_crm_sync_outbox_item(outbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="CRM outbox item not found")
+    _assert_intelligence_scope(request, item.get("client_id"), "CRM outbox item")
+    client_id = _resolve_intelligence_client_id(request, clientId) or item["client_id"]
+    if client_id != item["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM outbox item is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        sandbox = await service.build_outbox_provider_sandbox(
+            client_id=client_id,
+            outbox_id=outbox_id,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {
+        "status": "ready",
+        "runtime_sync": False,
+        "external_execution": False,
+        "worker_dispatch_enabled": False,
+        "live_sync_enabled": False,
+        "provider_sandbox": sandbox,
+    }
+
+
+@app.get("/api/crm/outbox/{outbox_id}/dispatch-canary", dependencies=[Depends(require_auth)])
+async def get_crm_outbox_dispatch_canary(
+    outbox_id: str,
+    request: Request,
+    clientId: Optional[str] = None,
+):
+    _require_crm_dispatch_canary_enabled()
+    item = await db.get_crm_sync_outbox_item(outbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="CRM outbox item not found")
+    _assert_intelligence_scope(request, item.get("client_id"), "CRM outbox item")
+    client_id = _resolve_intelligence_client_id(request, clientId) or item["client_id"]
+    if client_id != item["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM outbox item is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        canary = await service.build_outbox_dispatch_canary(
+            client_id=client_id,
+            outbox_id=outbox_id,
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {
+        "status": "ready",
+        "runtime_sync": False,
+        "external_execution": False,
+        "worker_dispatch_enabled": False,
+        "live_sync_enabled": False,
+        "dispatch_canary": canary,
+    }
+
+
+@app.post("/api/crm/outbox/{outbox_id}/shadow-run", dependencies=[Depends(require_auth)])
+async def run_crm_outbox_shadow_worker(outbox_id: str, data: CRMSyncOutboxShadowRun, request: Request):
+    _require_crm_worker_shadow_enabled()
+    item = await db.get_crm_sync_outbox_item(outbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="CRM outbox item not found")
+    _assert_intelligence_scope(request, item.get("client_id"), "CRM outbox item")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or item["client_id"]
+    if client_id != item["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM outbox item is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.run_outbox_shadow_worker(
+            client_id=client_id,
+            outbox_id=outbox_id,
+            requested_by=_actor_email(request, data.requestedBy),
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "completed_shadow", **result, "runtime_sync": False}
+
+
+@app.post("/api/crm/outbox/{outbox_id}/retry-shadow", dependencies=[Depends(require_auth)])
+async def schedule_crm_outbox_shadow_retry(outbox_id: str, data: CRMSyncOutboxRetryUpdate, request: Request):
+    _require_crm_worker_retries_enabled()
+    item = await db.get_crm_sync_outbox_item(outbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="CRM outbox item not found")
+    _assert_intelligence_scope(request, item.get("client_id"), "CRM outbox item")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or item["client_id"]
+    if client_id != item["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM outbox item is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.schedule_outbox_shadow_retry(
+            client_id=client_id,
+            outbox_id=outbox_id,
+            error=data.error,
+            next_retry_at=data.nextRetryAt,
+            requested_by=_actor_email(request, data.requestedBy),
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "retry_scheduled_shadow", **result, "runtime_sync": False}
+
+
+@app.post("/api/crm/outbox/{outbox_id}/requeue-shadow", dependencies=[Depends(require_auth)])
+async def requeue_crm_outbox_shadow_retry(outbox_id: str, data: CRMSyncOutboxRequeue, request: Request):
+    _require_crm_worker_retries_enabled()
+    item = await db.get_crm_sync_outbox_item(outbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="CRM outbox item not found")
+    _assert_intelligence_scope(request, item.get("client_id"), "CRM outbox item")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or item["client_id"]
+    if client_id != item["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM outbox item is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.requeue_outbox_shadow_retry(
+            client_id=client_id,
+            outbox_id=outbox_id,
+            requested_by=_actor_email(request, data.requestedBy),
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "queued_shadow", **result, "runtime_sync": False}
+
+
+@app.post("/api/crm/outbox/{outbox_id}/dead-letter-shadow", dependencies=[Depends(require_auth)])
+async def dead_letter_crm_outbox_shadow_item(outbox_id: str, data: CRMSyncOutboxRetryUpdate, request: Request):
+    _require_crm_worker_retries_enabled()
+    item = await db.get_crm_sync_outbox_item(outbox_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="CRM outbox item not found")
+    _assert_intelligence_scope(request, item.get("client_id"), "CRM outbox item")
+    client_id = _resolve_intelligence_client_id(request, data.clientId) or item["client_id"]
+    if client_id != item["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM outbox item is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        result = await service.dead_letter_outbox_shadow_item(
+            client_id=client_id,
+            outbox_id=outbox_id,
+            error=data.error,
+            requested_by=_actor_email(request, data.requestedBy),
+        )
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {"status": "dead_letter_shadow", **result, "runtime_sync": False}
+
+
+@app.get("/api/crm/sync-jobs/{job_id}/events", dependencies=[Depends(require_auth)])
+async def list_crm_sync_job_events(
+    job_id: str,
+    request: Request,
+    clientId: Optional[str] = None,
+):
+    _require_crm_enabled()
+    job = await db.get_crm_sync_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="CRM sync job not found")
+    _assert_intelligence_scope(request, job.get("client_id"), "CRM sync job")
+    client_id = _resolve_intelligence_client_id(request, clientId) or job["client_id"]
+    if client_id != job["client_id"]:
+        raise HTTPException(status_code=403, detail="CRM sync job is outside tenant scope")
+
+    service = CRMIntegrationService(db)
+    try:
+        events = await service.list_sync_events(client_id=client_id, job_id=job_id)
+    except ValueError as exc:
+        raise _crm_value_error(exc) from exc
+    return {
+        "job_id": job_id,
+        "client_id": client_id,
+        "runtime_sync": False,
+        "events": events,
+    }
+
 
 # Agent editing intentionally updates DB metadata and runtime JSON schema together.
 @app.post("/api/leads/upload", dependencies=[Depends(require_auth)])
-async def upload_leads(data: LeadsUpload):
-    await db.upsert_leads(data.campaignId, data.leads)
-    existing = await db.get_campaign(data.campaignId)
-    if not existing:
-        await db.upsert_campaign(data.campaignId, {"status": "Pending", "created_at": datetime.now().isoformat()})
-    else:
-        await db.set_campaign_status(data.campaignId, "Pending")
-    return {"status": "success", "count": len(data.leads)}
+async def upload_leads(data: LeadsUpload, request: Request):
+    if not data.leads:
+        raise HTTPException(status_code=400, detail="At least one lead is required")
+    leads, summary = _normalize_campaign_leads(data.leads)
+    if not leads:
+        raise HTTPException(status_code=400, detail="No valid leads found")
+    if len(leads) > summary["limit"]:
+        raise HTTPException(status_code=413, detail=f"Campaign lead limit exceeded: {summary['limit']}")
+    client_id = await _resolve_campaign_launch_client_id(request, data.clientId)
+    await db.upsert_campaign(data.campaignId, {
+        "name": data.campaignName or data.campaignId,
+        "status": "Pending",
+        "agent_id": data.agentId,
+        "client_id": client_id,
+        "telephony_provider": data.telephonyProvider or "demo",
+        "created_at": datetime.now().isoformat(),
+    })
+    await db.upsert_leads(data.campaignId, leads)
+    return {"status": "success", "count": len(leads), "summary": summary}
 
 
 # ── Campaigns ─────────────────────────────────────────────────────────────────
 @app.get("/api/campaigns")
-async def list_campaigns():
-    return await db.list_campaigns()
+async def list_campaigns(request: Request, includeArchived: bool = False, includeDeleted: bool = False, clientId: Optional[str] = None):
+    if (includeArchived or includeDeleted) and not feature_flags.is_enabled("campaign.lifecycle_management"):
+        raise HTTPException(status_code=403, detail="campaign.lifecycle_management is disabled")
+    client_id = _resolve_intelligence_client_id(request, clientId)
+    return await db.list_campaigns_with_lifecycle(
+        client_id=client_id,
+        include_archived=includeArchived,
+        include_deleted=includeDeleted,
+    )
+
+
+async def _campaign_for_lifecycle_or_404(campaign_id: str, request: Request) -> dict:
+    _require_campaign_lifecycle_enabled()
+    campaign = await db.get_campaign(campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    _assert_intelligence_scope(request, campaign.get("client_id"), "Campaign")
+    return campaign
+
+
+def _assert_campaign_inactive_for_lifecycle(campaign: dict) -> None:
+    if str(campaign.get("status") or "").lower() == "active":
+        raise HTTPException(status_code=409, detail="Active campaigns cannot be archived or deleted")
+
+
+@app.get("/api/campaigns/{campaign_id}/lifecycle", dependencies=[Depends(require_auth)])
+async def get_campaign_lifecycle(campaign_id: str, request: Request):
+    await _campaign_for_lifecycle_or_404(campaign_id, request)
+    summary = await db.get_campaign_lifecycle_summary(campaign_id)
+    if not summary:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    return summary
+
+
+@app.post("/api/campaigns/{campaign_id}/archive", dependencies=[Depends(require_auth)])
+async def archive_campaign(campaign_id: str, request: Request, data: CampaignLifecycleRequest | None = None):
+    campaign = await _campaign_for_lifecycle_or_404(campaign_id, request)
+    _assert_campaign_inactive_for_lifecycle(campaign)
+    updated = await db.set_campaign_archived(
+        campaign_id,
+        archived=True,
+        actor_email=_actor_email(request, data.actorEmail if data else None),
+    )
+    return {"status": "archived", "campaign": updated}
+
+
+@app.post("/api/campaigns/{campaign_id}/restore", dependencies=[Depends(require_auth)])
+async def restore_campaign(campaign_id: str, request: Request, data: CampaignLifecycleRequest | None = None):
+    await _campaign_for_lifecycle_or_404(campaign_id, request)
+    updated = await db.restore_campaign_lifecycle(
+        campaign_id,
+        actor_email=_actor_email(request, data.actorEmail if data else None),
+    )
+    return {"status": "restored", "campaign": updated}
+
+
+@app.delete("/api/campaigns/{campaign_id}", dependencies=[Depends(require_auth)])
+async def delete_campaign(campaign_id: str, request: Request, data: CampaignLifecycleRequest | None = None):
+    campaign = await _campaign_for_lifecycle_or_404(campaign_id, request)
+    _assert_campaign_inactive_for_lifecycle(campaign)
+    result = await db.soft_delete_campaign(
+        campaign_id,
+        reason=data.reason if data else None,
+        actor_email=_actor_email(request, data.actorEmail if data else None),
+    )
+    return {"status": "soft_deleted", **(result or {})}
 
 @app.post("/api/campaigns/start", dependencies=[Depends(require_auth)])
-async def start_campaign(data: CampaignStart, background_tasks: BackgroundTasks):
+async def start_campaign(data: CampaignStart, background_tasks: BackgroundTasks, request: Request):
     campaign = await db.get_campaign(data.campaignId)
     if not campaign:
         raise HTTPException(status_code=404, detail="Campaign not found")
+    _assert_campaign_startable(campaign)
+    requested_client_id = _resolve_intelligence_client_id(request, data.clientId)
+    if campaign.get("client_id"):
+        _assert_intelligence_scope(request, campaign.get("client_id"), "Campaign")
+        if requested_client_id and requested_client_id != campaign["client_id"]:
+            raise HTTPException(status_code=403, detail="Campaign is outside tenant scope")
     await db.set_campaign_status(data.campaignId, "Active")
     provider_slug     = data.telephonyProvider or "demo"
     agent_id          = data.agentId or "default"
+    worker_v2_shadow: dict[str, Any] | None = None
+    if feature_flags.is_enabled("campaign.worker_v2"):
+        try:
+            control_plane = CampaignWorkerV2ControlPlane(db)
+            execution = await control_plane.prepare_execution(
+                campaign_id=data.campaignId,
+                agent_id=agent_id,
+                telephony_provider=provider_slug,
+                client_id=campaign.get("client_id"),
+                config=CampaignWorkerV2Config(mode="shadow", max_concurrency=1, max_attempts=1),
+            )
+            worker_v2_shadow = {
+                "mode": execution.get("mode", "shadow"),
+                "executionId": execution.get("id"),
+                "status": execution.get("status"),
+            }
+        except Exception as exc:
+            logger.exception("Campaign worker v2 shadow preparation failed; continuing v1 runner: %s", exc)
     if provider_slug == "demo":
         engine           = DemoCallEngine(ws_manager=ws_manager, db=db)
         agent_schema_path = _resolve_schema(agent_id)
-        background_tasks.add_task(engine.run_demo_campaign, data.campaignId, agent_schema_path)
+        background_tasks.add_task(
+            engine.run_demo_campaign,
+            data.campaignId,
+            agent_schema_path,
+            campaign.get("client_id") or "global",
+        )
     else:
-        background_tasks.add_task(run_campaign, data.campaignId, agent_id, provider_slug)
-    return {"status": "started", "provider": provider_slug}
+        background_tasks.add_task(run_campaign, data.campaignId, agent_id, provider_slug, campaign.get("client_id") or "global")
+    response = {"status": "started", "provider": provider_slug}
+    if worker_v2_shadow:
+        response["campaignWorkerV2"] = worker_v2_shadow
+    return response
 
 @app.get("/api/campaigns/{campaign_id}/results")
-async def get_results(campaign_id: str):
-    return await db.get_results_for_campaign(campaign_id)
+async def get_results(campaign_id: str, request: Request, clientId: Optional[str] = None):
+    client_id = _resolve_intelligence_client_id(request, clientId)
+    campaign = None
+    if client_id or feature_flags.is_enabled("tenant.scoped_read_endpoint_shadow"):
+        campaign = await db.get_campaign(campaign_id)
+    if client_id:
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        _assert_intelligence_scope(request, campaign.get("client_id"), "Campaign")
+        if campaign.get("client_id") != client_id:
+            raise HTTPException(status_code=403, detail="Campaign is outside tenant scope")
+    if feature_flags.is_enabled("tenant.scoped_read_endpoint_shadow"):
+        _shadow_tenant_scoped_read(
+            request,
+            "call_result",
+            campaign.get("client_id") if campaign else None,
+            resource_found=bool(campaign),
+        )
+    return await db.get_results_for_campaign(campaign_id, client_id)
 
 @app.get("/api/results/{lead_id}/transcript")
-async def get_transcript(lead_id: str):
-    return await db.get_transcript_for_lead(lead_id)
+async def get_transcript(lead_id: str, request: Request, clientId: Optional[str] = None):
+    client_id = _resolve_intelligence_client_id(request, clientId)
+    await _shadow_transcript_access(request, lead_id)
+    owner = None
+    if client_id or feature_flags.is_enabled("tenant.scoped_read_endpoint_shadow"):
+        owner = await db.get_call_result_owner_for_transcript(lead_id)
+    if client_id:
+        if not owner or not owner.get("found"):
+            return []
+        _assert_intelligence_scope(request, owner.get("owner_client_id"), "Call result")
+        if owner.get("owner_client_id") != client_id:
+            raise HTTPException(status_code=403, detail="Transcript is outside tenant scope")
+    if feature_flags.is_enabled("tenant.scoped_read_endpoint_shadow"):
+        _shadow_tenant_scoped_read(
+            request,
+            "call_result",
+            owner.get("owner_client_id"),
+            resource_found=bool(owner.get("found")),
+        )
+    return await db.get_transcript_for_lead(lead_id, client_id)
 
-@app.get("/api/campaigns/{campaign_id}/live")
-async def get_live_state(campaign_id: str):
-    return await db.get_live_state(campaign_id)
+
+def _recording_file_path_from_url(recording_url: str) -> str:
+    if not str(recording_url or "").startswith("/recordings/"):
+        raise HTTPException(status_code=400, detail="recordingUrl must target /recordings")
+    relative_path = str(recording_url)[len("/recordings/"):]
+    if not relative_path or relative_path != os.path.basename(relative_path):
+        raise HTTPException(status_code=400, detail="Invalid recording path")
+    recordings_root = os.path.abspath("recordings")
+    file_path = os.path.abspath(os.path.join(recordings_root, relative_path))
+    try:
+        if os.path.commonpath([recordings_root, file_path]) != recordings_root:
+            raise HTTPException(status_code=400, detail="Invalid recording path")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid recording path") from exc
+    if not os.path.isfile(file_path):
+        raise HTTPException(status_code=404, detail="Recording file not found")
+    return file_path
+
+
+def _recording_media_type(file_path: str) -> str:
+    extension = os.path.splitext(file_path)[1].lower()
+    return {
+        ".wav": "audio/wav",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".webm": "audio/webm",
+    }.get(extension, "application/octet-stream")
+
+
+@app.get("/api/recordings/protected")
+async def get_protected_recording(request: Request, recordingUrl: str, clientId: Optional[str] = None):
+    client_id = _resolve_intelligence_client_id(request, clientId) if clientId else None
+    owner = await db.get_recording_asset_owner(recordingUrl)
+    if not owner.get("found"):
+        raise HTTPException(status_code=404, detail="Recording not found")
+    if client_id:
+        _assert_intelligence_scope(request, owner.get("owner_client_id"), "Recording")
+        if owner.get("owner_client_id") != client_id:
+            raise HTTPException(status_code=403, detail="Recording is outside tenant scope")
+    if feature_flags.is_enabled("tenant.scoped_read_endpoint_shadow"):
+        _shadow_tenant_scoped_read(
+            request,
+            "recording_asset",
+            owner.get("owner_client_id"),
+            resource_found=bool(owner.get("found")),
+        )
+    file_path = _recording_file_path_from_url(recordingUrl)
+    return FileResponse(
+        file_path,
+        media_type=_recording_media_type(file_path),
+        filename=os.path.basename(file_path),
+    )
 
 @app.get("/api/campaigns/all/live")
-async def get_all_live_state():
-    return await db.get_all_live_state()
+async def get_all_live_state(request: Request, clientId: Optional[str] = None):
+    client_id = _resolve_intelligence_client_id(request, clientId)
+    return await db.get_all_live_state(client_id)
+
+@app.get("/api/campaigns/{campaign_id}/live")
+async def get_live_state(campaign_id: str, request: Request, clientId: Optional[str] = None):
+    client_id = _resolve_intelligence_client_id(request, clientId)
+    campaign = None
+    if client_id or feature_flags.is_enabled("tenant.scoped_read_endpoint_shadow"):
+        campaign = await db.get_campaign(campaign_id)
+    if client_id:
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        _assert_intelligence_scope(request, campaign.get("client_id"), "Campaign")
+        if campaign.get("client_id") != client_id:
+            raise HTTPException(status_code=403, detail="Campaign is outside tenant scope")
+    if feature_flags.is_enabled("tenant.scoped_read_endpoint_shadow"):
+        _shadow_tenant_scoped_read(
+            request,
+            "live_call_state",
+            campaign.get("client_id") if campaign else None,
+            resource_found=bool(campaign),
+        )
+    return await db.get_live_state(campaign_id, client_id)
+
+@app.get("/api/campaigns/{campaign_id}/executions", dependencies=[Depends(require_auth)])
+async def list_campaign_executions(campaign_id: str):
+    return await db.list_campaign_executions(campaign_id=campaign_id)
+
+async def _execution_for_campaign_or_404(campaign_id: str, execution_id: str) -> dict:
+    execution = await db.get_campaign_execution(execution_id)
+    if not execution or execution.get("campaign_id") != campaign_id:
+        raise HTTPException(status_code=404, detail="Campaign execution not found")
+    return execution
+
+@app.post("/api/campaigns/{campaign_id}/executions/{execution_id}/pause", dependencies=[Depends(require_auth)])
+async def pause_campaign_execution(campaign_id: str, execution_id: str):
+    await _execution_for_campaign_or_404(campaign_id, execution_id)
+    control_plane = CampaignWorkerV2ControlPlane(db)
+    updated = await control_plane.pause(execution_id, reason="api_request")
+    return {"status": "paused", "execution": updated}
+
+@app.post("/api/campaigns/{campaign_id}/executions/{execution_id}/resume", dependencies=[Depends(require_auth)])
+async def resume_campaign_execution(campaign_id: str, execution_id: str):
+    await _execution_for_campaign_or_404(campaign_id, execution_id)
+    control_plane = CampaignWorkerV2ControlPlane(db)
+    updated = await control_plane.resume(execution_id, reason="api_request")
+    return {"status": "planned", "execution": updated}
+
+@app.post("/api/campaigns/{campaign_id}/executions/{execution_id}/cancel", dependencies=[Depends(require_auth)])
+async def cancel_campaign_execution(campaign_id: str, execution_id: str):
+    await _execution_for_campaign_or_404(campaign_id, execution_id)
+    control_plane = CampaignWorkerV2ControlPlane(db)
+    updated = await control_plane.cancel(execution_id, reason="api_request")
+    return {"status": "cancelled", "execution": updated}
 
 
 # ── Demo Mode (simulated calls — AI vs AI) ────────────────────────────────────
@@ -559,6 +5464,7 @@ async def start_demo(data: DemoStart, background_tasks: BackgroundTasks):
             "created_at": datetime.now().isoformat(),
         })
     else:
+        _assert_campaign_startable(existing)
         await db.set_campaign_status(campaign_id, "Active")
 
     engine = DemoCallEngine(ws_manager=ws_manager, db=db)
@@ -602,6 +5508,24 @@ async def update_assignment(data: AssignmentUpdate):
 
 
 # ── Telephony Providers ───────────────────────────────────────────────────────
+def _normalize_available_number(raw: dict[str, Any], provider: str, country_code: str) -> dict[str, Any]:
+    phone = (raw.get("phone") or raw.get("phone_number") or "").strip()
+    region = raw.get("region") or raw.get("locality") or country_code
+    capabilities = raw.get("capabilities") or {"voice": True}
+    if isinstance(capabilities, list):
+        capabilities = {str(item): True for item in capabilities}
+    return {
+        **raw,
+        "phone": phone,
+        "phone_number": phone,
+        "region": region,
+        "locality": raw.get("locality") or region,
+        "provider": raw.get("provider") or provider,
+        "monthly_cost": raw.get("monthly_cost") or raw.get("cost") or "",
+        "capabilities": capabilities,
+    }
+
+
 @app.get("/api/telephony/providers")
 async def get_providers():
     return list_providers()
@@ -613,13 +5537,16 @@ async def list_numbers(client_id: Optional[str] = None):
 @app.post("/api/telephony/numbers/search")
 async def search_numbers(provider: str = "twilio", country_code: str = "IN"):
     p = get_provider(provider)
-    return await p.list_available_numbers(country_code)
+    results = await p.list_available_numbers(country_code)
+    return [_normalize_available_number(item, provider, country_code) for item in results]
 
 @app.post("/api/telephony/numbers/purchase", dependencies=[Depends(require_auth)])
-async def purchase_number(data: PhoneNumberPurchase):
+async def purchase_number(data: PhoneNumberPurchase, request: Request):
     provider = get_provider(data.provider)
     result   = await provider.purchase_number(data.phoneNumber)
     if result.get("status") in ("active", "simulated"):
+        if feature_flags.is_enabled("telephony.tenant_numbers") and data.clientId:
+            _assert_intelligence_scope(request, data.clientId, "Phone number")
         number_data = {
             "phone":     result["phone"],
             "sid":       result.get("sid", ""),
@@ -627,14 +5554,66 @@ async def purchase_number(data: PhoneNumberPurchase):
             "client_id": data.clientId,
             "region":    "",
         }
-        saved = await db.add_phone_number(number_data)
+        try:
+            saved = await db.add_phone_number(number_data)
+            if feature_flags.is_enabled("telephony.tenant_numbers") and data.clientId:
+                saved["route"] = await db.upsert_phone_number_route(
+                    number_id=saved["id"],
+                    client_id=data.clientId,
+                    metadata={"source": "purchase"},
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"status": "success", **saved}
     raise HTTPException(status_code=400, detail=result.get("error", "Purchase failed"))
 
 @app.post("/api/telephony/numbers/assign", dependencies=[Depends(require_auth)])
-async def assign_number(data: PhoneNumberAssign):
+async def assign_number(data: PhoneNumberAssign, request: Request):
+    if feature_flags.is_enabled("telephony.tenant_numbers"):
+        await _assert_phone_number_scope(request, data.numberId, data.clientId)
+        route = await db.upsert_phone_number_route(
+            number_id=data.numberId,
+            client_id=data.clientId,
+            metadata={"source": "assign_endpoint"},
+        )
+        return {"status": "success", "route": route}
     await db.assign_number_to_client(data.numberId, data.clientId)
     return {"status": "success"}
+
+@app.post("/api/telephony/numbers/routes", dependencies=[Depends(require_auth)])
+async def upsert_number_route(data: PhoneNumberRouteUpdate, request: Request):
+    _require_tenant_numbers_enabled()
+    await _assert_phone_number_scope(request, data.numberId, data.clientId)
+    try:
+        route = await db.upsert_phone_number_route(
+            number_id=data.numberId,
+            client_id=data.clientId,
+            agent_id=data.agentId,
+            campaign_id=data.campaignId,
+            routing_mode=data.routingMode,
+            metadata=data.metadata or {"source": "route_endpoint"},
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "success", "route": route}
+
+@app.get("/api/telephony/numbers/{number_id}/route", dependencies=[Depends(require_auth)])
+async def get_number_route(number_id: str, request: Request, routingMode: str = "tenant_default"):
+    _require_tenant_numbers_enabled()
+    number = await _assert_phone_number_scope(request, number_id)
+    route = await db.get_phone_number_route(number_id, routingMode)
+    if route:
+        _assert_intelligence_scope(request, route.get("client_id"), "Phone number route")
+    return {"number": number, "route": route}
+
+@app.get("/api/telephony/routes/resolve", dependencies=[Depends(require_auth)])
+async def resolve_number_route(phone: str, request: Request, provider: str = "twilio"):
+    _require_tenant_numbers_enabled()
+    route = await db.resolve_phone_number_route(phone, provider)
+    if not route:
+        raise HTTPException(status_code=404, detail="Phone route not found")
+    _assert_intelligence_scope(request, route.get("client_id"), "Phone number route")
+    return route
 
 @app.post("/api/telephony/buy")  # legacy compat
 async def legacy_buy_number():
@@ -645,8 +5624,11 @@ async def legacy_buy_number():
 @app.post("/telephony/twiml/{call_id}")
 async def twilio_twiml(call_id: str, request: Request):
     from telephony.twilio_handler import build_twiml
+    route = await _resolve_tenant_phone_route_from_webhook(request, provider="twilio")
     ws_url     = WEBHOOK_BASE_URL.replace("http://", "wss://").replace("https://", "wss://")
     stream_url = f"{ws_url}/telephony/stream/{call_id}"
+    if route:
+        stream_url = f"{stream_url}?{urlencode({'tenantId': route.get('client_id') or '', 'numberId': route.get('number_id') or ''})}"
     twiml      = build_twiml(stream_url)
     return HTMLResponse(content=twiml, media_type="application/xml")
 
@@ -659,6 +5641,7 @@ async def twilio_stream(websocket: WebSocket, call_id: str):
     # Falls back gracefully for inbound/unknown calls.
     meta = call_registry.get(call_id) or {}
     agent_schema_path = meta.get("agent_schema_path") or _resolve_schema("default")
+    _audit_ws_connection(websocket, "/telephony/stream/{call_id}", meta.get("client_id", "global"))
 
     try:
         await handle_twilio_stream(
@@ -679,8 +5662,19 @@ async def twilio_stream(websocket: WebSocket, call_id: str):
 
 
 # ── WebSocket Dashboard Hub ───────────────────────────────────────────────────
+def _normalize_dashboard_ws_client_id(client_id: str | None) -> str:
+    return str(client_id or "global").strip() or "global"
+
+
 @app.websocket("/ws/dashboard/{client_id}")
 async def dashboard_ws(websocket: WebSocket, client_id: str = "global"):
+    client_id = _normalize_dashboard_ws_client_id(client_id)
+    context = _audit_ws_connection(websocket, "/ws/dashboard/{client_id}", client_id)
+    if client_id == "global" and _should_enforce_global_monitor_admin() and not context.is_admin:
+        logger.warning("Dashboard WS rejected: global monitor requires admin context")
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
     await ws_manager.connect(websocket, client_id)
     logger.info("Dashboard WS connected: client=%s", client_id)
     try:
@@ -705,7 +5699,8 @@ async def dashboard_ws(websocket: WebSocket, client_id: str = "global"):
 
 @app.websocket("/ws/dashboard")
 async def dashboard_ws_global(websocket: WebSocket):
-    await dashboard_ws(websocket, client_id="global")
+    client_id = websocket.query_params.get("clientId") or websocket.query_params.get("client_id") or "global"
+    await dashboard_ws(websocket, client_id=client_id)
 
 
 # ── VoiceLiveSource / VoiceLiveSink (shared by /api/voice-live and /api/voice-demo) ──
@@ -720,9 +5715,10 @@ class SessionRecorder(TimelineSessionRecorder):
 class VoiceLiveSource(FrameProcessor):
     """Bridges browser mic audio into the Pipecat pipeline with backpressure."""
 
-    def __init__(self, recorder=None):
+    def __init__(self, recorder=None, recording_turn_state=None):
         super().__init__()
         self.recorder = recorder
+        self.recording_turn_state = recording_turn_state
         self._started = False
         self._terminated = False
         self._sample_rate = 16000 # Default fallback
@@ -796,8 +5792,14 @@ class VoiceLiveSource(FrameProcessor):
         
         try:
             self._queue.put_nowait(frame)
-            if self.recorder:
+            recording_blocked = bool(
+                self.recording_turn_state
+                and self.recording_turn_state.is_stt_blocked()
+            )
+            if self.recorder and not recording_blocked:
                 self.recorder.add_user_audio(data, sample_rate=self._sample_rate)
+            elif self.recorder and recording_blocked:
+                logger.debug("VoiceLiveSource: skipped user recording during agent playback")
         except asyncio.QueueFull:
             try:
                 dropped = self._queue.get_nowait()
@@ -902,12 +5904,14 @@ async def websocket_voice_live(websocket: WebSocket):
     await websocket.accept()
 
     agent_id    = websocket.query_params.get("agentId", "default")
+    client_id   = websocket.query_params.get("clientId")
     lead_name   = websocket.query_params.get("leadName", "Prashant")
     schema_path = _resolve_schema(agent_id)
+    _audit_ws_connection(websocket, "/api/voice-live", client_id)
     logger.info("Live Voice: Connected — agent=%s schema=%s", agent_id, schema_path)
 
-    source = VoiceLiveSource()
     turn_state = VoiceTurnState()
+    source = VoiceLiveSource(recording_turn_state=turn_state)
     stt    = RealEstateSTTProcessor(turn_state=turn_state, agent_id=agent_id)
     llm    = RealEstateLLMProcessor()
     llm.state_manager = StateManager(schema_path)
@@ -987,6 +5991,7 @@ async def websocket_voice_demo(websocket: WebSocket):
     client_id   = websocket.query_params.get("clientId", "global")
     lead_name   = websocket.query_params.get("leadName", "Demo User")
     schema_path = _resolve_schema(agent_id)
+    _audit_ws_connection(websocket, "/api/voice-demo", client_id)
     campaign_id = f"demo_mic_{uuid.uuid4().hex[:8]}"
     lead_uid    = f"{campaign_id}_demo"
     transcripts: list[dict] = []
@@ -1074,8 +6079,8 @@ async def websocket_voice_demo(websocket: WebSocket):
     recorder = TimelineSessionRecorder(sample_rate=24000)
     if _PIPECAT_AVAILABLE:
         try:
-            source = VoiceLiveSource(recorder=recorder)
             turn_state = VoiceTurnState()
+            source = VoiceLiveSource(recorder=recorder, recording_turn_state=turn_state)
             stt    = RealEstateSTTProcessor(turn_state=turn_state, agent_id=agent_id)
             llm    = RealEstateLLMProcessor()
             llm.state_manager = StateManager(schema_path)

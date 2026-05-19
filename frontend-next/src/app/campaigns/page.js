@@ -4,12 +4,16 @@ import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/context/AuthContext';
 import { getProviderLabel } from '@/lib/providerDisplay';
 
+const CAMPAIGN_LIFECYCLE_ENABLED = process.env.NEXT_PUBLIC_CAMPAIGN_LIFECYCLE_ENABLED === 'true';
+
 export default function CampaignsPage() {
-  const { user } = useAuth();
+  const { user, activeClient } = useAuth();
   const [campaigns, setCampaigns] = useState([]);
   const [agents, setAgents] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [includeArchived, setIncludeArchived] = useState(false);
+  const [includeDeleted, setIncludeDeleted] = useState(false);
   
   const [formData, setFormData] = useState({
     campaignId: '',
@@ -23,8 +27,11 @@ export default function CampaignsPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
+      const campaignParams = CAMPAIGN_LIFECYCLE_ENABLED
+        ? `?includeArchived=${includeArchived}&includeDeleted=${includeDeleted}`
+        : '';
       const [cRes, aRes] = await Promise.all([
-        fetch(`${API}/api/campaigns`),
+        fetch(`${API}/api/campaigns${campaignParams}`),
         fetch(`${API}/api/agents`)
       ]);
       if (cRes.ok) {
@@ -46,7 +53,7 @@ export default function CampaignsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [includeArchived, includeDeleted]);
 
   const handleCreate = async (e) => {
     e.preventDefault();
@@ -64,7 +71,14 @@ export default function CampaignsPage() {
       await fetch(`${API}/api/leads/upload`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ campaignId: formData.campaignId, leads })
+        body: JSON.stringify({
+          campaignId: formData.campaignId,
+          campaignName: formData.campaignId,
+          agentId: formData.agentId,
+          telephonyProvider: formData.telephonyProvider,
+          clientId: activeClient,
+          leads
+        })
       });
 
       // 2. Start Campaign
@@ -74,7 +88,8 @@ export default function CampaignsPage() {
         body: JSON.stringify({
           campaignId: formData.campaignId,
           agentId: formData.agentId,
-          telephonyProvider: formData.telephonyProvider
+          telephonyProvider: formData.telephonyProvider,
+          clientId: activeClient
         })
       });
 
@@ -91,6 +106,34 @@ export default function CampaignsPage() {
     }
   };
 
+  const handleLifecycleAction = async (campaign, action) => {
+    const labels = {
+      archive: 'archive',
+      restore: 'restore',
+      delete: 'soft delete'
+    };
+    if (!window.confirm(`Are you sure you want to ${labels[action]} this campaign?`)) return;
+    try {
+      const method = action === 'delete' ? 'DELETE' : 'POST';
+      const suffix = action === 'delete' ? '' : `/${action}`;
+      const res = await fetch(`${API}/api/campaigns/${campaign.id}${suffix}`, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          reason: action === 'delete' ? 'Archived from campaign dashboard' : undefined,
+          actorEmail: user?.email || undefined
+        })
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || 'Campaign update failed');
+      }
+      await fetchData();
+    } catch (err) {
+      alert(err.message || 'Campaign update failed');
+    }
+  };
+
   return (
     <DashboardLayout>
       <div className="d-flex justify-content-between align-items-center mb-4">
@@ -104,6 +147,19 @@ export default function CampaignsPage() {
           </button>
         )}
       </div>
+
+      {CAMPAIGN_LIFECYCLE_ENABLED && (
+        <div className="d-flex justify-content-end gap-3 mb-3 small">
+          <label className="d-flex align-items-center gap-2 text-muted">
+            <input type="checkbox" checked={includeArchived} onChange={e => setIncludeArchived(e.target.checked)} />
+            Show archived
+          </label>
+          <label className="d-flex align-items-center gap-2 text-muted">
+            <input type="checkbox" checked={includeDeleted} onChange={e => setIncludeDeleted(e.target.checked)} />
+            Show deleted
+          </label>
+        </div>
+      )}
       
       {loading ? (
         <div className="text-center py-5"><span className="spinner-border text-primary"></span></div>
@@ -121,23 +177,51 @@ export default function CampaignsPage() {
             <table className="table table-hover align-middle mb-0">
               <thead className="table-light text-muted small">
                 <tr>
-                  <th className="py-3 px-4">Campaign ID</th>
+                  <th className="py-3 px-4">Campaign</th>
                   <th className="py-3">Status</th>
                   <th className="py-3">Provider</th>
                   <th className="py-3">Agent</th>
+                  <th className="py-3 text-end">Leads</th>
                   <th className="py-3 text-end px-4">Created</th>
+                  {CAMPAIGN_LIFECYCLE_ENABLED && <th className="py-3 text-end px-4">Actions</th>}
                 </tr>
               </thead>
               <tbody>
                 {campaigns.map((c) => (
                   <tr key={c.id}>
-                    <td className="px-4 py-3 fw-medium">{c.id}</td>
+                    <td className="px-4 py-3">
+                      <div className="fw-medium">{c.name || c.id}</div>
+                      {c.name && <div className="text-muted small">{c.id}</div>}
+                    </td>
                     <td className="py-3">
                       <span className={`badge ${c.status === 'Active' ? 'bg-success' : 'bg-secondary'}`}>{c.status || 'Pending'}</span>
+                      {c.archived_at && <span className="badge bg-warning-subtle text-warning border ms-2">Archived</span>}
+                      {c.deleted_at && <span className="badge bg-danger-subtle text-danger border ms-2">Deleted</span>}
                     </td>
                     <td className="py-3"><span className="badge bg-light text-dark border">{getProviderLabel('telephony', c.telephony_provider || 'demo')}</span></td>
                     <td className="py-3 text-muted">{c.agent_id}</td>
+                    <td className="py-3 text-end fw-semibold">{c.lead_count ?? 0}</td>
                     <td className="py-3 px-4 text-end text-muted small">{new Date(c.created_at).toLocaleString()}</td>
+                    {CAMPAIGN_LIFECYCLE_ENABLED && (
+                      <td className="py-3 px-4 text-end">
+                        <div className="d-flex justify-content-end gap-2">
+                          {c.archived_at || c.deleted_at ? (
+                            <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => handleLifecycleAction(c, 'restore')}>
+                              Restore
+                            </button>
+                          ) : (
+                            <>
+                              <button type="button" className="btn btn-outline-secondary btn-sm" disabled={c.status === 'Active'} onClick={() => handleLifecycleAction(c, 'archive')}>
+                                Archive
+                              </button>
+                              <button type="button" className="btn btn-outline-danger btn-sm" disabled={c.status === 'Active'} onClick={() => handleLifecycleAction(c, 'delete')}>
+                                Delete
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

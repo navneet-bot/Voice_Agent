@@ -530,9 +530,31 @@ async def generate_response_for_turn(turn: TurnResult) -> str:
         logger.info("[SKIP LLM] Node changed, using template directly for %s", node_id)
 
     # ── Path 5: Template response (fast path) ────────────────────────────
+    if node_id == "fallback_location" and _is_location_suggestion_request(user_input):
+        return _location_suggestion_response(language)
+
     response = _resolve_template_response(node, context, language)
     logger.info("[TEMPLATE] %s: \"%s\"", node_id, (response or "")[:60])
     return _finalize_response(response) if response else ""
+
+
+def _is_location_suggestion_request(user_input: str) -> bool:
+    text = re.sub(r"[^\w\s]", " ", (user_input or "").lower())
+    text = re.sub(r"\s+", " ", text).strip()
+    hints = (
+        "suggest", "recommend", "which city", "which area", "best location",
+        "good location", "cities", "areas", "options", "offer me",
+        "can you offer", "what can you offer",
+    )
+    return any(hint in text for hint in hints)
+
+
+def _location_suggestion_response(language: str) -> str:
+    if language in ("hi", "hinglish"):
+        return "Aap Wakad, Baner, Hinjewadi, ya Kharadi consider kar sakte ho. Inmein se kaunsa area better lagega?"
+    if language == "mr":
+        return "Wakad, Baner, Hinjewadi, ani Kharadi changle options aahet. Tyapeki konta area jasta suit hoil?"
+    return "You can consider Wakad, Baner, Hinjewadi, or Kharadi. Which area sounds closest?"
 
 
 def _get_anti_repeat_nudge(node: dict[str, Any], language: str) -> str:

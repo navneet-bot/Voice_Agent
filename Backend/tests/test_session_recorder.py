@@ -44,6 +44,25 @@ class SessionRecorderTest(unittest.TestCase):
             self.assertGreater(np.abs(stereo[:, 0]).max(), 0)
             self.assertGreater(np.abs(stereo[:, 1]).max(), 0)
 
+    def test_ducks_user_channel_when_agent_audio_is_active(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = str(Path(tmpdir) / "call.wav")
+            recorder = SessionRecorder(sample_rate=24000)
+            user_echo = np.full(24000 // 5, 9000, dtype=np.int16).tobytes()
+            agent_audio = np.full(24000 // 5, 9000, dtype=np.int16).tobytes()
+            recorder.add_user_audio(user_echo, sample_rate=24000)
+            recorder.add_agent_audio(agent_audio, sample_rate=24000)
+
+            recorder.finalize(path)
+
+            with wave.open(path, "rb") as wf:
+                frames = wf.readframes(wf.getnframes())
+            stereo = np.frombuffer(frames, dtype=np.int16).reshape(-1, 2)
+            middle = stereo[1000:3000]
+
+            self.assertLess(np.abs(middle[:, 0]).mean(), 3000)
+            self.assertGreater(np.abs(middle[:, 1]).mean(), 10000)
+
     def test_recording_path_and_url_sanitizes_call_key(self):
         path, url = recording_path_and_url("rec twilio", "call/id:123", recordings_dir="recordings")
         self.assertTrue(path.endswith("rec_twilio_call_id_123.wav"))

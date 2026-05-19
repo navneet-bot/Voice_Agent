@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
+import FlowPreviewModal from '@/components/FlowPreviewModal';
 import { useAuth } from '@/context/AuthContext';
 import { getProviderLabel } from '@/lib/providerDisplay';
 
@@ -105,6 +106,12 @@ Summarize the student requirement and confirm the counselling follow-up.`
 };
 
 const DEFAULT_AGENT_TYPE = 'real_estate_sales';
+const FLOW_VISUALIZATION_ENABLED = process.env.NEXT_PUBLIC_FLOW_VISUALIZATION_ENABLED === 'true';
+const SCRAPE_GENERATE_SCRIPT_ENABLED = process.env.NEXT_PUBLIC_SCRAPE_GENERATE_SCRIPT_ENABLED === 'true';
+const SCRAPE_WORKER_V1_ENABLED = process.env.NEXT_PUBLIC_SCRAPE_WORKER_V1_ENABLED === 'true';
+const SCRAPE_POLL_INTERVAL_MS = 1500;
+const SCRAPE_POLL_ATTEMPTS = 12;
+const SCRAPE_REUSE_FINAL_STATUSES = ['completed', 'draft_ready'];
 const CARTESIA_FEMALE_VOICES = [
   {
     label: 'Hinglish Speaking Lady - Indian multilingual (recommended)',
@@ -168,6 +175,107 @@ const formDataFromAgent = (agent) => {
   });
 };
 
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function qualityClass(level) {
+  if (level === 'high') return 'bg-success-subtle text-success border-success-subtle';
+  if (level === 'medium') return 'bg-primary-subtle text-primary border-primary-subtle';
+  if (level === 'low') return 'bg-warning-subtle text-warning border-warning-subtle';
+  return 'bg-secondary-subtle text-secondary border-secondary-subtle';
+}
+
+function draftQuality(draft) {
+  return draft?.knowledge?.quality || null;
+}
+
+function sourceEvidenceFromKnowledge(knowledge) {
+  const values = [];
+  const add = (items) => {
+    (items || []).forEach((item) => {
+      if (typeof item === 'string') values.push(item);
+    });
+  };
+  if (knowledge?.source_url) values.push(knowledge.source_url);
+  add(knowledge?.company?.evidence);
+  (knowledge?.products_or_services || []).forEach((item) => add(item.evidence));
+  (knowledge?.value_propositions || []).forEach((item) => add(item.evidence));
+  (knowledge?.faqs || []).forEach((item) => add(item.evidence));
+  (knowledge?.pages_crawled || []).forEach((page) => {
+    if (page?.url) values.push(page.url);
+  });
+  return [...new Set(values.filter(Boolean))].slice(0, 6);
+}
+
+function contentInventoryItems(knowledge) {
+  const pageTypes = knowledge?.content_inventory?.page_types || {};
+  return Object.entries(pageTypes)
+    .filter(([, count]) => Number(count) > 0)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .slice(0, 8);
+}
+
+function guidanceSummary(knowledge) {
+  const questions = (knowledge?.qualification_questions || []).filter(Boolean).slice(0, 4);
+  const objections = (knowledge?.objections || [])
+    .filter((item) => item?.intent || item?.guidance)
+    .slice(0, 4);
+  const faqs = (knowledge?.faqs || [])
+    .filter((item) => item?.question)
+    .slice(0, 4);
+  return {
+    questions,
+    objections,
+    faqs,
+    hasItems: Boolean(questions.length || objections.length || faqs.length),
+  };
+}
+
+function ConversationGuidance({ knowledge }) {
+  const guidance = guidanceSummary(knowledge);
+  if (!guidance.hasItems) return null;
+
+  return (
+    <div className="border-top mt-3 pt-3 small">
+      <div className="text-muted mb-1">Conversation Guidance</div>
+      <div className="row g-2">
+        {guidance.questions.length > 0 && (
+          <div className="col-md-4">
+            <div className="fw-semibold mb-1">Qualification</div>
+            <ul className="mb-0 ps-3">
+              {guidance.questions.map((question, index) => (
+                <li key={`${question}-${index}`}>{question}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {guidance.objections.length > 0 && (
+          <div className="col-md-4">
+            <div className="fw-semibold mb-1">Objections</div>
+            <ul className="mb-0 ps-3">
+              {guidance.objections.map((item, index) => (
+                <li key={`${item.intent || 'objection'}-${index}`}>
+                  <span className="text-capitalize">{String(item.intent || 'objection').replaceAll('_', ' ')}</span>
+                  {item.guidance ? `: ${item.guidance}` : ''}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {guidance.faqs.length > 0 && (
+          <div className="col-md-4">
+            <div className="fw-semibold mb-1">FAQs</div>
+            <ul className="mb-0 ps-3">
+              {guidance.faqs.map((item, index) => (
+                <li key={`${item.question}-${index}`}>{item.question}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AgentsPage() {
   const { user } = useAuth();
   const [agents, setAgents] = useState([]);
@@ -175,6 +283,23 @@ export default function AgentsPage() {
   const [modalMode, setModalMode] = useState('create');
   const [editingAgentId, setEditingAgentId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [flowPreviewAgent, setFlowPreviewAgent] = useState(null);
+  const [flowPreview, setFlowPreview] = useState(null);
+  const [flowPreviewLoading, setFlowPreviewLoading] = useState(false);
+  const [flowPreviewError, setFlowPreviewError] = useState('');
+  const [flowPreviewReadOnly, setFlowPreviewReadOnly] = useState(false);
+  const [scrapeAgent, setScrapeAgent] = useState(null);
+  const [scrapeUrl, setScrapeUrl] = useState('');
+  const [scrapeJob, setScrapeJob] = useState(null);
+  const [scrapeDraft, setScrapeDraft] = useState(null);
+  const [scrapeDraftHistory, setScrapeDraftHistory] = useState([]);
+  const [scrapeHistoryLoading, setScrapeHistoryLoading] = useState(false);
+  const [scrapeStatus, setScrapeStatus] = useState('');
+  const [scrapeError, setScrapeError] = useState('');
+  const [scrapeLoading, setScrapeLoading] = useState(false);
+  const [scrapeApplyLoading, setScrapeApplyLoading] = useState(false);
+  const [scrapePreflightLoading, setScrapePreflightLoading] = useState(false);
+  const [scrapeApplyMessage, setScrapeApplyMessage] = useState('');
   
   const [formData, setFormData] = useState(makeInitialFormData);
 
@@ -222,6 +347,281 @@ export default function AgentsPage() {
     setShowModal(false);
     setEditingAgentId(null);
     setModalMode('create');
+  };
+
+  const closeFlowPreview = () => {
+    setFlowPreviewAgent(null);
+    setFlowPreview(null);
+    setFlowPreviewError('');
+    setFlowPreviewLoading(false);
+    setFlowPreviewReadOnly(false);
+  };
+
+  const openScrapeModal = (agent) => {
+    setScrapeAgent(agent);
+    setScrapeUrl('');
+    setScrapeJob(null);
+    setScrapeDraft(null);
+    setScrapeDraftHistory([]);
+    setScrapeHistoryLoading(false);
+    setScrapeStatus('');
+    setScrapeError('');
+    setScrapeApplyMessage('');
+    setScrapeApplyLoading(false);
+    setScrapePreflightLoading(false);
+    setScrapeLoading(false);
+    loadScrapeDraftHistory(agent);
+  };
+
+  const closeScrapeModal = () => {
+    if (scrapeLoading) return;
+    setScrapeAgent(null);
+    setScrapeUrl('');
+    setScrapeJob(null);
+    setScrapeDraft(null);
+    setScrapeDraftHistory([]);
+    setScrapeHistoryLoading(false);
+    setScrapeStatus('');
+    setScrapeError('');
+    setScrapeApplyMessage('');
+    setScrapeApplyLoading(false);
+    setScrapePreflightLoading(false);
+  };
+
+  const buildTenantHeaders = (json = false) => {
+    const headers = json ? { 'Content-Type': 'application/json' } : {};
+    if (user?.clientId) headers['X-Tenant-ID'] = user.clientId;
+    return headers;
+  };
+
+  const loadScrapeDraftHistory = async (agent) => {
+    if (!agent?.id || !SCRAPE_GENERATE_SCRIPT_ENABLED) return;
+    setScrapeHistoryLoading(true);
+    try {
+      const params = new URLSearchParams({ agentId: agent.id });
+      if (user?.clientId || agent.client_id) {
+        params.set('clientId', user?.clientId || agent.client_id);
+      }
+      const res = await fetch(`${API}/api/intelligence/script-drafts?${params.toString()}`, {
+        headers: buildTenantHeaders(),
+      });
+      if (!res.ok) return;
+      const body = await res.json();
+      setScrapeDraftHistory(Array.isArray(body.items) ? body.items : []);
+    } catch (err) {
+      console.error('Failed to load generated drafts', err);
+    } finally {
+      setScrapeHistoryLoading(false);
+    }
+  };
+
+  const openFlowPreview = async (agent) => {
+    setFlowPreviewAgent(agent);
+    setFlowPreview(null);
+    setFlowPreviewError('');
+    setFlowPreviewLoading(true);
+    setFlowPreviewReadOnly(false);
+    try {
+      const headers = user?.clientId ? { 'X-Tenant-ID': user.clientId } : {};
+      const res = await fetch(`${API}/api/agents/${agent.id}/flow-preview`, { headers });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.detail || 'Flow preview is unavailable');
+      }
+      setFlowPreview(await res.json());
+    } catch (err) {
+      setFlowPreviewError(err.message || 'Flow preview is unavailable');
+    } finally {
+      setFlowPreviewLoading(false);
+    }
+  };
+
+  const saveFlowDraft = async (draft) => {
+    if (!flowPreviewAgent) return;
+    const headers = { 'Content-Type': 'application/json' };
+    if (user?.clientId) headers['X-Tenant-ID'] = user.clientId;
+    const res = await fetch(`${API}/api/agents/${flowPreviewAgent.id}/flow-v2-draft`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify(draft)
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(body.detail || 'Flow save failed');
+    }
+    setFlowPreview(body);
+  };
+
+  const parseApiError = async (res, fallback) => {
+    const body = await res.json().catch(() => ({}));
+    return body.detail || fallback;
+  };
+
+  const pollScrapeJob = async (jobId) => {
+    let latest = null;
+    for (let attempt = 0; attempt < SCRAPE_POLL_ATTEMPTS; attempt += 1) {
+      await wait(SCRAPE_POLL_INTERVAL_MS);
+      const res = await fetch(`${API}/api/intelligence/scrape-jobs/${jobId}`, {
+        headers: buildTenantHeaders(),
+      });
+      if (!res.ok) break;
+      latest = await res.json();
+      setScrapeJob(latest);
+      setScrapeStatus(`Scrape ${latest.status || 'queued'}`);
+      if (['completed', 'failed', 'draft_ready', 'cancelled'].includes(latest.status)) break;
+    }
+    return latest;
+  };
+
+  const handleGenerateFromWebsite = async (event) => {
+    event.preventDefault();
+    if (!scrapeAgent || !scrapeUrl.trim()) return;
+    setScrapeLoading(true);
+    setScrapeError('');
+    setScrapeDraft(null);
+    setScrapeJob(null);
+    try {
+      setScrapeStatus('Creating scrape job');
+      const jobRes = await fetch(`${API}/api/intelligence/scrape-jobs`, {
+        method: 'POST',
+        headers: buildTenantHeaders(true),
+        body: JSON.stringify({
+          url: scrapeUrl.trim(),
+          agentId: scrapeAgent.id,
+          clientId: user?.clientId || scrapeAgent.client_id || null,
+          requestedBy: user?.email || '',
+          reuseExisting: true,
+        }),
+      });
+      if (!jobRes.ok) {
+        throw new Error(await parseApiError(jobRes, 'Scrape job could not be created'));
+      }
+      const job = await jobRes.json();
+      setScrapeJob(job);
+      const reusedJob = Boolean(job.cache?.reused);
+      if (reusedJob) {
+        setScrapeStatus(`Using cached ${job.status || 'queued'} scrape job`);
+      }
+
+      if (SCRAPE_WORKER_V1_ENABLED && !SCRAPE_REUSE_FINAL_STATUSES.includes(job.status)) {
+        setScrapeStatus('Dispatching scrape worker');
+        const dispatchRes = await fetch(`${API}/api/intelligence/scrape-jobs/${job.id}/dispatch`, {
+          method: 'POST',
+          headers: buildTenantHeaders(true),
+          body: JSON.stringify({
+            industryHint: scrapeAgent.agent_type || DEFAULT_AGENT_TYPE,
+            requestedBy: user?.email || '',
+          }),
+        });
+        if (!dispatchRes.ok) {
+          throw new Error(await parseApiError(dispatchRes, 'Scrape worker could not be dispatched'));
+        }
+        await dispatchRes.json().catch(() => ({}));
+        const latest = await pollScrapeJob(job.id);
+        if (latest?.status === 'failed') {
+          throw new Error(latest.error || 'Scrape worker failed');
+        }
+        if (latest?.status === 'cancelled') {
+          throw new Error(latest.error || 'Scrape job was cancelled');
+        }
+      }
+
+      setScrapeStatus('Creating draft');
+      const draftRes = await fetch(`${API}/api/intelligence/script-drafts`, {
+        method: 'POST',
+        headers: buildTenantHeaders(true),
+        body: JSON.stringify({
+          jobId: job.id,
+          agentId: scrapeAgent.id,
+          industryHint: scrapeAgent.agent_type || DEFAULT_AGENT_TYPE,
+        }),
+      });
+      if (!draftRes.ok) {
+        throw new Error(await parseApiError(draftRes, 'Script draft could not be created'));
+      }
+      const draft = await draftRes.json();
+      setScrapeDraft(draft);
+      setScrapeDraftHistory((items) => [
+        draft,
+        ...items.filter((item) => item.id !== draft.id),
+      ]);
+      setScrapeStatus('Draft ready');
+    } catch (err) {
+      setScrapeError(err.message || 'Website script generation failed');
+      setScrapeStatus('');
+    } finally {
+      setScrapeLoading(false);
+    }
+  };
+
+  const handleApplyGeneratedDraft = async (draftToApply = scrapeDraft) => {
+    if (!draftToApply || !scrapeAgent) return;
+    setScrapeApplyLoading(true);
+    setScrapeError('');
+    setScrapeApplyMessage('');
+    try {
+      const res = await fetch(`${API}/api/intelligence/script-drafts/${draftToApply.id}/apply-flow-draft`, {
+        method: 'POST',
+        headers: buildTenantHeaders(true),
+        body: JSON.stringify({
+          reviewAcknowledged: true,
+          reviewNotes: 'Saved from agents generate script review modal',
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(await parseApiError(res, 'Generated draft could not be applied'));
+      }
+      const preview = await res.json();
+      setScrapeApplyMessage('Review recorded. Draft saved to agent flow.');
+      setFlowPreviewAgent(scrapeAgent);
+      setFlowPreview(preview);
+      setFlowPreviewError('');
+      setFlowPreviewLoading(false);
+      setFlowPreviewReadOnly(false);
+      setScrapeAgent(null);
+      setScrapeUrl('');
+      setScrapeJob(null);
+      setScrapeDraft(null);
+      setScrapeStatus('');
+      setScrapeError('');
+    } catch (err) {
+      setScrapeError(err.message || 'Generated draft could not be applied');
+    } finally {
+      setScrapeApplyLoading(false);
+    }
+  };
+
+  const handlePreflightGeneratedDraft = async (draftToPreflight = scrapeDraft) => {
+    if (!draftToPreflight || !scrapeAgent || !FLOW_VISUALIZATION_ENABLED) return;
+    setScrapePreflightLoading(true);
+    setScrapeError('');
+    setScrapeApplyMessage('');
+    setFlowPreviewLoading(true);
+    setFlowPreviewError('');
+    try {
+      const res = await fetch(`${API}/api/intelligence/script-drafts/${draftToPreflight.id}/preflight-flow-draft`, {
+        method: 'POST',
+        headers: buildTenantHeaders(),
+      });
+      if (!res.ok) {
+        throw new Error(await parseApiError(res, 'Generated draft preflight failed'));
+      }
+      const preview = await res.json();
+      setFlowPreviewAgent({
+        ...scrapeAgent,
+        id: preview.agent?.id || scrapeAgent.id,
+        name: preview.agent?.name || scrapeAgent.name,
+      });
+      setFlowPreview(preview);
+      setFlowPreviewReadOnly(true);
+      setScrapeApplyMessage('Preflight passed. No flow draft was saved.');
+    } catch (err) {
+      setFlowPreviewError(err.message || 'Generated draft preflight failed');
+      setScrapeError(err.message || 'Generated draft preflight failed');
+    } finally {
+      setFlowPreviewLoading(false);
+      setScrapePreflightLoading(false);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -322,16 +722,280 @@ export default function AgentsPage() {
                 <div className="card-footer bg-white border-top py-3">
                   <div className="d-flex justify-content-between align-items-center gap-2">
                     <small className="text-muted">ID: {(agent.id || agent.agent_id || '').substring(0,8)}...</small>
-                    {user?.role === 'admin' && (
-                      <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => openEditModal(agent)}>
-                        Edit
-                      </button>
-                    )}
+                    <div className="d-flex gap-2">
+                      {FLOW_VISUALIZATION_ENABLED && (
+                        <button type="button" className="btn btn-outline-secondary btn-sm" onClick={() => openFlowPreview(agent)}>
+                          Flow
+                        </button>
+                      )}
+                      {SCRAPE_GENERATE_SCRIPT_ENABLED && user?.role === 'admin' && (
+                        <button type="button" className="btn btn-outline-success btn-sm" onClick={() => openScrapeModal(agent)}>
+                          Generate Script
+                        </button>
+                      )}
+                      {user?.role === 'admin' && (
+                        <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => openEditModal(agent)}>
+                          Edit
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {flowPreviewAgent && (
+        <FlowPreviewModal
+          agent={flowPreviewAgent}
+          preview={flowPreview}
+          loading={flowPreviewLoading}
+          error={flowPreviewError}
+          onClose={closeFlowPreview}
+          onSave={!flowPreviewReadOnly && user?.role === 'admin' ? saveFlowDraft : null}
+        />
+      )}
+
+      {scrapeAgent && (
+        <div className="modal show d-block" tabIndex="-1" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+          <div className="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+            <div className="modal-content border-0 shadow">
+              <div className="modal-header">
+                <div>
+                  <h5 className="modal-title fw-bold mb-1">Generate Script</h5>
+                  <div className="text-muted small">{scrapeAgent.name || 'Voice Agent'}</div>
+                </div>
+                <button type="button" className="btn-close shadow-none" onClick={closeScrapeModal} disabled={scrapeLoading}></button>
+              </div>
+              <div className="modal-body bg-light">
+                <form onSubmit={handleGenerateFromWebsite} className="border rounded bg-white p-3 mb-3">
+                  <div className="row g-3 align-items-end">
+                    <div className="col-md-8">
+                      <label className="form-label small fw-bold">Website URL</label>
+                      <input
+                        type="url"
+                        className="form-control"
+                        required
+                        value={scrapeUrl}
+                        onChange={(event) => setScrapeUrl(event.target.value)}
+                        placeholder="https://example.com"
+                        disabled={scrapeLoading}
+                      />
+                    </div>
+                    <div className="col-md-4">
+                      <button type="submit" className="btn btn-success w-100" disabled={scrapeLoading || !scrapeUrl.trim()}>
+                        {scrapeLoading ? 'Generating...' : 'Generate Draft'}
+                      </button>
+                    </div>
+                  </div>
+                </form>
+
+                {scrapeError && <div className="alert alert-warning">{scrapeError}</div>}
+                {scrapeApplyMessage && <div className="alert alert-success">{scrapeApplyMessage}</div>}
+
+                <div className="row g-3 mb-3">
+                  <div className="col-md-4">
+                    <div className="border rounded bg-white p-3 h-100">
+                      <div className="text-muted small">Job</div>
+                      <div className="fw-bold text-capitalize">{scrapeJob?.status || 'Not started'}</div>
+                    </div>
+                  </div>
+                  <div className="col-md-4">
+                    <div className="border rounded bg-white p-3 h-100">
+                      <div className="text-muted small">Worker</div>
+                      <div className="fw-bold">{SCRAPE_WORKER_V1_ENABLED ? 'Queued' : 'Draft-only'}</div>
+                    </div>
+                  </div>
+                  <div className="col-md-4">
+                    <div className="border rounded bg-white p-3 h-100">
+                      <div className="text-muted small">Status</div>
+                      <div className="fw-bold">{scrapeStatus || 'Ready'}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {scrapeDraft && (
+                  <div className="border rounded bg-white p-3">
+                    <div className="d-flex justify-content-between align-items-start gap-3 mb-3">
+                      <div>
+                        <div className="fw-bold">Generated Draft</div>
+                        <div className="text-muted small">ID: {(scrapeDraft.id || '').substring(0, 8)}...</div>
+                      </div>
+                      <span className="badge bg-warning-subtle text-warning border border-warning-subtle">Review Required</span>
+                    </div>
+                    <div className="row g-3">
+                      {draftQuality(scrapeDraft) && (
+                        <div className="col-12">
+                          <div className="d-flex align-items-center gap-2 flex-wrap">
+                            <span className={`badge border text-capitalize ${qualityClass(draftQuality(scrapeDraft).level)}`}>
+                              {draftQuality(scrapeDraft).level} readiness
+                            </span>
+                            <span className="small text-muted">Score {draftQuality(scrapeDraft).score}/100 - advisory only</span>
+                          </div>
+                        </div>
+                      )}
+                      <div className="col-md-6">
+                        <div className="small text-muted">Business</div>
+                        <div className="fw-semibold">{scrapeDraft.knowledge?.company?.name || scrapeDraft.knowledge?.domain || 'Unknown'}</div>
+                      </div>
+                      <div className="col-md-6">
+                        <div className="small text-muted">Industry</div>
+                        <div className="fw-semibold text-capitalize">{String(scrapeDraft.knowledge?.industry || 'unknown').replaceAll('_', ' ')}</div>
+                      </div>
+                      {contentInventoryItems(scrapeDraft.knowledge).length > 0 && (
+                        <div className="col-12">
+                          <div className="small text-muted mb-1">Content Inventory</div>
+                          <div className="d-flex flex-wrap gap-1">
+                            {contentInventoryItems(scrapeDraft.knowledge).map(([pageType, count]) => (
+                              <span key={pageType} className="badge bg-light text-dark border text-capitalize">
+                                {pageType.replaceAll('_', ' ')}: {count}
+                              </span>
+                            ))}
+                            {scrapeDraft.knowledge?.content_inventory?.noise_filtered && (
+                              <span className="badge bg-success-subtle text-success border border-success-subtle">Noise filtered</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      <div className="col-md-6">
+                        <div className="small text-muted mb-1">Services</div>
+                        <div className="d-flex flex-wrap gap-1">
+                          {(scrapeDraft.knowledge?.products_or_services || []).slice(0, 6).map((item, index) => (
+                            <span key={`${item.name}-${index}`} className="badge bg-light text-dark border">{item.name}</span>
+                          ))}
+                          {!scrapeDraft.knowledge?.products_or_services?.length && <span className="text-muted small">None</span>}
+                        </div>
+                      </div>
+                      <div className="col-md-6">
+                        <div className="small text-muted mb-1">Draft Flow</div>
+                        <div className="fw-semibold">
+                          {scrapeDraft.draft?.nodes?.length || 0} nodes / {scrapeDraft.draft?.runtime_mode || 'shadow'}
+                        </div>
+                      </div>
+                    </div>
+                    {draftQuality(scrapeDraft)?.warnings?.length ? (
+                      <div className="border-top mt-3 pt-3 small">
+                        <div className="text-muted mb-1">Review warnings</div>
+                        <ul className="mb-0 ps-3">
+                          {draftQuality(scrapeDraft).warnings.slice(0, 4).map((warning, index) => (
+                            <li key={`${warning}-${index}`}>{warning}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    <ConversationGuidance knowledge={scrapeDraft.knowledge} />
+                    {sourceEvidenceFromKnowledge(scrapeDraft.knowledge).length > 0 && (
+                      <div className="border-top mt-3 pt-3 small">
+                        <div className="text-muted mb-1">Source Evidence</div>
+                        <div className="d-flex flex-column gap-1">
+                          {sourceEvidenceFromKnowledge(scrapeDraft.knowledge).map((url) => (
+                            <a key={url} href={url} target="_blank" rel="noreferrer" className="text-truncate">
+                              {url}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="border-top mt-3 pt-3 d-flex justify-content-between align-items-center gap-3 flex-wrap">
+                      <div className="small text-muted">
+                        Applying saves a Flow V2 draft only. Live calls and published runtime stay unchanged.
+                      </div>
+                      <div className="d-flex gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-outline-secondary btn-sm"
+                          onClick={() => handlePreflightGeneratedDraft()}
+                          disabled={scrapePreflightLoading || scrapeApplyLoading || scrapeLoading || !FLOW_VISUALIZATION_ENABLED}
+                        >
+                          {scrapePreflightLoading ? 'Checking...' : 'Preflight'}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-outline-primary btn-sm"
+                          onClick={() => handleApplyGeneratedDraft()}
+                          disabled={scrapeApplyLoading || scrapePreflightLoading || scrapeLoading || !FLOW_VISUALIZATION_ENABLED}
+                        >
+                          {scrapeApplyLoading ? 'Saving Draft...' : 'Save to Flow Draft'}
+                        </button>
+                      </div>
+                    </div>
+                    {!FLOW_VISUALIZATION_ENABLED && (
+                      <div className="small text-muted mt-2">Enable flow visualization to review this draft in the flow editor.</div>
+                    )}
+                  </div>
+                )}
+
+                <div className="border rounded bg-white p-3 mt-3">
+                  <div className="d-flex justify-content-between align-items-center mb-3">
+                    <div>
+                      <div className="fw-bold">Previous Drafts</div>
+                      <div className="text-muted small">Generated website drafts for this agent.</div>
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-light border btn-sm"
+                      onClick={() => loadScrapeDraftHistory(scrapeAgent)}
+                      disabled={scrapeHistoryLoading || scrapeLoading}
+                    >
+                      {scrapeHistoryLoading ? 'Loading...' : 'Refresh'}
+                    </button>
+                  </div>
+                  {scrapeHistoryLoading ? (
+                    <div className="text-muted small">Loading drafts...</div>
+                  ) : scrapeDraftHistory.length === 0 ? (
+                    <div className="text-muted small">No previous generated drafts for this agent.</div>
+                  ) : (
+                    <div className="d-flex flex-column gap-2">
+                      {scrapeDraftHistory.map((draft) => (
+                        <div key={draft.id} className="border rounded p-2 d-flex justify-content-between align-items-center gap-3">
+                          <div className="small">
+                            <div className="fw-semibold">{draft.knowledge?.company?.name || draft.knowledge?.domain || 'Website Draft'}</div>
+                            <div className="text-muted">
+                              {String(draft.knowledge?.industry || 'unknown').replaceAll('_', ' ')}
+                              {' '} - {(draft.id || '').substring(0, 8)} - {draft.status || 'draft'}
+                            </div>
+                            {draftQuality(draft) && (
+                              <div className="mt-1">
+                                <span className={`badge border text-capitalize ${qualityClass(draftQuality(draft).level)}`}>
+                                  {draftQuality(draft).level} readiness
+                                </span>
+                              </div>
+                            )}
+                            {draft.reviewed_at && (
+                              <div className="text-success mt-1">Saved to Flow Draft {new Date(draft.reviewed_at).toLocaleString()}</div>
+                            )}
+                          </div>
+                          <div className="d-flex gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-outline-secondary btn-sm"
+                              onClick={() => handlePreflightGeneratedDraft(draft)}
+                              disabled={scrapePreflightLoading || scrapeApplyLoading || scrapeLoading || !FLOW_VISUALIZATION_ENABLED}
+                            >
+                              {scrapePreflightLoading ? 'Checking...' : 'Preflight'}
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-outline-primary btn-sm"
+                              onClick={() => handleApplyGeneratedDraft(draft)}
+                              disabled={scrapeApplyLoading || scrapePreflightLoading || scrapeLoading || !FLOW_VISUALIZATION_ENABLED}
+                            >
+                              Apply
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button type="button" className="btn btn-light border" onClick={closeScrapeModal} disabled={scrapeLoading}>Close</button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

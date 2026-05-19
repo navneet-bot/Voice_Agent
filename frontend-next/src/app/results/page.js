@@ -1,10 +1,25 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth } from '@/context/AuthContext';
 
-export default function CallResults() {
-  const { activeClient } = useAuth();
+export default function CallResultsPage() {
+  return (
+    <Suspense fallback={(
+      <DashboardLayout>
+        <div className="text-muted p-4">Loading results...</div>
+      </DashboardLayout>
+    )}>
+      <CallResults />
+    </Suspense>
+  );
+}
+
+function CallResults() {
+  const { activeClient, currentRole, user } = useAuth();
+  const searchParams = useSearchParams();
+  const requestedCampaign = searchParams.get('campaign') || '';
   const [campaigns, setCampaigns] = useState([]);
   const [selectedCampaign, setSelectedCampaign] = useState('');
   const [leads, setLeads] = useState([]);
@@ -17,18 +32,38 @@ export default function CallResults() {
 
   const isFinserv = activeClient === 'finserv';
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+  const resultClientId = currentRole === 'client' ? (user?.clientId || activeClient) : '';
+  const resultScopeQuery = resultClientId ? `?clientId=${encodeURIComponent(resultClientId)}` : '';
+
+  const recordingPlaybackUrl = (recordingUrl) => {
+    const params = new URLSearchParams();
+    params.set('recordingUrl', recordingUrl);
+    if (resultClientId) params.set('clientId', resultClientId);
+    return `${API}/api/recordings/protected?${params.toString()}`;
+  };
 
   // Step 1: Fetch all campaigns so user can pick one
   useEffect(() => {
-    fetch(`${API}/api/campaigns`)
+    const campaignParams = resultClientId ? `?clientId=${encodeURIComponent(resultClientId)}` : '';
+    fetch(`${API}/api/campaigns${campaignParams}`)
       .then(r => r.ok ? r.json() : [])
       .then(data => {
         const arr = Array.isArray(data) ? data : [];
         setCampaigns(arr);
-        if (arr.length > 0) setSelectedCampaign(arr[0].id);
+        if (arr.length > 0) {
+          const requested = requestedCampaign && arr.find(c => c.id === requestedCampaign);
+          setSelectedCampaign(prev => {
+            if (requested) return requested.id;
+            return prev && arr.some(c => c.id === prev) ? prev : arr[0].id;
+          });
+        } else {
+          setSelectedCampaign('');
+          setLeads([]);
+          setLoading(false);
+        }
       })
       .catch(console.error);
-  }, [API]);
+  }, [API, resultClientId, requestedCampaign]);
 
   // Step 2: Poll results for the selected campaign every 5s
   useEffect(() => {
@@ -37,7 +72,8 @@ export default function CallResults() {
 
     const fetchResults = async () => {
       try {
-        const res = await fetch(`${API}/api/campaigns/${selectedCampaign}/results`);
+        const campaignId = encodeURIComponent(selectedCampaign);
+        const res = await fetch(`${API}/api/campaigns/${campaignId}/results${resultScopeQuery}`);
         const json = await res.json();
         if (active) {
           setLeads(Array.isArray(json) ? json : []);
@@ -49,11 +85,12 @@ export default function CallResults() {
       }
     };
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     fetchResults();
     const int = setInterval(fetchResults, 5000);
     return () => { active = false; clearInterval(int); };
-  }, [selectedCampaign, API]);
+  }, [selectedCampaign, API, resultScopeQuery]);
 
   const toggleTranscript = async (leadId) => {
     if (expandedRow === leadId) { setExpandedRow(null); return; }
@@ -61,7 +98,8 @@ export default function CallResults() {
     if (!transcriptsCache[leadId]) {
       setLoadingTranscript(true);
       try {
-        const res = await fetch(`${API}/api/results/${leadId}/transcript`);
+        const transcriptId = encodeURIComponent(leadId);
+        const res = await fetch(`${API}/api/results/${transcriptId}/transcript${resultScopeQuery}`);
         const data = await res.json();
         setTranscriptsCache(prev => ({ ...prev, [leadId]: data }));
       } catch (e) {
@@ -239,7 +277,7 @@ export default function CallResults() {
                     <div className="d-flex align-items-center gap-2">
                       {l.has_recording ? (
                         <audio
-                          src={`${API}${l.recording_url}`}
+                          src={recordingPlaybackUrl(l.recording_url)}
                           controls
                           preload="metadata"
                           style={{ height: '32px', width: '180px' }}

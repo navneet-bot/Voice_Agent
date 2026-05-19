@@ -5,6 +5,9 @@ import { usePathname } from 'next/navigation';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
 
+const CRM_READINESS_UI_ENABLED = process.env.NEXT_PUBLIC_CRM_READINESS_UI_ENABLED === 'true';
+const SCRAPE_GENERATE_SCRIPT_ENABLED = process.env.NEXT_PUBLIC_SCRAPE_GENERATE_SCRIPT_ENABLED === 'true';
+
 export default function DashboardLayout({ children }) {
   const { currentRole, activeClient, setActiveClient, logout, user, loading } = useAuth();
   const pathname = usePathname();
@@ -25,15 +28,17 @@ export default function DashboardLayout({ children }) {
     { label: 'Live Monitor', path: '/monitor', icon: '📊' },
     { label: 'Campaigns', path: '/campaigns', icon: '🚀' },
     { label: 'Voice Agents', path: '/agents', icon: '🤖' },
+    ...(SCRAPE_GENERATE_SCRIPT_ENABLED ? [{ label: 'Intelligence', path: '/intelligence', icon: 'AI' }] : []),
     { label: 'Clients', path: '/clients', icon: '🏢' },
+    ...(CRM_READINESS_UI_ENABLED ? [{ label: 'CRM Readiness', path: '/crm-readiness', icon: 'CRM' }] : []),
+    { label: 'Telephony', path: '/numbers', icon: 'Tel' },
     { label: 'Call Logs & QA', path: '/logs', icon: '📞' }
   ];
 
   const clientMenu = [
     { label: 'Dashboard', path: '/client-dashboard', icon: '🏠' },
     { label: 'Demo Campaign', path: '/demo', icon: '🎬' },
-    { label: 'Call Results', path: '/results', icon: '📊' },
-    { label: 'My Phone Numbers', path: '/numbers', icon: '☎' }
+    { label: 'Call Results', path: '/results', icon: '📊' }
   ];
 
   const menu = currentRole === 'admin' ? adminMenu : clientMenu;

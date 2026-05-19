@@ -20,6 +20,8 @@ import random
 from datetime import datetime
 from pathlib import Path
 
+from platform_migration import feature_flags
+
 logger = logging.getLogger("demo_runner")
 
 # ── Demo timing config ───────────────────────────────────────────────────────
@@ -211,11 +213,14 @@ class DemoCallEngine:
             await self.db.set_campaign_status(campaign_id, "Done")
 
         if self.ws_manager:
-            await self.ws_manager.broadcast_all({
+            completion_message = {
                 "type": "campaign_completed",
                 "campaignId": campaign_id,
                 "message": "Demo campaign completed successfully.",
-            })
+            }
+            await self.ws_manager.broadcast_all(completion_message)
+            if feature_flags.is_enabled("ws.scoped_events") and client_id and client_id != "global":
+                await self.ws_manager.broadcast_to_client(client_id, completion_message)
 
     # ── Internal Helpers ──────────────────────────────────────────────────────
 

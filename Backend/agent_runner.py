@@ -18,6 +18,8 @@ import random
 from datetime import datetime
 from typing import Optional
 
+from platform_migration import feature_flags
+
 logger = logging.getLogger("agent_runner")
 
 DB_DIR     = "db"
@@ -116,8 +118,13 @@ async def run_campaign(
 
         # ── Initiate real call if provider configured ──────────────────────
         if provider and phone:
-            phone_numbers = await db.list_phone_numbers()
-            from_number = next((n["phone"] for n in phone_numbers if n.get("client_id")), None)
+            assigned_number = await db.get_phone_number_for_campaign(
+                client_id=client_id,
+                agent_id=agent_id,
+                campaign_id=campaign_id,
+                provider=telephony_provider,
+            )
+            from_number = assigned_number.get("phone") if assigned_number else None
             if from_number:
                 webhook_base = os.getenv("WEBHOOK_BASE_URL", "http://localhost:3000")
                 call_result = await provider.initiate_call(phone, from_number, lead_uid, webhook_base)
@@ -130,6 +137,13 @@ async def run_campaign(
                 )
                 await asyncio.sleep(2)  # Non-blocking wait
                 continue
+            logger.warning(
+                "Campaign %s: no tenant-scoped from-number for client=%s agent=%s provider=%s; using simulation path",
+                campaign_id,
+                client_id,
+                agent_id,
+                telephony_provider,
+            )
 
         # ── Simulation path (demo / no provider configured) ────────────────
         await asyncio.sleep(random.uniform(1.0, 2.5))  # Realistic ring delay
@@ -233,9 +247,12 @@ async def run_campaign(
 
     # ── Campaign complete ──────────────────────────────────────────────────────
     await db.set_campaign_status(campaign_id, "Done")
-    await ws_manager.broadcast_all({
+    completion_message = {
         "type": "campaign_completed",
         "campaignId": campaign_id,
         "message": f"Campaign {campaign_id} completed.",
-    })
+    }
+    await ws_manager.broadcast_all(completion_message)
+    if feature_flags.is_enabled("ws.scoped_events") and client_id and client_id != "global":
+        await ws_manager.broadcast_to_client(client_id, completion_message)
     logger.info("Campaign %s DONE.", campaign_id)

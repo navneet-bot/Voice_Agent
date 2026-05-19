@@ -1,9 +1,37 @@
 'use client';
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
+import { useAuth } from '@/context/AuthContext';
 import { formatProviderMetricKey, getProviderLabel } from '@/lib/providerDisplay';
 
+const MONITOR_AUTH_PROOF_ENABLED = process.env.NEXT_PUBLIC_MONITOR_AUTH_PROOF_ENABLED === 'true';
+const DEMO_RUNTIME_QA_READINESS_ENABLED = process.env.NEXT_PUBLIC_DEMO_RUNTIME_QA_READINESS_ENABLED === 'true';
+
+async function getAdminIdToken(firebaseUser, currentRole) {
+  if (currentRole !== 'admin' || !firebaseUser || typeof firebaseUser.getIdToken !== 'function') return null;
+  try {
+    return await firebaseUser.getIdToken();
+  } catch (error) {
+    console.error('Monitor auth token unavailable', error);
+    return null;
+  }
+}
+
+function adminAuthHeaders(token) {
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function monitorWsUrl(apiBase, token) {
+  const base = apiBase.replace(/^https/, 'wss').replace(/^http/, 'ws').replace(/\/$/, '');
+  const url = new URL(`${base}/ws/dashboard`);
+  if (MONITOR_AUTH_PROOF_ENABLED && token) {
+    url.searchParams.set('access_token', token);
+  }
+  return url.toString();
+}
+
 export default function AdminMonitor() {
+  const { currentRole, loading, firebaseUser } = useAuth();
   const [metrics, setMetrics] = useState({
     totalCalls: 0,
     activeAgents: 0,
@@ -12,74 +40,97 @@ export default function AdminMonitor() {
   });
   const [liveCalls, setLiveCalls] = useState({});
   const [providerMetrics, setProviderMetrics] = useState({});
+  const [demoQa, setDemoQa] = useState(null);
+  const [demoQaLoading, setDemoQaLoading] = useState(false);
   const wsRef = useRef(null);
 
   useEffect(() => {
-    // Connect to global dashboard WebSocket over configured API URL
+    if (loading || currentRole !== 'admin') return undefined;
+
+    let cancelled = false;
     const API = process.env.NEXT_PUBLIC_API_URL || `http://localhost:8000`;
-    const wsUrl = `${API.replace(/^https/, 'wss').replace(/^http/, 'ws').replace(/\/$/, '')}/ws/dashboard`;
-    wsRef.current = new WebSocket(wsUrl);
 
-    wsRef.current.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'dashboard_update') {
-          // Full snapshot
-          const callsMap = {};
-          let activeCnt = 0;
-          let connectedCnt = 0;
+    const connectMonitorSocket = async () => {
+      const token = await getAdminIdToken(firebaseUser, currentRole);
+      if (cancelled) return;
 
-          msg.calls.forEach(call => {
-            callsMap[call.lead_id] = call;
-            if (['ringing', 'connected', 'talking'].includes(call.status)) activeCnt++;
-            if (['connected', 'talking'].includes(call.status)) connectedCnt++;
-          });
+      const socket = new WebSocket(monitorWsUrl(API, token));
+      wsRef.current = socket;
 
-          setLiveCalls(callsMap);
-          setMetrics({
-            totalCalls: msg.calls.length,
-            activeAgents: activeCnt,
-            connectRate: msg.calls.length > 0 ? Math.round((connectedCnt / msg.calls.length) * 100) : 0,
-            sysLoad: 'Normal'
-          });
-        } else if (msg.type?.startsWith('call_')) {
-          // Delta update
-          setLiveCalls(prev => {
-            const up = { ...prev };
-            if (!up[msg.leadId]) up[msg.leadId] = { lead_id: msg.leadId };
-            
-            up[msg.leadId].status = msg.type.replace('call_', '');
-            up[msg.leadId].lead_name = msg.leadName || up[msg.leadId].lead_name;
-            up[msg.leadId].provider = msg.provider || up[msg.leadId].provider;
-            
-            if (msg.type === 'call_talking') {
-              up[msg.leadId].last_snippet = msg.snippet;
-            }
-            if (msg.type === 'call_completed') {
-              up[msg.leadId].result = msg.result;
-            }
-            return up;
-          });
+      socket.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'dashboard_update') {
+            const callsMap = {};
+            let activeCnt = 0;
+            let connectedCnt = 0;
+
+            msg.calls.forEach(call => {
+              callsMap[call.lead_id] = call;
+              if (['ringing', 'connected', 'talking'].includes(call.status)) activeCnt++;
+              if (['connected', 'talking'].includes(call.status)) connectedCnt++;
+            });
+
+            setLiveCalls(callsMap);
+            setMetrics({
+              totalCalls: msg.calls.length,
+              activeAgents: activeCnt,
+              connectRate: msg.calls.length > 0 ? Math.round((connectedCnt / msg.calls.length) * 100) : 0,
+              sysLoad: 'Normal'
+            });
+          } else if (msg.type?.startsWith('call_')) {
+            setLiveCalls(prev => {
+              const up = { ...prev };
+              if (!up[msg.leadId]) up[msg.leadId] = { lead_id: msg.leadId };
+
+              up[msg.leadId].status = msg.type.replace('call_', '');
+              up[msg.leadId].lead_name = msg.leadName || up[msg.leadId].lead_name;
+              up[msg.leadId].provider = msg.provider || up[msg.leadId].provider;
+
+              if (msg.type === 'call_talking') {
+                up[msg.leadId].last_snippet = msg.snippet;
+              }
+              if (msg.type === 'call_completed') {
+                up[msg.leadId].result = msg.result;
+              }
+              return up;
+            });
+          }
+        } catch (e) {
+          console.error("Dashboard WS parse error", e);
         }
-      } catch (e) {
-        console.error("Dashboard WS parse error", e);
-      }
+      };
+
+      socket.onclose = (event) => {
+        if (event.code === 1008) {
+          console.error('Dashboard WS closed by authorization policy');
+        }
+      };
     };
+
+    connectMonitorSocket();
 
     return () => {
-      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      cancelled = true;
+      if (wsRef.current && [WebSocket.CONNECTING, WebSocket.OPEN].includes(wsRef.current.readyState)) {
         wsRef.current.close();
       }
+      wsRef.current = null;
     };
-  }, []);
+  }, [currentRole, loading, firebaseUser]);
 
   useEffect(() => {
+    if (loading || currentRole !== 'admin') return undefined;
+
     const API = process.env.NEXT_PUBLIC_API_URL || `http://localhost:8000`;
     let cancelled = false;
 
     const fetchProviderMetrics = async () => {
       try {
-        const res = await fetch(`${API}/api/provider-metrics`);
+        const token = await getAdminIdToken(firebaseUser, currentRole);
+        const res = await fetch(`${API}/api/provider-metrics`, {
+          headers: adminAuthHeaders(token),
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) setProviderMetrics(data.metrics || {});
@@ -94,7 +145,52 @@ export default function AdminMonitor() {
       cancelled = true;
       clearInterval(interval);
     };
-  }, []);
+  }, [currentRole, loading, firebaseUser]);
+
+  const fetchDemoQaReadiness = useCallback(async () => {
+    if (!DEMO_RUNTIME_QA_READINESS_ENABLED || currentRole !== 'admin') return;
+
+    const API = process.env.NEXT_PUBLIC_API_URL || `http://localhost:8000`;
+    setDemoQaLoading(true);
+    try {
+      const token = await getAdminIdToken(firebaseUser, currentRole);
+      const res = await fetch(`${API}/api/demo/qa/readiness`, {
+        headers: adminAuthHeaders(token),
+      });
+      if (!res.ok) {
+        setDemoQa({
+          status: 'disabled',
+          blockers: [`HTTP ${res.status}`],
+          criteria: [],
+        });
+        return;
+      }
+      const data = await res.json();
+      setDemoQa(data);
+    } catch (e) {
+      console.error('Demo QA readiness fetch error', e);
+      setDemoQa({
+        status: 'unavailable',
+        blockers: ['request_failed'],
+        criteria: [],
+      });
+    } finally {
+      setDemoQaLoading(false);
+    }
+  }, [currentRole, firebaseUser]);
+
+  useEffect(() => {
+    if (loading || currentRole !== 'admin' || !DEMO_RUNTIME_QA_READINESS_ENABLED) return undefined;
+
+    let cancelled = false;
+    const load = async () => {
+      if (!cancelled) await fetchDemoQaReadiness();
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRole, loading, firebaseUser, fetchDemoQaReadiness]);
 
   const getStatusBadge = (status) => {
     switch (status) {
@@ -105,6 +201,19 @@ export default function AdminMonitor() {
       default: return <span className="badge bg-light text-dark">{status}</span>;
     }
   };
+
+  if (!loading && currentRole !== 'admin') {
+    return (
+      <DashboardLayout>
+        <div className="card border-0 shadow-sm">
+          <div className="card-body p-4">
+            <h2 className="h5 fw-bold mb-2">Admin Access Required</h2>
+            <p className="text-muted mb-0">Live Monitor is available only to platform admins.</p>
+          </div>
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -155,6 +264,65 @@ export default function AdminMonitor() {
           </div>
         </div>
       </div>
+
+      {DEMO_RUNTIME_QA_READINESS_ENABLED && (
+        <div className="card border-0 shadow-sm mb-4">
+          <div className="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 className="mb-0 fw-bold">Demo Call QA</h6>
+              <div className="small text-muted">Latency, intent, fallback, and recording readiness</div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm btn-outline-primary"
+              onClick={fetchDemoQaReadiness}
+              disabled={demoQaLoading}
+            >
+              {demoQaLoading ? 'Checking...' : 'Check now'}
+            </button>
+          </div>
+          <div className="card-body">
+            {!demoQa ? (
+              <p className="text-muted small mb-0">No dry-run snapshot loaded yet.</p>
+            ) : (
+              <>
+                <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+                  <span className={`badge ${demoQa.status === 'ready' ? 'bg-success' : 'bg-warning text-dark'}`}>
+                    {demoQa.status}
+                  </span>
+                  <span className="small text-muted">Mode: {demoQa.mode || 'read_only'}</span>
+                  {demoQa.audio_contract_changed === false && (
+                    <span className="badge bg-light text-dark border">Audio contract unchanged</span>
+                  )}
+                  {demoQa.websocket_contract_changed === false && (
+                    <span className="badge bg-light text-dark border">Websocket contract unchanged</span>
+                  )}
+                </div>
+                {demoQa.blockers?.length > 0 && (
+                  <div className="alert alert-warning py-2 small mb-3">
+                    Blockers: {demoQa.blockers.join(', ')}
+                  </div>
+                )}
+                <div className="row g-2">
+                  {(demoQa.criteria || []).map((item) => (
+                    <div key={item.key} className="col-md-4">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="d-flex justify-content-between gap-2">
+                          <div className="fw-semibold small">{item.label}</div>
+                          <span className={`badge ${item.passed ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger'}`}>
+                            {item.passed ? 'Pass' : 'Review'}
+                          </span>
+                        </div>
+                        {item.detail && <div className="small text-muted mt-2">{item.detail}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="card border-0 shadow-sm mb-4">
         <div className="card-header bg-white border-bottom py-3">

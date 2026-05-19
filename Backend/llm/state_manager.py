@@ -131,6 +131,16 @@ MAX_FALLBACK_ATTEMPTS = 2
 LOCATION_SUGGESTION_PHRASES = (
     "suggest",
     "recommend",
+    "city",
+    "cities",
+    "area",
+    "areas",
+    "options",
+    "available",
+    "availability",
+    "offer me",
+    "can you offer",
+    "what can you offer",
     "which area",
     "best location",
     "good location",
@@ -485,6 +495,36 @@ def _is_actionable(text: str) -> bool:
     if not any(c.isalpha() for c in t):
         return False
     return True
+
+
+def _has_availability_confirmation(text: str) -> bool:
+    cleaned = re.sub(r"[^\w\s]", " ", (text or "").lower())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return False
+    words = set(cleaned.split())
+    exact_confirmations = {
+        "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "fine",
+        "haan", "han", "ji", "theek", "bilkul",
+    }
+    if words & exact_confirmations:
+        return True
+    confirmation_phrases = (
+        "go ahead",
+        "tell me",
+        "go on",
+        "continue",
+        "i have time",
+        "have time",
+        "i am free",
+        "i'm free",
+        "free now",
+        "i am listening",
+        "i'm listening",
+        "have two minutes",
+        "two minutes",
+    )
+    return any(phrase in cleaned for phrase in confirmation_phrases)
 
 
 def _detect_user_question(user_text: str) -> str | None:
@@ -984,6 +1024,24 @@ class StateManager:
         # ── User is asking a meta-question → stay on current node ────────
         user_question = _detect_user_question(user_text)
         if user_question:
+            if (
+                current_node.get("id") == "node-1735264873079"
+                and user_question in {"purpose", "identity", "confusion"}
+                and _has_availability_confirmation(user_text)
+            ):
+                next_node = self.nodes.get("node-1735264921453")
+                if next_node:
+                    _log("STATE", f"{current_node['id']} -> {next_node['id']} (availability confirmed with question)")
+                    self.current_node_id = next_node["id"]
+                    self.visited_nodes.add(next_node["id"])
+                    self._last_node_id = self.current_node_id
+                    self._record_asked(next_node["id"])
+                    return self._build_turn_result(
+                        next_node,
+                        user_input=user_text,
+                        user_question=user_question,
+                        node_changed=True,
+                    )
             _log("STATE", f"{current_node['id']} unchanged (user question: {user_question})")
             self._last_node_id = self.current_node_id
             return self._build_turn_result(
@@ -1046,6 +1104,8 @@ class StateManager:
         intent = self._normalize_intent_for_context(current_node, intent, entities, user_text)
         if intent != raw_intent:
             _log("INTENT NORMALIZED", f"{raw_intent} -> {intent}")
+            if intent == "ask_location_suggestion":
+                raw_intent = intent
 
         if intent in {"confirm", "deny"}:
             entities = {"confirmation": entities.get("confirmation")}
@@ -1106,6 +1166,9 @@ class StateManager:
             if is_collecting:
                 _log("LOOP PREVENTION", f"Holding at {current_node['id']} because entities are missing: {missing}")
                 self._same_node_count = 0
+            elif current_node.get("id") == "fallback_location" and intent == "ask_location_suggestion":
+                _log("LOOP PREVENTION", "Holding on location suggestion fallback")
+                self._same_node_count = 0
             else:
                 self._same_node_count = getattr(self, "_same_node_count", 0) + 1
                 if self._same_node_count >= 1:
@@ -1117,6 +1180,7 @@ class StateManager:
                         end_node = self.nodes.get("node-1736492520068")
                         if end_node:
                             next_node = end_node
+                    node_changed = next_node.get("id") != current_node.get("id")
                     self._same_node_count = 0
         else:
             self._same_node_count = 0
@@ -1597,6 +1661,11 @@ class StateManager:
         if asks_call_purpose:
             return intent
 
+        if node_id in {"node-1735267546732", "fallback_location", "fallback_budget"}:
+            if self._is_location_suggestion(clean_text, current_node):
+                _log("INTENT NORMALIZED", "Location suggestion requested -> ask_location_suggestion")
+                return "ask_location_suggestion"
+
         # ── buyer_requirements_ready: auto-transition when both location+budget collected ──
         if node_id == "node-1735267546732":
             loc_ready = self.conversation_data.get("location") or entities.get("location")
@@ -1868,23 +1937,30 @@ class StateManager:
                 _log("INTENT NORMALIZED", "No budget preference detected -> unclear_budget")
                 return "unclear_budget"
 
+        # Prevent unclear stalls at opening/availability:
+        # busy -> callback path, interested -> continue, neutral -> clarify/re-engage.
+        if node_id == "node-1735264873079":
+            if has_negative:
+                return "deny_time"
+            if has_goodbye:
+                return "deny_time"
+            if has_affirmative or intent == "confirm_availability":
+                return "confirm"
+            if any(hint in clean_text for hint in INTERESTED_HINTS):
+                return "confirm"
+            if any(hint in clean_text for hint in NOT_INTERESTED_HINTS):
+                return "deny_time"
+            if any(hint in clean_text for hint in BUSY_TIME_HINTS):
+                return "deny_time"
+            if intent.startswith("unclear") or intent == "ask_off_topic":
+                return "unclear"
+
         if has_negative:
             return "deny"
         if has_goodbye:
             return "deny_interest"
         if has_affirmative:
             return "confirm"
-
-        # Prevent unclear stalls at opening/availability:
-        # busy -> callback path, interested -> continue, neutral -> clarify/re-engage.
-        if (intent.startswith("unclear") or intent == "ask_off_topic") and node_id == "node-1735264873079":
-            if any(hint in clean_text for hint in BUSY_TIME_HINTS):
-                return "deny_time"
-            if any(hint in clean_text for hint in NOT_INTERESTED_HINTS):
-                return "deny_time"
-            if any(hint in clean_text for hint in INTERESTED_HINTS):
-                return "confirm_identity"
-            return "unclear"
 
         if intent.startswith("unclear") or intent == "ask_off_topic":
             if current_node["id"] in ("node-1735265209472", "node-1736567518748", "node-1736492485610"):

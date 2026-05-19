@@ -210,6 +210,21 @@ class RealEstateLLMProcessor(FrameProcessor):
         user_analysis = analyze_user_text(user_text, fallback=self.current_language)
         if user_analysis.actionable and user_analysis.cleaned_text:
             user_text = user_analysis.cleaned_text
+        last_assistant = next(
+            (
+                item.get("content", "")
+                for item in reversed(self.history)
+                if item.get("role") == "assistant"
+            ),
+            "",
+        )
+        current_node = self.state_manager.get_current_node() if self.state_manager else None
+        current_prompt = ""
+        if isinstance(current_node, dict):
+            current_prompt = str(current_node.get("response") or "")
+        if _is_likely_agent_echo(user_text, last_assistant, current_prompt):
+            logger.info("[PIPELINE] LLM -> Dropping likely agent echo transcript: %s", user_text)
+            return
 
         # 1. INCREMENT GEN_ID on every non-empty user turn that reaches LLM
         self._current_gen_id += 1
@@ -288,17 +303,19 @@ class RealEstateSTTProcessor(FrameProcessor):
         super().__init__()
         self.agent_id = agent_id or "default"
         self.audio_buffer = bytearray()
+        effective_max_ms = max(stt_cfg.MAX_CHUNK_MS, 2500)
+        effective_trailing_ms = max(stt_cfg.TRAILING_SILENCE_MS, 650)
         self.min_chunk_bytes = _ms_to_bytes(stt_cfg.MIN_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
-        # Keep larger chunks so sentences are finalized after a real pause, not mid-thought.
-        self.max_chunk_bytes = _ms_to_bytes(max(stt_cfg.MAX_CHUNK_MS, 5000), stt_cfg.TARGET_SAMPLE_RATE)
-        self.trailing_window_bytes = _ms_to_bytes(max(stt_cfg.TRAILING_SILENCE_MS, 1200), stt_cfg.TARGET_SAMPLE_RATE)
+        # Keep phrase-level chunks, but do not wait over a second after the user stops speaking.
+        self.max_chunk_bytes = _ms_to_bytes(effective_max_ms, stt_cfg.TARGET_SAMPLE_RATE)
+        self.trailing_window_bytes = _ms_to_bytes(effective_trailing_ms, stt_cfg.TARGET_SAMPLE_RATE)
         self.last_emitted_text = ""
         self.last_emit_at = 0.0
         self.is_speaking = False
         self._voice_hits = 0
         self._voiced_ms = 0.0
         self._last_voice_at = 0.0
-        self._speech_end_silence_ms = float(max(stt_cfg.TRAILING_SILENCE_MS, 1200))
+        self._speech_end_silence_ms = float(effective_trailing_ms)
         self._barge_in_min_ms = 550.0
         self._barge_in_sent = False
         self._cooldown_until = 0.0
@@ -698,6 +715,24 @@ def _is_duplicate_text(current: str, previous: str) -> bool:
     if current_norm in previous_norm or previous_norm in current_norm:
         return True
     return SequenceMatcher(None, current_norm, previous_norm).ratio() >= 0.88
+
+
+def _is_likely_agent_echo(transcript: str, last_reply: str, current_prompt: str = "") -> bool:
+    transcript_norm = _normalize_text(transcript)
+    if not transcript_norm:
+        return False
+    words = transcript_norm.split()
+    if len(words) < 4:
+        return False
+    for candidate in (last_reply, current_prompt):
+        candidate_norm = _normalize_text(candidate)
+        if not candidate_norm:
+            continue
+        if transcript_norm in candidate_norm:
+            return True
+        if SequenceMatcher(None, transcript_norm, candidate_norm).ratio() >= 0.86:
+            return True
+    return False
 
 
 def _is_actionable_transcript(text: str) -> bool:
