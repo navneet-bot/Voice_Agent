@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { getProviderLabel } from '@/lib/providerDisplay';
 
 const API = process.env.NEXT_PUBLIC_API_URL || '';
+const TELEPHONY_LIVE_QA_READINESS_ENABLED = process.env.NEXT_PUBLIC_TELEPHONY_LIVE_QA_READINESS_ENABLED === 'true';
 
 function normalizeSearchResult(number, fallbackProvider) {
   const phone = number.phone || number.phone_number || '';
@@ -33,6 +34,8 @@ export default function MyNumbers() {
   const [searching, setSearching] = useState(false);
   const [busyKey, setBusyKey] = useState('');
   const [routeDrafts, setRouteDrafts] = useState({});
+  const [liveQa, setLiveQa] = useState(null);
+  const [liveQaLoading, setLiveQaLoading] = useState(false);
   const [notice, setNotice] = useState(null);
 
   const providerOptions = useMemo(() => {
@@ -124,6 +127,41 @@ export default function MyNumbers() {
     }
   };
 
+  const handleLiveQa = async (includeProviderProbe = false) => {
+    if (!TELEPHONY_LIVE_QA_READINESS_ENABLED || user?.role !== 'admin') return;
+    setLiveQaLoading(true);
+    setNotice(null);
+    try {
+      const params = new URLSearchParams({
+        provider: searchProvider,
+        countryCode: searchCountry,
+        includeProviderProbe: includeProviderProbe ? 'true' : 'false',
+      });
+      if (activeClient) params.set('clientId', activeClient);
+      const res = await fetch(`${API}/api/telephony/live-qa/readiness?${params.toString()}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setLiveQa({
+          status: 'disabled',
+          blockers: [json.detail || `HTTP ${res.status}`],
+          criteria: [],
+          summary: {},
+        });
+        return;
+      }
+      setLiveQa(json);
+    } catch (e) {
+      setLiveQa({
+        status: 'unavailable',
+        blockers: ['request_failed'],
+        criteria: [],
+        summary: {},
+      });
+    } finally {
+      setLiveQaLoading(false);
+    }
+  };
+
   const handleBuy = async (number) => {
     const phone = number.phone || number.phone_number;
     if (!phone || !activeClient) return;
@@ -212,6 +250,78 @@ export default function MyNumbers() {
       {notice && (
         <div className={`alert alert-${notice.type} py-2 small`} role="status">
           {notice.text}
+        </div>
+      )}
+
+      {TELEPHONY_LIVE_QA_READINESS_ENABLED && (
+        <div className="card border-0 shadow-sm mb-4">
+          <div className="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center gap-3 flex-wrap">
+            <div>
+              <h6 className="mb-0 fw-bold">Telephony Live QA</h6>
+              <div className="small text-muted">Provider setup, tenant routes, and webhook readiness</div>
+            </div>
+            <div className="d-flex gap-2">
+              <button
+                type="button"
+                className="btn btn-sm btn-outline-primary"
+                onClick={() => handleLiveQa(false)}
+                disabled={liveQaLoading}
+              >
+                {liveQaLoading ? 'Checking...' : 'Check readiness'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => handleLiveQa(true)}
+                disabled={liveQaLoading}
+              >
+                Live provider probe
+              </button>
+            </div>
+          </div>
+          <div className="card-body">
+            {!liveQa ? (
+              <p className="text-muted small mb-0">No telephony preflight loaded yet.</p>
+            ) : (
+              <>
+                <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+                  <span className={`badge ${liveQa.status === 'ready' ? 'bg-success' : 'bg-warning text-dark'}`}>
+                    {liveQa.status}
+                  </span>
+                  <span className="small text-muted">Provider: {getProviderLabel('telephony', liveQa.provider || searchProvider)}</span>
+                  {liveQa.outbound_calls_started === false && (
+                    <span className="badge bg-light text-dark border">No calls started</span>
+                  )}
+                  {liveQa.numbers_purchased === false && (
+                    <span className="badge bg-light text-dark border">No numbers purchased</span>
+                  )}
+                  {liveQa.tenant_routes_modified === false && (
+                    <span className="badge bg-light text-dark border">Routes unchanged</span>
+                  )}
+                </div>
+                {liveQa.blockers?.length > 0 && (
+                  <div className="alert alert-warning py-2 small mb-3">
+                    Blockers: {liveQa.blockers.join(', ')}
+                  </div>
+                )}
+                <div className="row g-2">
+                  {(liveQa.criteria || []).map((item) => (
+                    <div key={item.key} className="col-md-4">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="d-flex justify-content-between gap-2">
+                          <div className="fw-semibold small">{item.label}</div>
+                          <span className={`badge ${item.passed ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger'}`}>
+                            {item.passed ? 'Pass' : item.required ? 'Blocker' : 'Review'}
+                          </span>
+                        </div>
+                        {item.detail && <div className="small text-muted mt-2">{item.detail}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 

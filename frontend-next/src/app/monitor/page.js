@@ -6,6 +6,8 @@ import { formatProviderMetricKey, getProviderLabel } from '@/lib/providerDisplay
 
 const MONITOR_AUTH_PROOF_ENABLED = process.env.NEXT_PUBLIC_MONITOR_AUTH_PROOF_ENABLED === 'true';
 const DEMO_RUNTIME_QA_READINESS_ENABLED = process.env.NEXT_PUBLIC_DEMO_RUNTIME_QA_READINESS_ENABLED === 'true';
+const TENANT_SECURITY_AUDIT_ENABLED = process.env.NEXT_PUBLIC_TENANT_SECURITY_AUDIT_ENABLED === 'true';
+const FINAL_CANARY_ROLLBACK_ENABLED = process.env.NEXT_PUBLIC_FINAL_CANARY_ROLLBACK_ENABLED === 'true';
 
 async function getAdminIdToken(firebaseUser, currentRole) {
   if (currentRole !== 'admin' || !firebaseUser || typeof firebaseUser.getIdToken !== 'function') return null;
@@ -31,7 +33,7 @@ function monitorWsUrl(apiBase, token) {
 }
 
 export default function AdminMonitor() {
-  const { currentRole, loading, firebaseUser } = useAuth();
+  const { currentRole, loading, firebaseUser, activeClient } = useAuth();
   const [metrics, setMetrics] = useState({
     totalCalls: 0,
     activeAgents: 0,
@@ -42,6 +44,10 @@ export default function AdminMonitor() {
   const [providerMetrics, setProviderMetrics] = useState({});
   const [demoQa, setDemoQa] = useState(null);
   const [demoQaLoading, setDemoQaLoading] = useState(false);
+  const [securityAudit, setSecurityAudit] = useState(null);
+  const [securityAuditLoading, setSecurityAuditLoading] = useState(false);
+  const [finalGate, setFinalGate] = useState(null);
+  const [finalGateLoading, setFinalGateLoading] = useState(false);
   const wsRef = useRef(null);
 
   useEffect(() => {
@@ -179,6 +185,76 @@ export default function AdminMonitor() {
     }
   }, [currentRole, firebaseUser]);
 
+  const fetchSecurityAuditReadiness = useCallback(async () => {
+    if (!TENANT_SECURITY_AUDIT_ENABLED || currentRole !== 'admin') return;
+
+    const API = process.env.NEXT_PUBLIC_API_URL || `http://localhost:8000`;
+    const params = new URLSearchParams();
+    if (activeClient) params.set('clientId', activeClient);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    setSecurityAuditLoading(true);
+    try {
+      const token = await getAdminIdToken(firebaseUser, currentRole);
+      const res = await fetch(`${API}/api/tenant/security-leak-audit/readiness${query}`, {
+        headers: adminAuthHeaders(token),
+      });
+      if (!res.ok) {
+        setSecurityAudit({
+          status: 'disabled',
+          blockers: [`HTTP ${res.status}`],
+          criteria: [],
+        });
+        return;
+      }
+      const data = await res.json();
+      setSecurityAudit(data);
+    } catch (e) {
+      console.error('Tenant security audit fetch error', e);
+      setSecurityAudit({
+        status: 'unavailable',
+        blockers: ['request_failed'],
+        criteria: [],
+      });
+    } finally {
+      setSecurityAuditLoading(false);
+    }
+  }, [activeClient, currentRole, firebaseUser]);
+
+  const fetchFinalGateReadiness = useCallback(async () => {
+    if (!FINAL_CANARY_ROLLBACK_ENABLED || currentRole !== 'admin') return;
+
+    const API = process.env.NEXT_PUBLIC_API_URL || `http://localhost:8000`;
+    const params = new URLSearchParams();
+    if (activeClient) params.set('clientId', activeClient);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    setFinalGateLoading(true);
+    try {
+      const token = await getAdminIdToken(firebaseUser, currentRole);
+      const res = await fetch(`${API}/api/tenant/final-canary-rollback/readiness${query}`, {
+        headers: adminAuthHeaders(token),
+      });
+      if (!res.ok) {
+        setFinalGate({
+          status: 'disabled',
+          blockers: [`HTTP ${res.status}`],
+          criteria: [],
+        });
+        return;
+      }
+      const data = await res.json();
+      setFinalGate(data);
+    } catch (e) {
+      console.error('Final canary rollback readiness fetch error', e);
+      setFinalGate({
+        status: 'unavailable',
+        blockers: ['request_failed'],
+        criteria: [],
+      });
+    } finally {
+      setFinalGateLoading(false);
+    }
+  }, [activeClient, currentRole, firebaseUser]);
+
   useEffect(() => {
     if (loading || currentRole !== 'admin' || !DEMO_RUNTIME_QA_READINESS_ENABLED) return undefined;
 
@@ -191,6 +267,32 @@ export default function AdminMonitor() {
       cancelled = true;
     };
   }, [currentRole, loading, firebaseUser, fetchDemoQaReadiness]);
+
+  useEffect(() => {
+    if (loading || currentRole !== 'admin' || !TENANT_SECURITY_AUDIT_ENABLED) return undefined;
+
+    let cancelled = false;
+    const load = async () => {
+      if (!cancelled) await fetchSecurityAuditReadiness();
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRole, loading, firebaseUser, fetchSecurityAuditReadiness]);
+
+  useEffect(() => {
+    if (loading || currentRole !== 'admin' || !FINAL_CANARY_ROLLBACK_ENABLED) return undefined;
+
+    let cancelled = false;
+    const load = async () => {
+      if (!cancelled) await fetchFinalGateReadiness();
+    };
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentRole, loading, firebaseUser, fetchFinalGateReadiness]);
 
   const getStatusBadge = (status) => {
     switch (status) {
@@ -264,6 +366,195 @@ export default function AdminMonitor() {
           </div>
         </div>
       </div>
+
+      {FINAL_CANARY_ROLLBACK_ENABLED && (
+        <div className="card border-0 shadow-sm mb-4">
+          <div className="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 className="mb-0 fw-bold">Final Canary Gate</h6>
+              <div className="small text-muted">Manual canary, rollback, isolation, and production push readiness</div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm btn-outline-primary"
+              onClick={fetchFinalGateReadiness}
+              disabled={finalGateLoading}
+            >
+              {finalGateLoading ? 'Checking...' : 'Check now'}
+            </button>
+          </div>
+          <div className="card-body">
+            {!finalGate ? (
+              <p className="text-muted small mb-0">No final canary snapshot loaded yet.</p>
+            ) : (
+              <>
+                <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+                  <span className={`badge ${finalGate.status === 'ready' ? 'bg-success' : 'bg-warning text-dark'}`}>
+                    {finalGate.status}
+                  </span>
+                  <span className="small text-muted">Mode: {finalGate.mode || 'read_only'}</span>
+                  {finalGate.canary_started === false && (
+                    <span className="badge bg-light text-dark border">No canary started</span>
+                  )}
+                  {finalGate.traffic_shifted === false && (
+                    <span className="badge bg-light text-dark border">No traffic shifted</span>
+                  )}
+                  {finalGate.rollback_action_performed === false && (
+                    <span className="badge bg-light text-dark border">No rollback executed</span>
+                  )}
+                  {finalGate.feature_flags_modified === false && (
+                    <span className="badge bg-light text-dark border">No flag changes</span>
+                  )}
+                  {finalGate.audio_runtime_changed === false && (
+                    <span className="badge bg-light text-dark border">Audio unchanged</span>
+                  )}
+                </div>
+                {finalGate.blockers?.length > 0 && (
+                  <div className="alert alert-warning py-2 small mb-3">
+                    Blockers: {finalGate.blockers.join(', ')}
+                  </div>
+                )}
+                {finalGate.summary && (
+                  <div className="row g-2 mb-3">
+                    <div className="col-md-3">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="small text-muted">Campaign ready</div>
+                        <div className="fw-bold">{finalGate.summary.campaign_ready ? 'Yes' : 'No'}</div>
+                      </div>
+                    </div>
+                    <div className="col-md-3">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="small text-muted">Security ready</div>
+                        <div className="fw-bold">{finalGate.summary.tenant_security_ready ? 'Yes' : 'No'}</div>
+                      </div>
+                    </div>
+                    <div className="col-md-3">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="small text-muted">Observation window</div>
+                        <div className="fw-bold">{finalGate.summary.minimum_observation_minutes ?? 0} min</div>
+                      </div>
+                    </div>
+                    <div className="col-md-3">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="small text-muted">Traffic shift</div>
+                        <div className="fw-bold">{finalGate.summary.traffic_shift_percent ?? 0}%</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="row g-2">
+                  {(finalGate.criteria || []).map((item) => (
+                    <div key={item.key} className="col-md-4">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="d-flex justify-content-between gap-2">
+                          <div className="fw-semibold small">{item.label}</div>
+                          <span className={`badge ${item.passed ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger'}`}>
+                            {item.passed ? 'Pass' : 'Review'}
+                          </span>
+                        </div>
+                        {item.detail && <div className="small text-muted mt-2">{item.detail}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {TENANT_SECURITY_AUDIT_ENABLED && (
+        <div className="card border-0 shadow-sm mb-4">
+          <div className="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+            <div>
+              <h6 className="mb-0 fw-bold">Tenant Security Audit</h6>
+              <div className="small text-muted">Ownership, phone routing, memory, CRM, and asset isolation readiness</div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm btn-outline-primary"
+              onClick={fetchSecurityAuditReadiness}
+              disabled={securityAuditLoading}
+            >
+              {securityAuditLoading ? 'Checking...' : 'Check now'}
+            </button>
+          </div>
+          <div className="card-body">
+            {!securityAudit ? (
+              <p className="text-muted small mb-0">No tenant audit snapshot loaded yet.</p>
+            ) : (
+              <>
+                <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+                  <span className={`badge ${securityAudit.status === 'ready' ? 'bg-success' : 'bg-warning text-dark'}`}>
+                    {securityAudit.status}
+                  </span>
+                  <span className="small text-muted">Mode: {securityAudit.mode || 'read_only'}</span>
+                  {securityAudit.db_write_performed === false && (
+                    <span className="badge bg-light text-dark border">No DB writes</span>
+                  )}
+                  {securityAudit.resource_payload_returned === false && (
+                    <span className="badge bg-light text-dark border">No payloads returned</span>
+                  )}
+                  {securityAudit.audio_runtime_changed === false && (
+                    <span className="badge bg-light text-dark border">Audio unchanged</span>
+                  )}
+                  {securityAudit.websocket_contract_changed === false && (
+                    <span className="badge bg-light text-dark border">Websocket unchanged</span>
+                  )}
+                </div>
+                {securityAudit.blockers?.length > 0 && (
+                  <div className="alert alert-warning py-2 small mb-3">
+                    Blockers: {securityAudit.blockers.join(', ')}
+                  </div>
+                )}
+                {securityAudit.summary && (
+                  <div className="row g-2 mb-3">
+                    <div className="col-md-3">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="small text-muted">Missing owners</div>
+                        <div className="fw-bold">{securityAudit.summary.missing_owner_total ?? 0}</div>
+                      </div>
+                    </div>
+                    <div className="col-md-3">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="small text-muted">Scope mismatches</div>
+                        <div className="fw-bold">{securityAudit.summary.relationship_mismatch_total ?? 0}</div>
+                      </div>
+                    </div>
+                    <div className="col-md-3">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="small text-muted">Phone mismatches</div>
+                        <div className="fw-bold">{securityAudit.summary.phone_mismatch_total ?? 0}</div>
+                      </div>
+                    </div>
+                    <div className="col-md-3">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="small text-muted">Tables checked</div>
+                        <div className="fw-bold">{securityAudit.summary.tenant_tables_checked ?? 0}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div className="row g-2">
+                  {(securityAudit.criteria || []).map((item) => (
+                    <div key={item.key} className="col-md-4">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="d-flex justify-content-between gap-2">
+                          <div className="fw-semibold small">{item.label}</div>
+                          <span className={`badge ${item.passed ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger'}`}>
+                            {item.passed ? 'Pass' : 'Review'}
+                          </span>
+                        </div>
+                        {item.detail && <div className="small text-muted mt-2">{item.detail}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {DEMO_RUNTIME_QA_READINESS_ENABLED && (
         <div className="card border-0 shadow-sm mb-4">

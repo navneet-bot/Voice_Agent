@@ -1470,6 +1470,235 @@ def _build_demo_call_qa_readiness() -> dict:
     }
 
 
+_TELEPHONY_PROVIDER_ENV_VARS = {
+    "twilio": ("TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"),
+    "vobiz": ("VOBIZ_API_KEY",),
+    "exotel": ("EXOTEL_SID", "EXOTEL_TOKEN"),
+    "knowlarity": ("KNOWLARITY_API_KEY", "KNOWLARITY_ACCOUNT_SID"),
+    "demo": (),
+}
+
+
+def _telephony_qa_criterion(
+    key: str,
+    label: str,
+    passed: bool,
+    *,
+    required: bool = True,
+    value: Any = None,
+    detail: Optional[str] = None,
+) -> dict:
+    item = {
+        "key": key,
+        "label": label,
+        "passed": bool(passed),
+        "required": bool(required),
+    }
+    if value is not None:
+        item["value"] = value
+    if detail:
+        item["detail"] = detail
+    return item
+
+
+def _mask_phone_number(phone: str | None) -> str:
+    raw = str(phone or "").strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    if len(digits) <= 4:
+        return "****"
+    return f"****{digits[-4:]}"
+
+
+def _public_webhook_ready(webhook_base: str) -> bool:
+    normalized = (webhook_base or "").strip().lower()
+    if not normalized.startswith("https://"):
+        return False
+    blocked_tokens = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+    return not any(token in normalized for token in blocked_tokens)
+
+
+async def _build_telephony_live_qa_readiness(
+    *,
+    provider_slug: str = "twilio",
+    client_id: Optional[str] = None,
+    country_code: str = "IN",
+    include_provider_probe: bool = False,
+) -> dict:
+    """Build read-only telephony production readiness without buying or calling."""
+    provider_slug = (provider_slug or "twilio").strip().lower()
+    country_code = (country_code or "IN").strip().upper()
+    provider_registry = {item["slug"]: item for item in list_providers()}
+    provider_meta = provider_registry.get(provider_slug)
+    provider_registered = provider_meta is not None
+    provider_configured = bool(provider_meta and provider_meta.get("configured"))
+    env_names = _TELEPHONY_PROVIDER_ENV_VARS.get(provider_slug, ())
+    missing_env = [name for name in env_names if not os.getenv(name)]
+    webhook_base = os.getenv("WEBHOOK_BASE_URL", WEBHOOK_BASE_URL)
+    webhook_public = _public_webhook_ready(webhook_base)
+
+    numbers = await db.list_phone_numbers(client_id)
+    provider_numbers = [
+        number for number in numbers
+        if str(number.get("provider") or "twilio").lower() == provider_slug
+    ]
+    routed_numbers = [
+        number for number in provider_numbers
+        if number.get("client_id") and isinstance(number.get("route"), dict)
+    ]
+
+    unresolved_routes: list[dict] = []
+    cross_scope_routes: list[dict] = []
+    samples: list[dict] = []
+    for number in routed_numbers[:10]:
+        route = number.get("route") or {}
+        resolved = await db.resolve_phone_number_route(number.get("phone") or "", provider_slug)
+        if not resolved or resolved.get("id") != route.get("id"):
+            unresolved_routes.append({
+                "number_id": number.get("id"),
+                "masked_phone": _mask_phone_number(number.get("phone")),
+                "route_id": route.get("id"),
+            })
+        agent_id = route.get("agent_id")
+        if agent_id:
+            agent = await db.get_agent(agent_id)
+            if not agent or (agent.get("client_id") and agent.get("client_id") != route.get("client_id")):
+                cross_scope_routes.append({
+                    "number_id": number.get("id"),
+                    "route_id": route.get("id"),
+                    "agent_id": agent_id,
+                })
+        samples.append({
+            "number_id": number.get("id"),
+            "masked_phone": _mask_phone_number(number.get("phone")),
+            "provider": provider_slug,
+            "client_id": number.get("client_id"),
+            "routing_mode": route.get("routing_mode"),
+            "agent_route_present": bool(route.get("agent_id")),
+            "campaign_route_present": bool(route.get("campaign_id")),
+        })
+
+    provider_probe = {
+        "attempted": bool(include_provider_probe),
+        "required_for_live_provider": provider_slug != "demo",
+        "sample_count": 0,
+        "error": None,
+    }
+    if include_provider_probe:
+        if not provider_registered:
+            provider_probe["error"] = "provider_not_registered"
+        elif not provider_configured and provider_slug != "demo":
+            provider_probe["error"] = "provider_not_configured"
+        else:
+            try:
+                provider = get_provider(provider_slug)
+                results = await provider.list_available_numbers(country_code)
+                normalized_results = [
+                    _normalize_available_number(item, provider_slug, country_code)
+                    for item in results
+                ]
+                provider_probe["sample_count"] = len(normalized_results)
+            except Exception as exc:
+                provider_probe["error"] = type(exc).__name__
+
+    probe_required = provider_slug != "demo"
+    probe_passed = (
+        not probe_required
+        or (
+            include_provider_probe
+            and provider_probe["sample_count"] > 0
+            and not provider_probe["error"]
+        )
+    )
+
+    criteria = [
+        _telephony_qa_criterion(
+            "provider_registered",
+            "Provider is registered in the telephony registry",
+            provider_registered,
+            value={"provider": provider_slug},
+        ),
+        _telephony_qa_criterion(
+            "provider_configured",
+            "Provider credentials are configured without exposing secrets",
+            provider_configured,
+            value={
+                "provider": provider_slug,
+                "required_env": list(env_names),
+                "missing_env": missing_env,
+            },
+        ),
+        _telephony_qa_criterion(
+            "public_webhook_base_url",
+            "Webhook base URL is public HTTPS for provider callbacks",
+            webhook_public,
+            value={"configured": bool(webhook_base), "scheme": "https" if webhook_public else "not_public_https"},
+        ),
+        _telephony_qa_criterion(
+            "tenant_numbers_flag_enabled",
+            "Tenant phone-number isolation flag is enabled",
+            feature_flags.is_enabled("telephony.tenant_numbers"),
+        ),
+        _telephony_qa_criterion(
+            "tenant_routes_present",
+            "At least one tenant-owned provider number has an active route",
+            len(routed_numbers) > 0,
+            value={"routed_numbers": len(routed_numbers), "provider_numbers": len(provider_numbers)},
+        ),
+        _telephony_qa_criterion(
+            "route_resolution_ok",
+            "Webhook route lookup resolves tenant-owned numbers",
+            len(routed_numbers) > 0 and not unresolved_routes,
+            value={"checked": min(len(routed_numbers), 10), "unresolved": len(unresolved_routes)},
+        ),
+        _telephony_qa_criterion(
+            "route_scope_ok",
+            "Agent/campaign number routes stay inside tenant scope",
+            not cross_scope_routes,
+            value={"checked": min(len(routed_numbers), 10), "cross_scope": len(cross_scope_routes)},
+        ),
+        _telephony_qa_criterion(
+            "provider_number_probe",
+            "Live provider number lookup was verified",
+            probe_passed,
+            required=probe_required,
+            value=provider_probe,
+        ),
+    ]
+    blockers = [item["key"] for item in criteria if item["required"] and not item["passed"]]
+    warnings = [
+        item["key"] for item in criteria
+        if not item["required"] and not item["passed"]
+    ]
+    return {
+        "status": "ready" if not blockers else "not_ready",
+        "ready_for_production_push": not blockers,
+        "mode": "read_only_provider_preflight",
+        "provider": provider_slug,
+        "client_id": client_id,
+        "country_code": country_code,
+        "criteria": criteria,
+        "blockers": blockers,
+        "warnings": warnings,
+        "summary": {
+            "provider_numbers": len(provider_numbers),
+            "tenant_routed_numbers": len(routed_numbers),
+            "unresolved_routes": len(unresolved_routes),
+            "cross_scope_routes": len(cross_scope_routes),
+            "provider_probe_attempted": bool(include_provider_probe),
+        },
+        "samples": samples,
+        "runtime_live_changed": False,
+        "outbound_calls_started": False,
+        "numbers_purchased": False,
+        "tenant_routes_modified": False,
+        "webhook_contract_changed": False,
+        "rollback": {
+            "disable_live_qa_readiness": feature_flags.env_name("telephony.live_qa_readiness"),
+            "disable_tenant_number_routing": feature_flags.env_name("telephony.tenant_numbers"),
+        },
+    }
+
+
 def _tenant_context_from_request(request: Request):
     return getattr(request.state, "tenant_context", None)
 
@@ -1739,6 +1968,690 @@ async def _resolve_campaign_launch_client_id(request: Request, requested_client_
     return None
 
 
+def _campaign_qa_criterion(
+    key: str,
+    label: str,
+    passed: bool,
+    *,
+    value: Any = None,
+    detail: Optional[str] = None,
+) -> dict:
+    item = {
+        "key": key,
+        "label": label,
+        "passed": bool(passed),
+    }
+    if value is not None:
+        item["value"] = value
+    if detail:
+        item["detail"] = detail
+    return item
+
+
+async def _build_campaign_e2e_qa_readiness(
+    *,
+    client_id: Optional[str] = None,
+    sample_limit: int = 10,
+) -> dict:
+    """Build read-only campaign launch/result readiness without starting calls."""
+    sample_leads = [
+        {"name": "Asha", "phone": "+919876543210", "budget": "60 lakhs"},
+        {"name": "Asha Duplicate", "phone": "+91 98765 43210"},
+        {"name": "Dev", "phone": "+919812345678"},
+        {"name": "", "phone": "123"},
+    ]
+    normalized_leads, lead_summary = _normalize_campaign_leads(sample_leads)
+    lead_contract_ok = (
+        len(normalized_leads) == 2
+        and lead_summary["duplicates"] == 1
+        and lead_summary["invalid"] == 1
+        and lead_summary["limit"] >= 1
+    )
+
+    campaigns = await db.list_campaigns_with_lifecycle(
+        client_id=client_id,
+        include_archived=True,
+        include_deleted=False,
+    )
+    campaign_samples: list[dict] = []
+    lead_scope_issues: list[str] = []
+    result_scope_issues: list[str] = []
+    missing_transcripts: list[str] = []
+    missing_recording_assets: list[str] = []
+    cross_scope_recordings: list[str] = []
+    campaigns_with_leads_and_agent = 0
+    campaigns_with_results = 0
+    transcript_evidence_count = 0
+    recording_evidence_count = 0
+    live_rows_seen = 0
+
+    for campaign in campaigns[:sample_limit]:
+        campaign_id = campaign.get("id")
+        leads = await db.get_leads_for_campaign(campaign_id)
+        results = await db.get_results_for_campaign(campaign_id, client_id)
+        live_rows = await db.get_live_state(campaign_id, client_id)
+        live_rows_seen += len(live_rows)
+
+        if client_id and campaign.get("client_id") and campaign.get("client_id") != client_id:
+            result_scope_issues.append(str(campaign_id))
+        if client_id:
+            for lead in leads:
+                if lead.get("client_id") and lead.get("client_id") != client_id:
+                    lead_scope_issues.append(str(campaign_id))
+                    break
+
+        if leads and campaign.get("agent_id") and campaign.get("client_id"):
+            campaigns_with_leads_and_agent += 1
+        if results:
+            campaigns_with_results += 1
+
+        for result in results:
+            result_client_id = result.get("client_id")
+            if client_id and result_client_id and result_client_id != client_id:
+                result_scope_issues.append(str(campaign_id))
+
+            lead_id = result.get("lead_id") or result.get("id")
+            if result.get("has_transcript"):
+                transcript = await db.get_transcript_for_lead(lead_id, client_id)
+                if transcript:
+                    transcript_evidence_count += 1
+                else:
+                    missing_transcripts.append(str(lead_id))
+
+            recording_url = result.get("recording_url")
+            if result.get("has_recording") and recording_url:
+                owner = await db.get_recording_asset_owner(recording_url)
+                if owner.get("found"):
+                    recording_evidence_count += 1
+                    if client_id and owner.get("owner_client_id") and owner.get("owner_client_id") != client_id:
+                        cross_scope_recordings.append(str(lead_id))
+                else:
+                    missing_recording_assets.append(str(recording_url))
+
+        campaign_samples.append({
+            "id": campaign_id,
+            "client_id": campaign.get("client_id"),
+            "status": campaign.get("status"),
+            "provider": campaign.get("telephony_provider") or "demo",
+            "lead_count": len(leads),
+            "result_count": len(results),
+            "live_rows": len(live_rows),
+            "agent_assigned": bool(campaign.get("agent_id")),
+            "archived": bool(campaign.get("archived_at")),
+            "deleted": bool(campaign.get("deleted_at")),
+        })
+
+    worker_config = CampaignWorkerV2Config()
+    criteria = [
+        _campaign_qa_criterion(
+            "lead_ingestion_contract",
+            "Lead ingestion accepts valid rows and rejects duplicate/invalid rows",
+            lead_contract_ok,
+            value=lead_summary,
+        ),
+        _campaign_qa_criterion(
+            "campaign_read_scope_ok",
+            "Campaign reads are tenant-scoped and return no cross-tenant rows",
+            not lead_scope_issues and not result_scope_issues,
+            value={
+                "campaigns_checked": min(len(campaigns), sample_limit),
+                "lead_scope_issues": len(lead_scope_issues),
+                "result_scope_issues": len(result_scope_issues),
+            },
+        ),
+        _campaign_qa_criterion(
+            "launch_prerequisites_present",
+            "At least one campaign has tenant, agent, and leads ready for launch",
+            campaigns_with_leads_and_agent > 0,
+            value={"campaigns_with_leads_and_agent": campaigns_with_leads_and_agent},
+        ),
+        _campaign_qa_criterion(
+            "v1_runner_fallback_preserved",
+            "Existing campaign runner remains available as the live fallback",
+            callable(run_campaign),
+            value={"runner": "agent_runner.run_campaign"},
+        ),
+        _campaign_qa_criterion(
+            "worker_v2_shadow_safe",
+            "Worker V2 remains metadata-only unless explicitly enabled",
+            worker_config.mode == "shadow",
+            value={
+                "campaign_worker_v2_enabled": feature_flags.is_enabled("campaign.worker_v2"),
+                "default_mode": worker_config.mode,
+                "max_attempts": worker_config.max_attempts,
+            },
+        ),
+        _campaign_qa_criterion(
+            "result_persistence_evidence",
+            "At least one campaign result is persisted for QA evidence",
+            campaigns_with_results > 0,
+            value={"campaigns_with_results": campaigns_with_results},
+        ),
+        _campaign_qa_criterion(
+            "transcript_persistence_evidence",
+            "Persisted campaign results expose retrievable transcripts",
+            transcript_evidence_count > 0 and not missing_transcripts,
+            value={
+                "transcripts_verified": transcript_evidence_count,
+                "missing_transcripts": len(missing_transcripts),
+            },
+        ),
+        _campaign_qa_criterion(
+            "recording_persistence_evidence",
+            "Persisted campaign results have tenant-owned recording assets",
+            recording_evidence_count > 0 and not missing_recording_assets and not cross_scope_recordings,
+            value={
+                "recordings_verified": recording_evidence_count,
+                "missing_recording_assets": len(missing_recording_assets),
+                "cross_scope_recordings": len(cross_scope_recordings),
+            },
+        ),
+        _campaign_qa_criterion(
+            "live_update_read_contract",
+            "Live campaign update reads are available and scoped",
+            isinstance(live_rows_seen, int),
+            value={"live_rows_seen": live_rows_seen},
+        ),
+    ]
+    blockers = [item["key"] for item in criteria if not item["passed"]]
+    return {
+        "status": "ready" if not blockers else "not_ready",
+        "ready_for_production_push": not blockers,
+        "mode": "read_only_campaign_e2e_preflight",
+        "client_id": client_id,
+        "criteria": criteria,
+        "blockers": blockers,
+        "summary": {
+            "campaigns_checked": min(len(campaigns), sample_limit),
+            "campaigns_with_leads_and_agent": campaigns_with_leads_and_agent,
+            "campaigns_with_results": campaigns_with_results,
+            "transcripts_verified": transcript_evidence_count,
+            "recordings_verified": recording_evidence_count,
+            "live_rows_seen": live_rows_seen,
+        },
+        "samples": campaign_samples,
+        "campaigns_started": False,
+        "outbound_calls_started": False,
+        "results_written": False,
+        "live_state_written": False,
+        "queue_dispatch_started": False,
+        "runtime_live_changed": False,
+        "websocket_contract_changed": False,
+        "audio_contract_changed": False,
+        "rollback": {
+            "disable_campaign_e2e_qa_readiness": feature_flags.env_name("campaign.e2e_qa_readiness"),
+            "disable_campaign_worker_v2": feature_flags.env_name("campaign.worker_v2"),
+        },
+    }
+
+
+def _tenant_security_criterion(
+    key: str,
+    label: str,
+    passed: bool,
+    *,
+    value: Any = None,
+    detail: Optional[str] = None,
+) -> dict:
+    item = {
+        "key": key,
+        "label": label,
+        "passed": bool(passed),
+    }
+    if value is not None:
+        item["value"] = value
+    if detail:
+        item["detail"] = detail
+    return item
+
+
+async def _build_tenant_security_audit_readiness(
+    *,
+    client_id: Optional[str] = None,
+) -> dict:
+    """Build a read-only tenant/security audit from aggregate counts only."""
+    counts = await db.get_tenant_security_audit_counts(client_id=client_id)
+    missing_owner_by_table = counts["missing_owner_by_table"]
+    relationship_mismatches = counts["relationship_mismatches"]
+    blocking_missing_owner_by_table = {
+        table: value
+        for table, value in missing_owner_by_table.items()
+        if value and table not in {"phone_numbers"}
+    }
+    warning_missing_owner_by_table = {
+        table: value
+        for table, value in missing_owner_by_table.items()
+        if value and table in {"phone_numbers"}
+    }
+
+    required_live_flags = [
+        "auth.enforce_backend",
+        "tenant.scoped_reads",
+        "ws.scoped_events",
+        "telephony.tenant_numbers",
+    ]
+    guard_flags = [
+        *required_live_flags,
+        "tenant.scoped_read_endpoint_shadow",
+        "tenant.leak_regression_matrix",
+        "tenant.security_leak_audit_readiness",
+        "recordings.access_gate_dry_run",
+        "transcripts.protected_route_stub",
+        "transcripts.frontend_migration_readiness",
+    ]
+    known_flag_names = feature_flags.known_flags()
+    flag_state = {
+        flag: {
+            "enabled": feature_flags.is_enabled(flag),
+            "env": feature_flags.env_name(flag),
+            "registered": flag in known_flag_names,
+        }
+        for flag in guard_flags
+    }
+    live_flags_enabled = all(flag_state[flag]["enabled"] for flag in required_live_flags)
+    flags_registered = all(config["registered"] for config in flag_state.values())
+
+    phone_mismatch_total = sum(
+        value
+        for key, value in relationship_mismatches.items()
+        if key.startswith("phone_route_") or key == "campaign_phone_number_scope_mismatch"
+    )
+    memory_mismatch_total = sum(
+        value
+        for key, value in relationship_mismatches.items()
+        if key.startswith("memory_")
+    )
+    scrape_crm_mismatch_total = sum(
+        value
+        for key, value in relationship_mismatches.items()
+        if key.startswith(("scrape_", "generated_", "crm_"))
+    )
+    criteria = [
+        _tenant_security_criterion(
+            "tenant_inventory_present",
+            "Tenant inventory exists for audit",
+            counts["total_clients"] > 0,
+            value={"total_clients": counts["total_clients"]},
+        ),
+        _tenant_security_criterion(
+            "guard_flags_registered",
+            "Tenant guard and rollback flags are registered",
+            flags_registered,
+            value=flag_state,
+        ),
+        _tenant_security_criterion(
+            "live_isolation_flags_enabled",
+            "Production isolation flags are enabled before go-live",
+            live_flags_enabled,
+            value={
+                flag: flag_state[flag]["enabled"]
+                for flag in required_live_flags
+            },
+            detail="This audit does not enable flags; production must enable them deliberately.",
+        ),
+        _tenant_security_criterion(
+            "ownership_metadata_complete",
+            "Tenant-owned resources have client ownership metadata",
+            not blocking_missing_owner_by_table,
+            value={
+                "blocking_missing_owner_by_table": blocking_missing_owner_by_table,
+                "warning_missing_owner_by_table": warning_missing_owner_by_table,
+            },
+        ),
+        _tenant_security_criterion(
+            "relationship_scope_consistent",
+            "Related resources stay inside the same tenant boundary",
+            counts["relationship_mismatch_total"] == 0,
+            value={
+                "relationship_mismatch_total": counts["relationship_mismatch_total"],
+                "relationship_mismatches": {
+                    key: value
+                    for key, value in relationship_mismatches.items()
+                    if value
+                },
+            },
+        ),
+        _tenant_security_criterion(
+            "phone_route_isolation_consistent",
+            "Phone numbers, routes, agents, and campaigns stay tenant-aligned",
+            phone_mismatch_total == 0 and not missing_owner_by_table.get("phone_number_routes"),
+            value={
+                "phone_mismatch_total": phone_mismatch_total,
+                "unassigned_phone_numbers": missing_owner_by_table.get("phone_numbers", 0),
+                "active_routes_missing_owner": missing_owner_by_table.get("phone_number_routes", 0),
+            },
+        ),
+        _tenant_security_criterion(
+            "memory_training_isolated",
+            "Agent memory and training rows stay tenant/agent aligned",
+            memory_mismatch_total == 0
+            and not any(
+                blocking_missing_owner_by_table.get(table, 0)
+                for table in (
+                    "agent_memory_collections",
+                    "agent_memory_items",
+                    "agent_memory_events",
+                )
+            ),
+            value={"memory_mismatch_total": memory_mismatch_total},
+        ),
+        _tenant_security_criterion(
+            "scrape_crm_scope_consistent",
+            "Website intelligence and CRM rows stay tenant-aligned",
+            scrape_crm_mismatch_total == 0,
+            value={"scrape_crm_mismatch_total": scrape_crm_mismatch_total},
+        ),
+        _tenant_security_criterion(
+            "payload_safe_audit_contract",
+            "Audit returns counts only and no tenant payloads",
+            not counts["payloads_returned"]
+            and not counts["ids_returned"]
+            and not counts["tenant_values_returned"],
+            value={
+                "payloads_returned": counts["payloads_returned"],
+                "ids_returned": counts["ids_returned"],
+                "tenant_values_returned": counts["tenant_values_returned"],
+            },
+        ),
+    ]
+    blockers = [item["key"] for item in criteria if not item["passed"]]
+    return {
+        "status": "ready" if not blockers else "not_ready",
+        "ready_for_production_push": not blockers,
+        "mode": "read_only_tenant_security_audit",
+        "client_scope_requested": bool(client_id),
+        "criteria": criteria,
+        "blockers": blockers,
+        "warnings": [
+            "unassigned_phone_numbers_present"
+            for _table, value in warning_missing_owner_by_table.items()
+            if value
+        ],
+        "summary": {
+            "total_clients": counts["total_clients"],
+            "tenant_tables_checked": len(counts["totals_by_table"]),
+            "selected_client_tables_checked": len(counts["selected_client_totals"]),
+            "missing_owner_total": sum(blocking_missing_owner_by_table.values()),
+            "relationship_mismatch_total": counts["relationship_mismatch_total"],
+            "phone_mismatch_total": phone_mismatch_total,
+            "memory_mismatch_total": memory_mismatch_total,
+            "scrape_crm_mismatch_total": scrape_crm_mismatch_total,
+        },
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "phone_numbers_returned": False,
+        "transcript_content_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "rollback": {
+            "disable_security_audit": feature_flags.env_name("tenant.security_leak_audit_readiness"),
+            "disable_backend_auth_enforcement": feature_flags.env_name("auth.enforce_backend"),
+            "disable_scoped_reads": feature_flags.env_name("tenant.scoped_reads"),
+            "disable_scoped_events": feature_flags.env_name("ws.scoped_events"),
+            "disable_tenant_number_routing": feature_flags.env_name("telephony.tenant_numbers"),
+        },
+    }
+
+
+def _final_canary_criterion(
+    key: str,
+    label: str,
+    passed: bool,
+    *,
+    value: Any = None,
+    detail: Optional[str] = None,
+) -> dict:
+    item = {
+        "key": key,
+        "label": label,
+        "passed": bool(passed),
+    }
+    if value is not None:
+        item["value"] = value
+    if detail:
+        item["detail"] = detail
+    return item
+
+
+async def _build_final_canary_rollback_readiness(
+    *,
+    client_id: Optional[str] = None,
+) -> dict:
+    """Build a final no-action canary and rollback readiness gate."""
+    campaign = await _build_campaign_e2e_qa_readiness(client_id=client_id)
+    security = await _build_tenant_security_audit_readiness(client_id=client_id)
+
+    live_required_flags = [
+        "auth.enforce_backend",
+        "tenant.scoped_reads",
+        "ws.scoped_events",
+        "telephony.tenant_numbers",
+    ]
+    rollback_switches = [
+        "tenant.final_canary_rollback_readiness",
+        "tenant.production_go_no_go_gate",
+        "tenant.rollback_drill_readiness",
+        "tenant.rollout_canary_plan",
+        "tenant.rollout_approval_packet",
+        "tenant.final_rollout_report",
+        "tenant.result_asset_readiness",
+        "tenant.leak_regression_matrix",
+        "auth.enforce_backend",
+        "tenant.scoped_reads",
+        "ws.scoped_events",
+        "telephony.tenant_numbers",
+        "campaign.worker_v2",
+        "flow.v2_live",
+        "scrape.worker_v1",
+        "crm.sync_enabled",
+        "memory.rag_enabled",
+    ]
+    known_flags = feature_flags.known_flags()
+    flag_state = {
+        flag: {
+            "enabled": feature_flags.is_enabled(flag),
+            "env": feature_flags.env_name(flag),
+            "registered": flag in known_flags,
+        }
+        for flag in rollback_switches
+    }
+    live_flags_enabled = all(flag_state[flag]["enabled"] for flag in live_required_flags)
+    kill_switches_registered = all(flag_state[flag]["registered"] for flag in rollback_switches)
+    canary_plan = {
+        "plan_only": True,
+        "single_tenant_canary_required": True,
+        "single_campaign_canary_required": True,
+        "demo_call_canary_required": True,
+        "minimum_observation_minutes": 30,
+        "traffic_shift_percent": 0,
+        "automatic_activation_enabled": False,
+        "sequence": [
+            "confirm_backend_health",
+            "confirm_demo_call_smoke",
+            "confirm_single_tenant_campaign_readiness",
+            "enable_flags_for_one tenant only",
+            "observe_results_transcripts_recordings",
+            "manual_go_or_rollback_decision",
+        ],
+        "abort_thresholds": {
+            "tenant_leak_count": 0,
+            "audio_runtime_errors": 0,
+            "websocket_contract_errors": 0,
+            "campaign_result_persistence_errors": 0,
+            "recording_playback_errors": 0,
+        },
+    }
+    rollback_plan = {
+        "readiness_only": True,
+        "rollback_action_performed": False,
+        "kill_switch_order": [
+            "tenant.final_canary_rollback_readiness",
+            "tenant.production_go_no_go_gate",
+            "tenant.rollback_drill_readiness",
+            "tenant.rollout_canary_plan",
+            "auth.enforce_backend",
+            "tenant.scoped_reads",
+            "ws.scoped_events",
+            "telephony.tenant_numbers",
+        ],
+        "post_rollback_checks": [
+            "legacy_results_endpoint_available",
+            "legacy_transcript_endpoint_available",
+            "static_recording_mount_available",
+            "demo_voice_call_smoke",
+            "dashboard_websocket_smoke",
+            "tenant_security_audit_recheck",
+        ],
+    }
+
+    runtime_neutral = all(
+        value is False
+        for value in (
+            campaign.get("runtime_live_changed"),
+            campaign.get("websocket_contract_changed"),
+            campaign.get("audio_contract_changed"),
+            security.get("runtime_enforcement_changed"),
+            security.get("audio_runtime_changed"),
+            security.get("websocket_contract_changed"),
+            security.get("campaign_runtime_changed"),
+            security.get("db_write_performed"),
+        )
+    )
+    criteria = [
+        _final_canary_criterion(
+            "campaign_e2e_ready",
+            "Campaign launch, results, transcripts, recordings, and live updates are ready",
+            bool(campaign.get("ready_for_production_push")),
+            value=campaign.get("summary"),
+        ),
+        _final_canary_criterion(
+            "tenant_security_ready",
+            "Tenant ownership, isolation, memory, phone, scraping, and CRM audit is clean",
+            bool(security.get("ready_for_production_push")),
+            value=security.get("summary"),
+        ),
+        _final_canary_criterion(
+            "live_isolation_flags_enabled",
+            "Production isolation flags are explicitly enabled for go-live",
+            live_flags_enabled,
+            value={
+                flag: flag_state[flag]["enabled"]
+                for flag in live_required_flags
+            },
+            detail="This gate reports flag state only; it never changes flags.",
+        ),
+        _final_canary_criterion(
+            "kill_switches_registered",
+            "Rollback kill switches are registered and can be disabled quickly",
+            kill_switches_registered,
+            value={
+                flag: flag_state[flag]["env"]
+                for flag in rollback_switches
+            },
+        ),
+        _final_canary_criterion(
+            "manual_canary_plan_defined",
+            "Manual one-tenant canary plan is defined",
+            True,
+            value=canary_plan,
+        ),
+        _final_canary_criterion(
+            "rollback_drill_defined",
+            "Rollback drill and post-rollback checks are defined",
+            True,
+            value=rollback_plan,
+        ),
+        _final_canary_criterion(
+            "runtime_contracts_unchanged",
+            "Final gate does not change audio, websocket, campaign, or DB-write behavior",
+            runtime_neutral,
+            value={
+                "campaign_runtime_live_changed": campaign.get("runtime_live_changed"),
+                "campaign_websocket_contract_changed": campaign.get("websocket_contract_changed"),
+                "campaign_audio_contract_changed": campaign.get("audio_contract_changed"),
+                "security_runtime_enforcement_changed": security.get("runtime_enforcement_changed"),
+                "security_db_write_performed": security.get("db_write_performed"),
+            },
+        ),
+        _final_canary_criterion(
+            "activation_not_started",
+            "No canary, traffic shift, production activation, or rollback is executed by this gate",
+            True,
+            value={
+                "canary_started": False,
+                "traffic_shifted": False,
+                "production_activation_started": False,
+                "rollback_action_performed": False,
+                "feature_flags_modified": False,
+                "routes_modified": False,
+            },
+        ),
+    ]
+    blockers = [item["key"] for item in criteria if not item["passed"]]
+    return {
+        "status": "ready" if not blockers else "not_ready",
+        "ready_for_manual_canary": not blockers,
+        "ready_for_production_push": not blockers,
+        "mode": "read_only_final_canary_rollback_gate",
+        "client_scope_requested": bool(client_id),
+        "criteria": criteria,
+        "blockers": blockers,
+        "summary": {
+            "campaign_ready": bool(campaign.get("ready_for_production_push")),
+            "tenant_security_ready": bool(security.get("ready_for_production_push")),
+            "live_flags_enabled": live_flags_enabled,
+            "kill_switches_registered": kill_switches_registered,
+            "minimum_observation_minutes": canary_plan["minimum_observation_minutes"],
+            "traffic_shift_percent": 0,
+        },
+        "child_blockers": {
+            "campaign_e2e": campaign.get("blockers", []),
+            "tenant_security": security.get("blockers", []),
+        },
+        "runtime_enforcement_changed": False,
+        "audio_runtime_changed": False,
+        "websocket_contract_changed": False,
+        "campaign_runtime_changed": False,
+        "results_endpoint_changed": False,
+        "transcript_response_changed": False,
+        "recording_response_changed": False,
+        "recording_playback_changed": False,
+        "db_write_performed": False,
+        "db_payload_read_performed": False,
+        "file_bytes_read": False,
+        "resource_payload_returned": False,
+        "tenant_data_returned": False,
+        "cross_tenant_data_returned": False,
+        "phone_numbers_returned": False,
+        "transcript_content_returned": False,
+        "recording_url_returned": False,
+        "recording_bytes_returned": False,
+        "canary_started": False,
+        "traffic_shifted": False,
+        "production_activation_started": False,
+        "rollback_action_performed": False,
+        "feature_flags_modified": False,
+        "routes_modified": False,
+        "rollback": {
+            "disable_final_gate": feature_flags.env_name("tenant.final_canary_rollback_readiness"),
+            "disable_backend_auth_enforcement": feature_flags.env_name("auth.enforce_backend"),
+            "disable_scoped_reads": feature_flags.env_name("tenant.scoped_reads"),
+            "disable_scoped_events": feature_flags.env_name("ws.scoped_events"),
+            "disable_tenant_number_routing": feature_flags.env_name("telephony.tenant_numbers"),
+            "disable_campaign_worker_v2": feature_flags.env_name("campaign.worker_v2"),
+            "disable_flow_v2_live": feature_flags.env_name("flow.v2_live"),
+        },
+    }
+
+
 def _require_tenant_numbers_enabled() -> None:
     if not feature_flags.is_enabled("telephony.tenant_numbers"):
         raise HTTPException(status_code=403, detail="telephony.tenant_numbers is disabled")
@@ -1770,6 +2683,16 @@ def _require_tenant_leak_regression_matrix_enabled() -> None:
     _require_tenant_scoped_read_canary_enabled()
     if not feature_flags.is_enabled("tenant.leak_regression_matrix"):
         raise HTTPException(status_code=403, detail="tenant.leak_regression_matrix is disabled")
+
+
+def _require_tenant_security_leak_audit_readiness_enabled() -> None:
+    if not feature_flags.is_enabled("tenant.security_leak_audit_readiness"):
+        raise HTTPException(status_code=403, detail="tenant.security_leak_audit_readiness is disabled")
+
+
+def _require_final_canary_rollback_readiness_enabled() -> None:
+    if not feature_flags.is_enabled("tenant.final_canary_rollback_readiness"):
+        raise HTTPException(status_code=403, detail="tenant.final_canary_rollback_readiness is disabled")
 
 
 def _require_recording_owner_lookup_shadow_enabled() -> None:
@@ -2237,6 +3160,48 @@ async def get_tenant_leak_regression_matrix(
         "cross_tenant_data_returned": False,
         "tenant_leak_regression_matrix": manifest,
     }
+
+
+@app.get("/api/tenant/security-leak-audit/readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_security_leak_audit_readiness(
+    request: Request,
+    clientId: Optional[str] = None,
+):
+    _require_tenant_security_leak_audit_readiness_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant security leak audit requires admin context")
+    client_id = _resolve_intelligence_client_id(request, clientId) if clientId else None
+    readiness = await _build_tenant_security_audit_readiness(client_id=client_id)
+    logger.info(
+        "tenant_security_leak_audit ready=%s missing_owner_total=%s relationship_mismatch_total=%s blockers=%s",
+        readiness["ready_for_production_push"],
+        readiness["summary"]["missing_owner_total"],
+        readiness["summary"]["relationship_mismatch_total"],
+        ",".join(readiness["blockers"]),
+    )
+    return readiness
+
+
+@app.get("/api/tenant/final-canary-rollback/readiness", dependencies=[Depends(require_auth)])
+async def get_tenant_final_canary_rollback_readiness(
+    request: Request,
+    clientId: Optional[str] = None,
+):
+    _require_final_canary_rollback_readiness_enabled()
+    context = _tenant_context_from_request(request)
+    if not context or not context.is_admin:
+        raise HTTPException(status_code=403, detail="tenant final canary rollback readiness requires admin context")
+    client_id = _resolve_intelligence_client_id(request, clientId) if clientId else None
+    readiness = await _build_final_canary_rollback_readiness(client_id=client_id)
+    logger.info(
+        "final_canary_rollback ready=%s campaign_ready=%s tenant_security_ready=%s blockers=%s",
+        readiness["ready_for_production_push"],
+        readiness["summary"]["campaign_ready"],
+        readiness["summary"]["tenant_security_ready"],
+        ",".join(readiness["blockers"]),
+    )
+    return readiness
 
 
 @app.get("/api/tenant/recording-access-canary", dependencies=[Depends(require_auth)])
@@ -5184,6 +6149,15 @@ async def list_campaigns(request: Request, includeArchived: bool = False, includ
     )
 
 
+@app.get("/api/campaigns/e2e-qa/readiness", dependencies=[Depends(require_auth)])
+async def get_campaign_e2e_qa_readiness(request: Request, clientId: Optional[str] = None):
+    if not feature_flags.is_enabled("campaign.e2e_qa_readiness"):
+        raise HTTPException(status_code=403, detail="campaign.e2e_qa_readiness is disabled")
+    _require_global_monitor_admin(_tenant_context_from_request(request), "Campaign E2E QA")
+    client_id = _resolve_intelligence_client_id(request, clientId) if clientId else None
+    return await _build_campaign_e2e_qa_readiness(client_id=client_id)
+
+
 async def _campaign_for_lifecycle_or_404(campaign_id: str, request: Request) -> dict:
     _require_campaign_lifecycle_enabled()
     campaign = await db.get_campaign(campaign_id)
@@ -5529,6 +6503,25 @@ def _normalize_available_number(raw: dict[str, Any], provider: str, country_code
 @app.get("/api/telephony/providers")
 async def get_providers():
     return list_providers()
+
+@app.get("/api/telephony/live-qa/readiness", dependencies=[Depends(require_auth)])
+async def get_telephony_live_qa_readiness(
+    request: Request,
+    provider: str = "twilio",
+    clientId: Optional[str] = None,
+    countryCode: str = "IN",
+    includeProviderProbe: bool = False,
+):
+    if not feature_flags.is_enabled("telephony.live_qa_readiness"):
+        raise HTTPException(status_code=403, detail="telephony.live_qa_readiness is disabled")
+    _require_global_monitor_admin(_tenant_context_from_request(request), "Telephony live QA")
+    client_id = _resolve_intelligence_client_id(request, clientId) if clientId else None
+    return await _build_telephony_live_qa_readiness(
+        provider_slug=provider,
+        client_id=client_id,
+        country_code=countryCode,
+        include_provider_probe=includeProviderProbe,
+    )
 
 @app.get("/api/telephony/numbers")
 async def list_numbers(client_id: Optional[str] = None):

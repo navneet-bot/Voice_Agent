@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { getProviderLabel } from '@/lib/providerDisplay';
 
 const CAMPAIGN_LIFECYCLE_ENABLED = process.env.NEXT_PUBLIC_CAMPAIGN_LIFECYCLE_ENABLED === 'true';
+const CAMPAIGN_E2E_QA_READINESS_ENABLED = process.env.NEXT_PUBLIC_CAMPAIGN_E2E_QA_READINESS_ENABLED === 'true';
 
 export default function CampaignsPage() {
   const { user, activeClient } = useAuth();
@@ -14,6 +15,8 @@ export default function CampaignsPage() {
   const [loading, setLoading] = useState(true);
   const [includeArchived, setIncludeArchived] = useState(false);
   const [includeDeleted, setIncludeDeleted] = useState(false);
+  const [campaignQa, setCampaignQa] = useState(null);
+  const [campaignQaLoading, setCampaignQaLoading] = useState(false);
   
   const [formData, setFormData] = useState({
     campaignId: '',
@@ -106,6 +109,38 @@ export default function CampaignsPage() {
     }
   };
 
+  const handleCampaignQa = async () => {
+    if (!CAMPAIGN_E2E_QA_READINESS_ENABLED || user?.role !== 'admin') return;
+    setCampaignQaLoading(true);
+    try {
+      const params = new URLSearchParams();
+      if (activeClient) params.set('clientId', activeClient);
+      const query = params.toString() ? `?${params.toString()}` : '';
+      const res = await fetch(`${API}/api/campaigns/e2e-qa/readiness${query}`);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCampaignQa({
+          status: 'disabled',
+          blockers: [json.detail || `HTTP ${res.status}`],
+          criteria: [],
+          summary: {},
+        });
+        return;
+      }
+      setCampaignQa(json);
+    } catch (err) {
+      console.error('Campaign QA readiness failed', err);
+      setCampaignQa({
+        status: 'unavailable',
+        blockers: ['request_failed'],
+        criteria: [],
+        summary: {},
+      });
+    } finally {
+      setCampaignQaLoading(false);
+    }
+  };
+
   const handleLifecycleAction = async (campaign, action) => {
     const labels = {
       archive: 'archive',
@@ -158,6 +193,71 @@ export default function CampaignsPage() {
             <input type="checkbox" checked={includeDeleted} onChange={e => setIncludeDeleted(e.target.checked)} />
             Show deleted
           </label>
+        </div>
+      )}
+
+      {CAMPAIGN_E2E_QA_READINESS_ENABLED && user?.role === 'admin' && (
+        <div className="card border-0 shadow-sm mb-4">
+          <div className="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center gap-3 flex-wrap">
+            <div>
+              <h6 className="mb-0 fw-bold">Campaign E2E QA</h6>
+              <div className="small text-muted">Launch, live updates, results, transcripts, and recordings readiness</div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-sm btn-outline-primary"
+              onClick={handleCampaignQa}
+              disabled={campaignQaLoading}
+            >
+              {campaignQaLoading ? 'Checking...' : 'Check readiness'}
+            </button>
+          </div>
+          <div className="card-body">
+            {!campaignQa ? (
+              <p className="text-muted small mb-0">No campaign QA snapshot loaded yet.</p>
+            ) : (
+              <>
+                <div className="d-flex flex-wrap align-items-center gap-2 mb-3">
+                  <span className={`badge ${campaignQa.status === 'ready' ? 'bg-success' : 'bg-warning text-dark'}`}>
+                    {campaignQa.status}
+                  </span>
+                  <span className="small text-muted">Mode: {campaignQa.mode || 'read_only'}</span>
+                  {campaignQa.campaigns_started === false && (
+                    <span className="badge bg-light text-dark border">No campaigns started</span>
+                  )}
+                  {campaignQa.outbound_calls_started === false && (
+                    <span className="badge bg-light text-dark border">No calls started</span>
+                  )}
+                  {campaignQa.results_written === false && (
+                    <span className="badge bg-light text-dark border">No results written</span>
+                  )}
+                  {campaignQa.queue_dispatch_started === false && (
+                    <span className="badge bg-light text-dark border">Queue unchanged</span>
+                  )}
+                </div>
+                {campaignQa.blockers?.length > 0 && (
+                  <div className="alert alert-warning py-2 small mb-3">
+                    Blockers: {campaignQa.blockers.join(', ')}
+                  </div>
+                )}
+                <div className="row g-2">
+                  {(campaignQa.criteria || []).map((item) => (
+                    <div key={item.key} className="col-md-4">
+                      <div className="border rounded-3 p-3 h-100">
+                        <div className="d-flex justify-content-between gap-2">
+                          <div className="fw-semibold small">{item.label}</div>
+                          <span className={`badge ${item.passed ? 'bg-success-subtle text-success' : 'bg-danger-subtle text-danger'}`}>
+                            {item.passed ? 'Pass' : 'Blocker'}
+                          </span>
+                        </div>
+                        {item.detail && <div className="small text-muted mt-2">{item.detail}</div>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
       

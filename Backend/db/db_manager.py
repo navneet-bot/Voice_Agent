@@ -970,6 +970,297 @@ class DatabaseManager:
                 conn.close()
         return await run_in_executor(_sync)
 
+    async def get_tenant_security_audit_counts(self, client_id: Optional[str] = None) -> dict:
+        """Return aggregate tenant ownership/relationship counts without payload data."""
+        tenant_tables = [
+            "agents",
+            "campaigns",
+            "leads",
+            "call_results",
+            "live_call_state",
+            "recording_assets",
+            "phone_numbers",
+            "phone_number_routes",
+            "campaign_cleanup_manifests",
+            "campaign_executions",
+            "campaign_lead_attempts",
+            "campaign_worker_events",
+            "agent_flow_versions",
+            "agent_memory_collections",
+            "agent_memory_items",
+            "agent_memory_events",
+            "website_scrape_jobs",
+            "generated_script_drafts",
+            "crm_connections",
+            "crm_sync_jobs",
+            "crm_sync_events",
+            "crm_sync_outbox",
+            "crm_delivery_approvals",
+        ]
+
+        relationship_queries = {
+            "campaign_agent_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM campaigns c
+                  JOIN agents a ON a.id=c.agent_id
+                 WHERE COALESCE(c.client_id, '') != COALESCE(a.client_id, '')
+            """,
+            "client_assignment_agent_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM client_assignments ca
+                  JOIN agents a ON a.id=ca.agent_id
+                 WHERE COALESCE(ca.client_id, '') != COALESCE(a.client_id, '')
+            """,
+            "campaign_phone_number_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM campaigns c
+                  JOIN phone_numbers p ON p.id=c.phone_number_id
+                 WHERE COALESCE(c.client_id, '') != COALESCE(p.client_id, '')
+            """,
+            "lead_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM leads l
+                  JOIN campaigns c ON c.id=l.campaign_id
+                 WHERE COALESCE(l.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "call_result_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM call_results r
+                  JOIN campaigns c ON c.id=r.campaign_id
+                 WHERE COALESCE(r.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "live_state_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM live_call_state s
+                  JOIN campaigns c ON c.id=s.campaign_id
+                 WHERE COALESCE(s.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "recording_asset_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM recording_assets a
+                  JOIN campaigns c ON c.id=a.campaign_id
+                 WHERE COALESCE(a.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "phone_route_number_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM phone_number_routes r
+                  JOIN phone_numbers p ON p.id=r.number_id
+                 WHERE r.status='active'
+                   AND COALESCE(r.client_id, '') != COALESCE(p.client_id, '')
+            """,
+            "phone_route_agent_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM phone_number_routes r
+                  JOIN agents a ON a.id=r.agent_id
+                 WHERE r.status='active'
+                   AND COALESCE(r.client_id, '') != COALESCE(a.client_id, '')
+            """,
+            "phone_route_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM phone_number_routes r
+                  JOIN campaigns c ON c.id=r.campaign_id
+                 WHERE r.status='active'
+                   AND COALESCE(r.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "campaign_execution_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM campaign_executions e
+                  JOIN campaigns c ON c.id=e.campaign_id
+                 WHERE COALESCE(e.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "campaign_lead_attempt_execution_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM campaign_lead_attempts a
+                  JOIN campaign_executions e ON e.id=a.execution_id
+                 WHERE COALESCE(a.client_id, '') != COALESCE(e.client_id, '')
+            """,
+            "campaign_lead_attempt_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM campaign_lead_attempts a
+                  JOIN campaigns c ON c.id=a.campaign_id
+                 WHERE COALESCE(a.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "campaign_worker_event_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM campaign_worker_events e
+                  JOIN campaigns c ON c.id=e.campaign_id
+                 WHERE COALESCE(e.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "agent_flow_version_agent_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM agent_flow_versions f
+                  JOIN agents a ON a.id=f.agent_id
+                 WHERE COALESCE(f.client_id, '') != COALESCE(a.client_id, '')
+            """,
+            "memory_collection_agent_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM agent_memory_collections m
+                  JOIN agents a ON a.id=m.agent_id
+                 WHERE COALESCE(m.client_id, '') != COALESCE(a.client_id, '')
+            """,
+            "memory_item_collection_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM agent_memory_items i
+                  JOIN agent_memory_collections c ON c.id=i.collection_id
+                 WHERE COALESCE(i.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "memory_item_agent_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM agent_memory_items i
+                  JOIN agents a ON a.id=i.agent_id
+                 WHERE COALESCE(i.client_id, '') != COALESCE(a.client_id, '')
+            """,
+            "memory_event_collection_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM agent_memory_events e
+                  JOIN agent_memory_collections c ON c.id=e.collection_id
+                 WHERE COALESCE(e.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "memory_event_agent_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM agent_memory_events e
+                  JOIN agents a ON a.id=e.agent_id
+                 WHERE COALESCE(e.client_id, '') != COALESCE(a.client_id, '')
+            """,
+            "scrape_job_agent_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM website_scrape_jobs j
+                  JOIN agents a ON a.id=j.agent_id
+                 WHERE COALESCE(j.client_id, '') != COALESCE(a.client_id, '')
+            """,
+            "generated_draft_job_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM generated_script_drafts d
+                  JOIN website_scrape_jobs j ON j.id=d.job_id
+                 WHERE COALESCE(d.client_id, '') != COALESCE(j.client_id, '')
+            """,
+            "generated_draft_agent_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM generated_script_drafts d
+                  JOIN agents a ON a.id=d.agent_id
+                 WHERE COALESCE(d.client_id, '') != COALESCE(a.client_id, '')
+            """,
+            "crm_job_connection_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_sync_jobs j
+                  JOIN crm_connections c ON c.id=j.connection_id
+                 WHERE COALESCE(j.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "crm_job_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_sync_jobs j
+                  JOIN campaigns c ON c.id=j.campaign_id
+                 WHERE COALESCE(j.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "crm_event_job_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_sync_events e
+                  JOIN crm_sync_jobs j ON j.id=e.job_id
+                 WHERE COALESCE(e.client_id, '') != COALESCE(j.client_id, '')
+            """,
+            "crm_event_connection_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_sync_events e
+                  JOIN crm_connections c ON c.id=e.connection_id
+                 WHERE COALESCE(e.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "crm_event_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_sync_events e
+                  JOIN campaigns c ON c.id=e.campaign_id
+                 WHERE COALESCE(e.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "crm_outbox_job_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_sync_outbox o
+                  JOIN crm_sync_jobs j ON j.id=o.job_id
+                 WHERE COALESCE(o.client_id, '') != COALESCE(j.client_id, '')
+            """,
+            "crm_outbox_connection_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_sync_outbox o
+                  JOIN crm_connections c ON c.id=o.connection_id
+                 WHERE COALESCE(o.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "crm_outbox_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_sync_outbox o
+                  JOIN campaigns c ON c.id=o.campaign_id
+                 WHERE COALESCE(o.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "crm_delivery_approval_outbox_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_delivery_approvals a
+                  JOIN crm_sync_outbox o ON o.id=a.outbox_id
+                 WHERE COALESCE(a.client_id, '') != COALESCE(o.client_id, '')
+            """,
+            "crm_delivery_approval_job_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_delivery_approvals a
+                  JOIN crm_sync_jobs j ON j.id=a.job_id
+                 WHERE COALESCE(a.client_id, '') != COALESCE(j.client_id, '')
+            """,
+            "crm_delivery_approval_connection_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_delivery_approvals a
+                  JOIN crm_connections c ON c.id=a.connection_id
+                 WHERE COALESCE(a.client_id, '') != COALESCE(c.client_id, '')
+            """,
+            "crm_delivery_approval_campaign_scope_mismatch": """
+                SELECT COUNT(*)
+                  FROM crm_delivery_approvals a
+                  JOIN campaigns c ON c.id=a.campaign_id
+                 WHERE COALESCE(a.client_id, '') != COALESCE(c.client_id, '')
+            """,
+        }
+
+        def _sync():
+            conn = _get_connection()
+            try:
+                def count(sql: str, params: tuple[Any, ...] = ()) -> int:
+                    row = conn.execute(sql, params).fetchone()
+                    return int(row[0] or 0)
+
+                totals_by_table = {
+                    table: count(f"SELECT COUNT(*) FROM {table}")
+                    for table in tenant_tables
+                }
+                selected_client_totals = (
+                    {
+                        table: count(f"SELECT COUNT(*) FROM {table} WHERE client_id=?", (client_id,))
+                        for table in tenant_tables
+                    }
+                    if client_id
+                    else {}
+                )
+                missing_owner_by_table = {
+                    table: count(
+                        f"""SELECT COUNT(*) FROM {table}
+                            WHERE TRIM(COALESCE(client_id, ''))=''"""
+                    )
+                    for table in tenant_tables
+                }
+                relationship_mismatches = {
+                    name: count(sql)
+                    for name, sql in relationship_queries.items()
+                }
+                return {
+                    "client_scope_requested": bool(client_id),
+                    "total_clients": count("SELECT COUNT(*) FROM clients"),
+                    "totals_by_table": totals_by_table,
+                    "selected_client_totals": selected_client_totals,
+                    "missing_owner_by_table": missing_owner_by_table,
+                    "relationship_mismatches": relationship_mismatches,
+                    "missing_owner_total": sum(missing_owner_by_table.values()),
+                    "relationship_mismatch_total": sum(relationship_mismatches.values()),
+                    "payloads_returned": False,
+                    "ids_returned": False,
+                    "tenant_values_returned": False,
+                }
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
     async def list_agents(self, client_id: Optional[str] = None) -> list[dict]:
         def _sync():
             conn = _get_connection()
