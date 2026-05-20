@@ -34,17 +34,27 @@ export default function LogsPage() {
 
   useEffect(() => {
     if (!selectedCampaign) return;
-    setLoading(true);
-    fetch(`${API}/api/campaigns/${selectedCampaign}/results`)
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (!cancelled) setLoading(true);
+        return fetch(`${API}/api/campaigns/${selectedCampaign}/results`);
+      })
       .then(r => r.ok ? r.json() : [])
       .then(data => {
+        if (cancelled) return;
         setLogs(Array.isArray(data) ? data : []);
         setLoading(false);
       })
       .catch(e => {
+        if (cancelled) return;
         console.error(e);
         setLoading(false);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedCampaign, API]);
 
   const toggleTranscript = async (leadId) => {

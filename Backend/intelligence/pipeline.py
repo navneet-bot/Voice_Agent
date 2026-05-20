@@ -87,7 +87,12 @@ class WebsiteIntelligencePipeline:
             knowledge = latest["extraction"] if latest else None
             if not knowledge:
                 run_result = await self.run_job(job_id=job_id, industry_hint=industry_hint or agent.get("agent_type"))
-                knowledge = run_result["knowledge"]
+                knowledge = run_result.get("knowledge")
+                if not knowledge:
+                    status = run_result.get("status") or job.get("status") or "unknown"
+                    if status in {"already_running", "running", "dispatching"}:
+                        raise CrawlError("Scrape job is still running. Please wait for completion before creating a draft.")
+                    raise CrawlError(f"Scrape extraction is not ready yet. Current status: {status}.")
         if not knowledge:
             safe = SafeURL(
                 url=job["url"],

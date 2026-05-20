@@ -110,7 +110,7 @@ const FLOW_VISUALIZATION_ENABLED = process.env.NEXT_PUBLIC_FLOW_VISUALIZATION_EN
 const SCRAPE_GENERATE_SCRIPT_ENABLED = process.env.NEXT_PUBLIC_SCRAPE_GENERATE_SCRIPT_ENABLED === 'true';
 const SCRAPE_WORKER_V1_ENABLED = process.env.NEXT_PUBLIC_SCRAPE_WORKER_V1_ENABLED === 'true';
 const SCRAPE_POLL_INTERVAL_MS = 1500;
-const SCRAPE_POLL_ATTEMPTS = 12;
+const SCRAPE_POLL_ATTEMPTS = 30;
 const SCRAPE_REUSE_FINAL_STATUSES = ['completed', 'draft_ready'];
 const CARTESIA_FEMALE_VOICES = [
   {
@@ -277,7 +277,7 @@ function ConversationGuidance({ knowledge }) {
 }
 
 export default function AgentsPage() {
-  const { user } = useAuth();
+  const { user, activeClient } = useAuth();
   const [agents, setAgents] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [modalMode, setModalMode] = useState('create');
@@ -391,16 +391,22 @@ export default function AgentsPage() {
   const buildTenantHeaders = (json = false) => {
     const headers = json ? { 'Content-Type': 'application/json' } : {};
     if (user?.clientId) headers['X-Tenant-ID'] = user.clientId;
+    if (user?.email) headers['X-User-Email'] = user.email;
     return headers;
   };
+
+  const selectedScrapeClientId = (agent = scrapeAgent) => (
+    user?.clientId || agent?.client_id || (user?.role === 'admin' ? activeClient : null)
+  );
 
   const loadScrapeDraftHistory = async (agent) => {
     if (!agent?.id || !SCRAPE_GENERATE_SCRIPT_ENABLED) return;
     setScrapeHistoryLoading(true);
     try {
       const params = new URLSearchParams({ agentId: agent.id });
-      if (user?.clientId || agent.client_id) {
-        params.set('clientId', user?.clientId || agent.client_id);
+      const clientId = selectedScrapeClientId(agent);
+      if (clientId) {
+        params.set('clientId', clientId);
       }
       const res = await fetch(`${API}/api/intelligence/script-drafts?${params.toString()}`, {
         headers: buildTenantHeaders(),
@@ -481,6 +487,7 @@ export default function AgentsPage() {
     setScrapeDraft(null);
     setScrapeJob(null);
     try {
+      const scrapeClientId = selectedScrapeClientId(scrapeAgent);
       setScrapeStatus('Creating scrape job');
       const jobRes = await fetch(`${API}/api/intelligence/scrape-jobs`, {
         method: 'POST',
@@ -488,7 +495,7 @@ export default function AgentsPage() {
         body: JSON.stringify({
           url: scrapeUrl.trim(),
           agentId: scrapeAgent.id,
-          clientId: user?.clientId || scrapeAgent.client_id || null,
+          clientId: scrapeClientId,
           requestedBy: user?.email || '',
           reuseExisting: true,
         }),
@@ -523,6 +530,9 @@ export default function AgentsPage() {
         }
         if (latest?.status === 'cancelled') {
           throw new Error(latest.error || 'Scrape job was cancelled');
+        }
+        if (!SCRAPE_REUSE_FINAL_STATUSES.includes(latest?.status)) {
+          throw new Error('Scrape job is still running. Please wait a moment and refresh the draft history.');
         }
       }
 

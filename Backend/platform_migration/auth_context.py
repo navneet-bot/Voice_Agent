@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -64,6 +65,21 @@ TENANT_SCOPED_READ_EXCLUDED_SURFACES = (
     ("transcript_body", "content_reads_require_endpoint_specific_phase"),
     ("campaign_worker_execution", "worker_dispatch_requires_separate_phase"),
 )
+
+
+def _configured_admin_emails() -> set[str]:
+    raw = os.getenv("PLATFORM_ADMIN_EMAILS", "")
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _dev_admin_role_for_email(email: str | None) -> str | None:
+    """Allow local admin email mapping only while active auth is disabled."""
+    if feature_flags.is_enabled("auth.enforce_backend"):
+        return None
+    normalized = (email or "").strip().lower()
+    if normalized and normalized in _configured_admin_emails():
+        return "admin"
+    return None
 
 
 @dataclass(frozen=True)
@@ -166,6 +182,7 @@ def build_tenant_context(
     if token:
         payload = _decode_unverified_jwt_payload(token)
         warnings.append("bearer_unverified")
+        user_email = _claim(payload, "email")
         tenant_id = _first_present(
             _claim(payload, "tenant_id"),
             _claim(payload, "client_id"),
@@ -174,12 +191,17 @@ def build_tenant_context(
         role = _claim(payload, "role") or "unknown"
         if role not in {"admin", "client", "tenant_admin", "user"}:
             role = "unknown"
+        if role == "unknown":
+            dev_admin_role = _dev_admin_role_for_email(user_email)
+            if dev_admin_role:
+                role = dev_admin_role
+                warnings.append("admin_email_unverified")
         if requested_tenant_id and tenant_id and requested_tenant_id != tenant_id:
             warnings.append("tenant_claim_mismatch")
         return TenantContext(
             auth_state="bearer_unverified",
             role=role,
-            user_email=_claim(payload, "email"),
+            user_email=user_email,
             subject=_claim(payload, "sub") or _claim(payload, "user_id"),
             tenant_id=tenant_id,
             requested_tenant_id=requested_tenant_id,

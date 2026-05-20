@@ -4354,6 +4354,19 @@ class DatabaseManager:
                 conn.close()
         return await run_in_executor(_sync)
 
+    async def get_client(self, client_id: str) -> Optional[dict]:
+        if not client_id:
+            return None
+
+        def _sync():
+            conn = _get_connection()
+            try:
+                row = conn.execute("SELECT * FROM clients WHERE id=?", (client_id,)).fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
     async def get_client_by_email(self, email: str) -> Optional[dict]:
         normalized = _normalize_email(email)
         if not normalized:

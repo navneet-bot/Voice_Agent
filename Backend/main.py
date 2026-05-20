@@ -399,6 +399,7 @@ class ClientCreate(BaseModel):
     name: str
     email: Optional[str] = None
     plan: Optional[str] = "free"
+    agentId: Optional[str] = None
 
 class WebsiteScrapeStart(BaseModel):
     url: str
@@ -425,7 +426,6 @@ class WebsiteScriptDraftCreate(BaseModel):
     agentId: str
     industryHint: Optional[str] = None
     agentName: Optional[str] = None
-    agentId: Optional[str] = None
 
 class FlowTransitionDraftUpdate(BaseModel):
     intent: str
@@ -4790,6 +4790,11 @@ async def create_scrape_job(data: WebsiteScrapeStart, request: Request):
         if client_id and agent.get("client_id") and client_id != agent["client_id"]:
             raise HTTPException(status_code=403, detail="Agent is outside tenant scope")
         client_id = client_id or agent.get("client_id")
+    if client_id and not await db.get_client(client_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Client '{client_id}' does not exist. Create the client before generating website drafts.",
+        )
     pipeline = WebsiteIntelligencePipeline(db)
     try:
         job = await pipeline.create_job(
@@ -5112,7 +5117,7 @@ async def list_script_drafts(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     requested_client_id = _resolve_intelligence_client_id(request, clientId)
-    _assert_intelligence_scope(request, agent.get("client_id"), "Agent")
+    _assert_intelligence_scope(request, agent.get("client_id"), "Agent", allow_unassigned=True)
     if requested_client_id and agent.get("client_id") and requested_client_id != agent["client_id"]:
         raise HTTPException(status_code=403, detail="Agent is outside tenant scope")
     drafts = await db.list_generated_script_drafts(
@@ -5138,6 +5143,23 @@ async def create_script_draft(data: WebsiteScriptDraftCreate, request: Request):
         raise HTTPException(status_code=400, detail="Scrape job does not belong to this agent")
     if job.get("client_id") and agent.get("client_id") and job["client_id"] != agent["client_id"]:
         raise HTTPException(status_code=403, detail="Agent is outside scrape job tenant scope")
+    latest_extraction = await db.get_latest_scrape_extraction(data.jobId)
+    if (
+        feature_flags.is_enabled("scrape.worker_v1")
+        and job.get("status") in {"dispatching", "running"}
+        and not latest_extraction
+    ):
+        await _append_scrape_job_event_if_enabled(
+            data.jobId,
+            "draft_waiting_for_worker",
+            status=job.get("status"),
+            actor=data.agentName,
+            metadata={"agent_id": data.agentId},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Scrape job is still running. Please wait for completion before creating a draft.",
+        )
     existing_draft = await db.get_generated_script_draft_for_job(job_id=data.jobId, agent_id=data.agentId)
     if existing_draft:
         logger.info(

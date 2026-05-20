@@ -17,7 +17,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from db import db_manager
-from intelligence.crawler import CrawledPage
+from intelligence.crawler import CrawlError, CrawledPage
 from intelligence.extraction import assess_website_knowledge
 from intelligence.pipeline import WebsiteIntelligencePipeline
 from intelligence.url_guard import URLSafetyError, validate_public_http_url
@@ -393,6 +393,27 @@ class WebsiteIntelligenceTest(unittest.TestCase):
         self.assertEqual(duplicate_result["status"], "already_running")
         self.assertTrue(duplicate_result["skipped"])
         self.assertEqual(len(crawler.calls), 0)
+
+    def test_live_draft_creation_blocks_while_worker_is_running(self):
+        crawler = FakeCrawler()
+        pipeline = WebsiteIntelligencePipeline(self.manager, crawler=crawler)
+        agent = asyncio.run(self.manager.get_agent("agent-1"))
+        job = asyncio.run(pipeline.create_job(
+            client_id="client-1",
+            agent_id="agent-1",
+            url="https://example.com/services",
+            requested_by="admin@example.com",
+        ))
+        asyncio.run(self.manager.mark_scrape_job_running(job["id"]))
+
+        with self.assertRaisesRegex(CrawlError, "still running"):
+            asyncio.run(pipeline.create_draft_from_job(
+                job_id=job["id"],
+                agent=agent,
+                use_live_extraction=True,
+            ))
+
+        self.assertEqual(crawler.calls, [])
 
     def test_stale_scrape_job_can_be_recovered_without_running_worker(self):
         pipeline = WebsiteIntelligencePipeline(self.manager)

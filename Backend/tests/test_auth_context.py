@@ -163,6 +163,54 @@ class AuthContextTest(unittest.TestCase):
         self.assertIn("token_in_query", context.warnings)
         self.assertIn("bearer_unverified", context.warnings)
 
+    def test_configured_admin_email_supports_dev_admin_context(self):
+        token = _token(
+            {
+                "email": "admin@example.com",
+                "sub": "firebase-admin-id",
+            }
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "PLATFORM_ADMIN_EMAILS": "admin@example.com",
+                "FEATURE_AUTH_ENFORCE_BACKEND": "false",
+            },
+            clear=True,
+        ):
+            context = build_tenant_context(headers={"Authorization": f"Bearer {token}"})
+
+        self.assertEqual(context.auth_state, "bearer_unverified")
+        self.assertEqual(context.role, "admin")
+        self.assertTrue(context.is_admin)
+        self.assertFalse(context.is_verified)
+        self.assertIn("admin_email_unverified", context.warnings)
+
+    def test_configured_admin_email_does_not_bypass_backend_auth_enforcement(self):
+        token = _token(
+            {
+                "email": "admin@example.com",
+                "sub": "firebase-admin-id",
+            }
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "PLATFORM_ADMIN_EMAILS": "admin@example.com",
+                "FEATURE_AUTH_ENFORCE_BACKEND": "true",
+            },
+            clear=True,
+        ):
+            context = build_tenant_context(headers={"Authorization": f"Bearer {token}"})
+            rejected = should_reject_http_request(context, "/api/tenant/security-leak-audit/readiness")
+
+        self.assertEqual(context.auth_state, "bearer_unverified")
+        self.assertEqual(context.role, "unknown")
+        self.assertFalse(context.is_admin)
+        self.assertTrue(rejected)
+
     def test_unverified_user_email_is_not_treated_as_verified_auth(self):
         context = build_tenant_context(
             headers={"X-User-Email": "client@example.com"},
