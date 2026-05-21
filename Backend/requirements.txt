@@ -8,6 +8,7 @@ pydantic
 
 # AI APIs
 groq
+twilio
 
 # TTS (cloud)
 edge-tts
