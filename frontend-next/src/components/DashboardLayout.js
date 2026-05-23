@@ -1,4 +1,5 @@
 'use client';
+import 'bootstrap/dist/css/bootstrap.min.css';
 import { useAuth, clientProfile } from '../context/AuthContext';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -14,7 +15,7 @@ export default function DashboardLayout({ children }) {
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && !currentRole) router.push('/');
+    if (!loading && !currentRole) router.push('/login');
   }, [loading, currentRole, router]);
 
   if (loading || !currentRole || !user) return (
