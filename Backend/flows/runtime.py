@@ -304,7 +304,7 @@ class RealEstateSTTProcessor(FrameProcessor):
         self.agent_id = agent_id or "default"
         self.audio_buffer = bytearray()
         effective_max_ms = max(stt_cfg.MAX_CHUNK_MS, 2500)
-        effective_trailing_ms = max(stt_cfg.TRAILING_SILENCE_MS, 650)
+        effective_trailing_ms = max(stt_cfg.TRAILING_SILENCE_MS, int(os.getenv("STT_EFFECTIVE_TRAILING_MS", "380")))
         self.min_chunk_bytes = _ms_to_bytes(stt_cfg.MIN_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
         # Keep phrase-level chunks, but do not wait over a second after the user stops speaking.
         self.max_chunk_bytes = _ms_to_bytes(effective_max_ms, stt_cfg.TARGET_SAMPLE_RATE)
@@ -367,11 +367,11 @@ class RealEstateSTTProcessor(FrameProcessor):
         # Adaptive activation threshold:
         # - Lower floor so quieter microphones can still trigger speech.
         # - Keep a cap so we don't become too strict in mildly noisy rooms.
-        dynamic_threshold = max(self.noise_floor * 8.0, self.noise_floor + 0.006, 0.010)
-        dynamic_threshold = min(dynamic_threshold, 0.022)
+        dynamic_threshold = max(self.noise_floor * 6.0, self.noise_floor + 0.004, 0.007)
+        dynamic_threshold = min(dynamic_threshold, 0.018)
         now_mono = time.monotonic()
-        voice_presence_threshold = max(dynamic_threshold * 0.55, self.noise_floor + 0.0035)
-        strong_voice_threshold = max(dynamic_threshold * 1.35, self.noise_floor + 0.012)
+        voice_presence_threshold = max(dynamic_threshold * 0.50, self.noise_floor + 0.0025)
+        strong_voice_threshold = max(dynamic_threshold * 1.20, self.noise_floor + 0.008)
 
         # Crucial: do not send silence/background chunks to cloud STT.
         if not self.is_speaking:

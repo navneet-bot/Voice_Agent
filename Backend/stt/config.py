@@ -6,18 +6,34 @@ Change values here to adjust model size, quantization, VAD behaviour,
 and language detection without touching any logic code.
 """
 
+import os
+
 from typing import Optional
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
 
 LANGUAGE: Optional[str] = None     # None = auto-detect (Hindi / Marathi / English)
 
 # Runtime buffering tuned for low-latency local voice calls
 TARGET_SAMPLE_RATE: int = 16000
-MIN_CHUNK_MS: int = 250
-MAX_CHUNK_MS: int = 800
-TRAILING_SILENCE_MS: int = 220
-SILENCE_RMS_THRESHOLD: float = 0.040
+MIN_CHUNK_MS: int = _env_int("STT_MIN_CHUNK_MS", 250)
+MAX_CHUNK_MS: int = _env_int("STT_MAX_CHUNK_MS", 800)
+TRAILING_SILENCE_MS: int = _env_int("STT_TRAILING_SILENCE_MS", 220)
+SILENCE_RMS_THRESHOLD: float = _env_float("STT_SILENCE_RMS_THRESHOLD", 0.040)
 MIN_TRANSCRIPT_CHARS: int = 1
-DUPLICATE_TEXT_WINDOW_S: float = 3.0
-ENERGY_THRESHOLD: float = 0.015  # Raised to 0.015 to reject background hum/noise
-MIN_VOICE_START_MS: int = 360
-POST_TTS_STT_COOLDOWN_MS: int = 450
+DUPLICATE_TEXT_WINDOW_S: float = _env_float("STT_DUPLICATE_TEXT_WINDOW_S", 3.0)
+ENERGY_THRESHOLD: float = _env_float("STT_ENERGY_THRESHOLD", 0.015)
+MIN_VOICE_START_MS: int = _env_int("STT_MIN_VOICE_START_MS", 280)
+POST_TTS_STT_COOLDOWN_MS: int = _env_int("POST_TTS_STT_COOLDOWN_MS", 180)

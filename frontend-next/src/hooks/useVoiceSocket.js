@@ -37,7 +37,7 @@ export function useVoiceSocket(agentId, activeClient) {
     clearPlaybackReleaseTimer();
   }, [clearPlaybackReleaseTimer]);
 
-  const scheduleMicResume = useCallback((ctx, tailMs = 320) => {
+  const scheduleMicResume = useCallback((ctx, tailMs = 120) => {
     const queuedMs = Math.max(0, (nextStartTimeRef.current - ctx.currentTime) * 1000);
     const releaseAfterMs = queuedMs + tailMs;
     holdMicInput(releaseAfterMs);
@@ -221,7 +221,7 @@ export function useVoiceSocket(agentId, activeClient) {
             } else if (msg.type === 'cancel' || msg.type === 'gen_id') {
               activeGenIdRef.current = msg.value || (activeGenIdRef.current + 1);
               expectsGenHeaderRef.current = false; // Never expect 4-byte headers, they corrupt raw PCM
-              holdMicInput(250);
+              holdMicInput(120);
 
               // Gracefully fade out the current playing generation over 50ms
               if (activeGainNodeRef.current && audioCtxRef.current) {
