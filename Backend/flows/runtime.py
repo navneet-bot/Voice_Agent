@@ -482,6 +482,11 @@ class RealEstateSTTProcessor(FrameProcessor):
             
         normalized_text = _normalize_text(text)
         if not normalized_text or len(normalized_text) < stt_cfg.MIN_TRANSCRIPT_CHARS or not _is_actionable_transcript(text):
+            logger.warning(
+                "[PIPELINE] STT -> Dropped empty/non-actionable transcript bytes=%d text=%r",
+                len(chunk),
+                text,
+            )
             self._cooldown_until = time.monotonic() + 0.35
             return
 

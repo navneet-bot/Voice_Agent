@@ -92,6 +92,21 @@ def _shadow_provider(primary_provider: str) -> str:
     return "deepgram" if primary_provider == "groq" else "groq"
 
 
+def _fallback_provider(primary_provider: str) -> str:
+    configured = os.getenv("STT_FALLBACK_PROVIDER")
+    if configured:
+        return _normalize_provider(configured)
+    return "deepgram" if primary_provider == "groq" else "groq"
+
+
+def _provider_has_credentials(provider: str) -> bool:
+    if provider == "deepgram":
+        return bool(os.getenv("DEEPGRAM_API_KEY", "").strip())
+    if provider == "groq":
+        return bool(os.getenv("GROQ_API_KEY", "").strip())
+    return False
+
+
 def _load_provider(provider: str):
     if provider == "deepgram":
         from .stt_deepgram import transcribe_audio as _deepgram
@@ -112,6 +127,48 @@ def _run_provider(provider: str, audio_chunk: bytes) -> tuple[str, float]:
     return text, time.perf_counter() - started_at
 
 
+def _run_fallback(primary_provider: str, audio_chunk: bytes, reason: str) -> str | None:
+    if not _env_bool("STT_FALLBACK_ENABLED", True):
+        return None
+
+    fallback_provider = _fallback_provider(primary_provider)
+    if fallback_provider == primary_provider:
+        return None
+
+    if not _provider_has_credentials(fallback_provider):
+        logger.warning(
+            "[STT PROVIDER] primary=%s %s; fallback=%s skipped because credentials are not configured",
+            primary_provider,
+            reason,
+            fallback_provider,
+        )
+        return None
+
+    try:
+        fallback_text, fallback_latency = _run_provider(fallback_provider, audio_chunk)
+    except Exception as fallback_exc:
+        logger.exception("[STT PROVIDER] fallback=%s failed after primary=%s %s: %s", fallback_provider, primary_provider, reason, fallback_exc)
+        return None
+
+    if fallback_text:
+        logger.warning(
+            "[STT PROVIDER] primary=%s %s; fallback=%s produced transcript in %.1fms",
+            primary_provider,
+            reason,
+            fallback_provider,
+            fallback_latency * 1000.0,
+        )
+    else:
+        logger.warning(
+            "[STT PROVIDER] primary=%s %s; fallback=%s also returned empty in %.1fms",
+            primary_provider,
+            reason,
+            fallback_provider,
+            fallback_latency * 1000.0,
+        )
+    return fallback_text
+
+
 def transcribe_audio(audio_chunk: bytes, agent_id: str = "default") -> str:
     """Transcribe PCM16 mono 16kHz bytes with the selected provider."""
     primary_provider = _configured_provider(agent_id)
@@ -119,23 +176,14 @@ def transcribe_audio(audio_chunk: bytes, agent_id: str = "default") -> str:
     try:
         primary_text, primary_latency = _run_provider(primary_provider, audio_chunk)
     except Exception as exc:
-        fallback_enabled = _env_bool("STT_FALLBACK_ENABLED", True)
-        if not fallback_enabled or primary_provider == DEFAULT_PROVIDER:
-            logger.exception("[STT PROVIDER] primary=%s failed: %s", primary_provider, exc)
-            return ""
+        logger.exception("[STT PROVIDER] primary=%s failed: %s", primary_provider, exc)
+        fallback_text = _run_fallback(primary_provider, audio_chunk, "failed")
+        return fallback_text or ""
 
-        logger.warning(
-            "[STT PROVIDER] primary=%s failed; falling back to %s: %s",
-            primary_provider,
-            DEFAULT_PROVIDER,
-            exc,
-        )
-        try:
-            primary_text, primary_latency = _run_provider(DEFAULT_PROVIDER, audio_chunk)
-            primary_provider = DEFAULT_PROVIDER
-        except Exception as fallback_exc:
-            logger.exception("[STT PROVIDER] fallback=%s failed: %s", DEFAULT_PROVIDER, fallback_exc)
-            return ""
+    if not primary_text and _env_bool("STT_FALLBACK_ON_EMPTY", True):
+        fallback_text = _run_fallback(primary_provider, audio_chunk, "returned empty")
+        if fallback_text:
+            return fallback_text
 
     if _env_bool("STT_SHADOW_MODE", False):
         shadow = _shadow_provider(primary_provider)

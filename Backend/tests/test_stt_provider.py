@@ -93,6 +93,46 @@ class STTProviderTest(unittest.TestCase):
         self.assertEqual(result, "fallback transcript")
         self.assertEqual(calls, ["deepgram", "groq"])
 
+    def test_empty_primary_transcript_falls_back_to_alternate_provider(self):
+        calls = []
+
+        def fake_run_provider(provider_name, audio_chunk):
+            calls.append(provider_name)
+            if provider_name == "groq":
+                return "", 0.010
+            return "deepgram transcript", 0.020
+
+        provider._run_provider = fake_run_provider
+        os.environ["STT_PROVIDER"] = "groq"
+        os.environ["STT_FALLBACK_ENABLED"] = "true"
+        os.environ["STT_FALLBACK_ON_EMPTY"] = "true"
+        os.environ["STT_SHADOW_MODE"] = "false"
+        os.environ["DEEPGRAM_API_KEY"] = "test-deepgram-key"
+
+        result = provider.transcribe_audio(b"\x01\x00" * 160)
+
+        self.assertEqual(result, "deepgram transcript")
+        self.assertEqual(calls, ["groq", "deepgram"])
+
+    def test_empty_primary_transcript_skips_unconfigured_fallback(self):
+        calls = []
+
+        def fake_run_provider(provider_name, audio_chunk):
+            calls.append(provider_name)
+            return "", 0.010
+
+        provider._run_provider = fake_run_provider
+        os.environ["STT_PROVIDER"] = "groq"
+        os.environ["STT_FALLBACK_ENABLED"] = "true"
+        os.environ["STT_FALLBACK_ON_EMPTY"] = "true"
+        os.environ["STT_SHADOW_MODE"] = "false"
+        os.environ["DEEPGRAM_API_KEY"] = ""
+
+        result = provider.transcribe_audio(b"\x01\x00" * 160)
+
+        self.assertEqual(result, "")
+        self.assertEqual(calls, ["groq"])
+
     def test_deepgram_missing_key_raises_for_provider_fallback(self):
         os.environ["DEEPGRAM_API_KEY"] = ""
         with self.assertRaises(RuntimeError):
