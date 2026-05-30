@@ -1,7 +1,9 @@
-"""Dormant campaign worker-v2 control plane.
+"""Campaign worker-v2 control plane.
 
-Phase 3 prepares durable execution metadata without replacing the existing
-campaign runner. The current v1 runner remains the source of live behavior.
+This is the live execution metadata/control surface. The existing v1 call
+runner still performs the call dispatch for audio/runtime compatibility, while
+worker-v2 records durable execution state, pause/resume/cancel intent, retry
+limits, and tenant ownership around that live dispatch.
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ logger = logging.getLogger("campaigns.worker_v2")
 
 @dataclass(frozen=True)
 class CampaignWorkerV2Config:
-    mode: str = "shadow"
+    mode: str = "live_metadata"
     max_concurrency: int = 1
     max_attempts: int = 1
 
@@ -79,4 +81,3 @@ class CampaignWorkerV2ControlPlane:
             event_type="execution_cancelled",
             payload={"reason": reason},
         )
-

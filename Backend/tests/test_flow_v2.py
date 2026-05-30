@@ -37,7 +37,7 @@ class FlowV2Test(unittest.TestCase):
         self.assertEqual(flow["validation"]["status"], "valid")
         self.assertEqual(flow["slots"][0]["id"], "interested")
 
-    def test_validator_rejects_publish_or_broken_graph_in_phase_four(self):
+    def test_validator_allows_live_publish_and_rejects_broken_graph(self):
         flow = build_flow_spec_from_agent(
             agent_id="agent-1",
             agent_name="Rani",
@@ -46,10 +46,11 @@ class FlowV2Test(unittest.TestCase):
             data_fields=["interested"],
         )
         flow["status"] = "published"
-        with self.assertRaises(FlowSpecValidationError):
-            validate_flow_spec(flow)
+        flow["runtime_mode"] = "live"
+        self.assertEqual(validate_flow_spec(flow)["runtime_mode"], "live")
 
         flow["status"] = "draft"
+        flow["runtime_mode"] = "shadow"
         flow["nodes"][0]["transitions"][0]["target"] = "missing-node"
         with self.assertRaises(FlowSpecValidationError):
             validate_flow_spec(flow)
@@ -210,16 +211,42 @@ class FlowV2Test(unittest.TestCase):
         self.assertEqual(draft["runtime_mode"], "shadow")
         self.assertEqual(draft["validation"]["status"], "valid")
 
-    def test_flow_v2_draft_update_route_is_flagged_and_draft_only(self):
+    def test_flow_v2_draft_update_route_can_publish_live_when_flag_enabled(self):
         source = (BACKEND_ROOT / "main.py").read_text(encoding="utf-8")
 
         self.assertIn("/api/agents/{agent_id}/flow-v2-draft", source)
         self.assertIn('feature_flags.is_enabled("flow.visualization")', source)
         self.assertIn('feature_flags.is_enabled("flow.v2_shadow")', source)
+        self.assertIn('feature_flags.is_enabled("flow.v2_live")', source)
         self.assertIn("_apply_flow_v2_draft_updates", source)
         self.assertIn("_write_flow_v2_draft_artifact", source)
+        self.assertIn("_publish_flow_v2_to_runtime", source)
         self.assertIn('"runtime_mode"] = "shadow"', source)
         self.assertIn('"status"] = "draft"', source)
+        self.assertIn('"runtime_live_changed": runtime_live_changed', source)
+
+    def test_flow_v2_to_runtime_conversion_preserves_nodes_edges_and_slots(self):
+        import main
+
+        flow = build_flow_spec_from_agent(
+            agent_id="agent-1",
+            agent_name="Rani",
+            agent_type="finance",
+            script="Qualify the caller.",
+            data_fields=["interested"],
+        )
+
+        runtime_flow = main._flow_v2_to_runtime_conversation_flow(flow)
+
+        self.assertEqual(runtime_flow["schema_version"], "2.0")
+        self.assertEqual(runtime_flow["start_node_id"], "start")
+        start = runtime_flow["nodes"][0]
+        discovery = next(node for node in runtime_flow["nodes"] if node["id"] == "discovery")
+        fallback = next(node for node in runtime_flow["nodes"] if node["id"] == "fallback")
+        self.assertEqual(start["intent_triggers"], ["call_connected"])
+        self.assertEqual(start["edges"][0]["destination_node_id"], "discovery")
+        self.assertEqual(discovery["collects"], ["interested"])
+        self.assertEqual(fallback["type"], "fallback")
 
 
 if __name__ == "__main__":

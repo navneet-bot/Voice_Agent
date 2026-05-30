@@ -12,7 +12,7 @@ from platform_migration import feature_flags
 
 
 class FeatureFlagsTest(unittest.TestCase):
-    def test_all_roadmap_flags_default_to_disabled(self):
+    def test_all_roadmap_flags_are_registered_with_rollback_defaults(self):
         self.assertEqual(
             set(feature_flags.known_flags()),
             {
@@ -92,7 +92,18 @@ class FeatureFlagsTest(unittest.TestCase):
             },
         )
         self.assertTrue(all(value is False for value in feature_flags.known_flags().values()))
-        self.assertTrue(all(value is False for value in feature_flags.snapshot(env={}).values()))
+        self.assertTrue(all(value is False for value in feature_flags.snapshot(env={"PLATFORM_FEATURE_PROFILE": "shadow"}).values()))
+
+    def test_live_profile_enables_completed_features_with_auth_exception(self):
+        env = {"PLATFORM_FEATURE_PROFILE": "live"}
+        snapshot = feature_flags.snapshot(env=env)
+
+        self.assertEqual(feature_flags.active_profile(env=env), "live")
+        self.assertTrue(snapshot["flow.v2_live"])
+        self.assertTrue(snapshot["scrape.generate_script"])
+        self.assertTrue(snapshot["campaign.worker_v2"])
+        self.assertTrue(snapshot["telephony.tenant_numbers"])
+        self.assertFalse(snapshot["auth.enforce_backend"])
 
     def test_environment_override_uses_stable_names(self):
         env = {

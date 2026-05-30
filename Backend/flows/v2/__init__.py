@@ -1,7 +1,8 @@
 """FlowSpec v2 sidecar package.
 
-Flow v2 is validation/shadow-only in Phase 4. Live calls continue to use the
-existing StateManager and v1 conversationFlow schema.
+Flow v2 owns validation, preview, editing, and publishing metadata. Live calls
+still use the existing StateManager/audio runtime; publishing converts a
+validated FlowSpec into the compatible v1 conversationFlow schema.
 """
 
 from .spec import FlowSpecValidationError, build_flow_spec_from_agent, validate_flow_spec

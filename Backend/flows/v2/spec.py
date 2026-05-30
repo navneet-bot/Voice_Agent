@@ -131,10 +131,10 @@ def validate_flow_spec(flow: dict[str, Any]) -> dict[str, Any]:
     flow = deepcopy(flow)
     if flow.get("schema_version") != "2.0":
         raise FlowSpecValidationError("schema_version must be 2.0")
-    if flow.get("runtime_mode") not in {"shadow", "draft"}:
-        raise FlowSpecValidationError("Phase 4 FlowSpec must be shadow/draft only")
-    if flow.get("status") not in {"draft", "validated"}:
-        raise FlowSpecValidationError("Phase 4 FlowSpec cannot be published")
+    if flow.get("runtime_mode") not in {"shadow", "draft", "live"}:
+        raise FlowSpecValidationError("FlowSpec runtime_mode must be shadow, draft, or live")
+    if flow.get("status") not in {"draft", "validated", "published"}:
+        raise FlowSpecValidationError("FlowSpec status must be draft, validated, or published")
 
     nodes = flow.get("nodes")
     if not isinstance(nodes, list) or not nodes:
@@ -236,4 +236,3 @@ def _reachable_nodes(start_node_id: str, node_map: dict[str, dict[str, Any]]) ->
             if target in node_map and target not in reachable:
                 queue.append(target)
     return reachable
-

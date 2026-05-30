@@ -1,7 +1,14 @@
 """Central feature flags for the phased platform migration.
 
-All roadmap flags default to disabled. Runtime code can opt in later without
-changing flag names or environment wiring.
+Registered roadmap defaults stay conservative for local/test/rollback safety.
+Production can activate the completed platform surfaces with one explicit
+release profile:
+
+    PLATFORM_FEATURE_PROFILE=live
+
+Set PLATFORM_FEATURE_PROFILE=shadow to return the platform to the original
+shadow/off posture without changing individual flags. Individual FEATURE_*
+environment variables always win over the profile.
 """
 
 from __future__ import annotations
@@ -89,6 +96,20 @@ _DEFAULTS = MappingProxyType(
     }
 )
 
+_ROLLBACK_PROFILE = "shadow"
+_LIVE_PROFILE = "live"
+_DEFAULT_PROFILE = _ROLLBACK_PROFILE
+_PROFILE_ENV = "PLATFORM_FEATURE_PROFILE"
+
+_LIVE_PROFILE_DISABLED_FLAGS = frozenset(
+    {
+        # Hard backend auth requires signed server-verifiable identity on every
+        # frontend/API call. Keep it individually controlled so go-live does not
+        # lock out dashboards that still use tenant headers and Firebase tokens.
+        "auth.enforce_backend",
+    }
+)
+
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
 _FALSE_VALUES = {"0", "false", "no", "off", "disabled"}
 
@@ -111,6 +132,22 @@ def parse_bool(value: str | None, default: bool = False) -> bool:
     return bool(default)
 
 
+def _profile_name(source: Mapping[str, str]) -> str:
+    return str(source.get(_PROFILE_ENV) or _DEFAULT_PROFILE).strip().lower()
+
+
+def _profile_default(flag_name: str, source: Mapping[str, str]) -> bool:
+    registered_default = _DEFAULTS.get(flag_name, False)
+    profile = _profile_name(source)
+    if profile in {_ROLLBACK_PROFILE, "off", "disabled", "safe"}:
+        return registered_default
+    if profile in {_LIVE_PROFILE, "production", "prod", "on"}:
+        if flag_name in _LIVE_PROFILE_DISABLED_FLAGS:
+            return registered_default
+        return flag_name in _DEFAULTS
+    return registered_default
+
+
 def is_enabled(
     flag_name: str,
     *,
@@ -122,7 +159,7 @@ def is_enabled(
     Unknown flags are disabled unless the caller supplies an explicit default.
     """
     source = env if env is not None else os.environ
-    fallback = _DEFAULTS.get(flag_name, False) if default is None else bool(default)
+    fallback = _profile_default(flag_name, source) if default is None else bool(default)
     return parse_bool(source.get(env_name(flag_name)), fallback)
 
 
@@ -134,3 +171,9 @@ def known_flags() -> dict[str, bool]:
 def snapshot(env: Mapping[str, str] | None = None) -> dict[str, bool]:
     """Return current flag states for logging, diagnostics, or health checks."""
     return {flag: is_enabled(flag, env=env) for flag in _DEFAULTS}
+
+
+def active_profile(env: Mapping[str, str] | None = None) -> str:
+    """Return the active release profile name."""
+    source = env if env is not None else os.environ
+    return _profile_name(source)

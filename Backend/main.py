@@ -817,7 +817,7 @@ def _build_editable_flow_payload(flow: dict) -> dict:
         "editable_fields": ("label", "response_en", "collects", "transitions"),
         "runtime_mode": flow.get("runtime_mode"),
         "status": flow.get("status"),
-        "live_runtime_unchanged": True,
+        "live_runtime_unchanged": flow.get("runtime_mode") != "live",
     }
 
 
@@ -843,6 +843,150 @@ def _write_flow_v2_draft_artifact(agent: dict, flow: dict) -> str:
     with open(artifact_path, "w", encoding="utf-8") as flow_file:
         json.dump(flow, flow_file, indent=2)
     return artifact_path
+
+
+def _write_flow_v2_live_artifact(agent: dict, flow: dict) -> str:
+    live_flow = json.loads(json.dumps(flow))
+    live_flow["status"] = "published"
+    live_flow["runtime_mode"] = "live"
+    metadata = live_flow.get("metadata") if isinstance(live_flow.get("metadata"), dict) else {}
+    metadata.update({
+        "live_runtime_unchanged": False,
+        "published_at": datetime.now().isoformat(),
+        "published_to": "v1_runtime_schema",
+    })
+    live_flow["metadata"] = metadata
+    live_flow = validate_flow_spec(live_flow)
+
+    schema_path = agent.get("schema_path") or os.path.join(AGENTS_DIR, f"{agent['id']}.json")
+    base_path = os.path.splitext(schema_path)[0]
+    artifact_path = f"{base_path}.{uuid.uuid4().hex[:8]}.live.flow.v2.json"
+    os.makedirs(os.path.dirname(artifact_path), exist_ok=True)
+    with open(artifact_path, "w", encoding="utf-8") as flow_file:
+        json.dump(live_flow, flow_file, indent=2)
+    return artifact_path
+
+
+def _flow_v2_response_text(node: dict, default_locale: str = "en") -> str:
+    response = node.get("response") if isinstance(node.get("response"), dict) else {}
+    text = response.get(default_locale)
+    if not text:
+        text = next((value for value in response.values() if str(value).strip()), "")
+    return str(text or "Continue.").strip()
+
+
+def _flow_v2_transition_text(transition: dict) -> str:
+    label = transition.get("label") or transition.get("intent") or "user responds"
+    return str(label).replace("_", " ").strip() or "user responds"
+
+
+def _flow_v2_to_runtime_conversation_flow(flow: dict) -> dict:
+    validated = validate_flow_spec(flow)
+    default_locale = validated.get("default_locale") or "en"
+    incoming_intents: dict[str, set[str]] = {}
+    for node in validated.get("nodes") or []:
+        for transition in node.get("transitions") or []:
+            target = transition.get("target")
+            intent = str(transition.get("intent") or "").strip()
+            if target and intent:
+                incoming_intents.setdefault(target, set()).add(intent)
+
+    runtime_nodes = []
+    for node in validated.get("nodes") or []:
+        node_id = node["id"]
+        node_type = node.get("type")
+        response_text = _flow_v2_response_text(node, default_locale)
+        runtime_type = "end" if node_type == "end" else "fallback" if node_type == "fallback" else "conversation"
+        runtime_node = {
+            "id": node_id,
+            "name": node.get("label") or node_id,
+            "type": runtime_type,
+            "instruction": {
+                "type": "prompt",
+                "text": f"Follow the published Flow V2 node '{node.get('label') or node_id}' and keep the reply concise.",
+            },
+            "response": response_text,
+            "edges": [
+                {
+                    "id": f"edge_{node_id}_{index}_{transition.get('target')}",
+                    "condition": _flow_v2_transition_text(transition),
+                    "transition_condition": {
+                        "type": "prompt",
+                        "prompt": _flow_v2_transition_text(transition),
+                    },
+                    "destination_node_id": transition.get("target"),
+                }
+                for index, transition in enumerate(node.get("transitions") or [], start=1)
+            ],
+        }
+        if node_id == validated.get("start_node_id"):
+            runtime_node["start_speaker"] = "agent"
+            runtime_node["intent_triggers"] = ["call_connected"]
+        elif incoming_intents.get(node_id):
+            runtime_node["intent_triggers"] = sorted(incoming_intents[node_id])
+        if node.get("collects"):
+            runtime_node["collects"] = list(node.get("collects") or [])
+        if node.get("fallback"):
+            runtime_node["fallback"] = node.get("fallback")
+        runtime_nodes.append(runtime_node)
+
+    return {
+        "conversation_flow_id": validated.get("id"),
+        "version": 2,
+        "schema_version": "2.0",
+        "global_prompt": validated.get("global_prompt") or "",
+        "start_node_id": validated.get("start_node_id"),
+        "nodes": runtime_nodes,
+    }
+
+
+def _publish_flow_v2_to_runtime(agent: dict, flow: dict, *, actor: Optional[str] = None) -> dict:
+    live_artifact_path = _write_flow_v2_live_artifact(agent, flow)
+    schema_path = _agent_schema_path(agent["id"], agent.get("schema_path"))
+    try:
+        with open(schema_path, "r", encoding="utf-8") as schema_file:
+            schema = json.load(schema_file)
+    except (OSError, json.JSONDecodeError):
+        schema = {}
+
+    if not isinstance(schema, dict):
+        schema = {}
+
+    backup_path = ""
+    if os.path.exists(schema_path):
+        backup_path = f"{os.path.splitext(schema_path)[0]}.runtime.backup.{uuid.uuid4().hex[:8]}.json"
+        with open(backup_path, "w", encoding="utf-8") as backup_file:
+            json.dump(schema, backup_file, indent=2)
+
+    live_flow = _read_agent_flow_v2_artifact(agent["id"], live_artifact_path)
+    if not live_flow:
+        raise FlowSpecValidationError("Published Flow V2 artifact could not be read back safely")
+
+    schema["agent_name"] = agent.get("name") or live_flow.get("agent_name") or "Voice Agent"
+    schema["global_prompt"] = live_flow.get("global_prompt") or agent.get("script") or schema.get("global_prompt") or ""
+    schema["conversation_flow_id"] = live_flow.get("id") or schema.get("conversation_flow_id")
+    schema["conversationFlow"] = _flow_v2_to_runtime_conversation_flow(live_flow)
+    metadata = schema.get("agent_metadata") if isinstance(schema.get("agent_metadata"), dict) else {}
+    metadata.update({
+        "flow_v2_live": True,
+        "flow_v2_artifact_path": live_artifact_path,
+        "flow_v2_published_at": datetime.now().isoformat(),
+        "flow_v2_published_by": actor,
+        "flow_v2_runtime_backup_path": backup_path or None,
+    })
+    schema["agent_metadata"] = metadata
+
+    os.makedirs(os.path.dirname(schema_path), exist_ok=True)
+    with open(schema_path, "w", encoding="utf-8") as schema_file:
+        json.dump(schema, schema_file, indent=4)
+
+    return {
+        "artifact_path": live_artifact_path,
+        "runtime_schema_path": schema_path,
+        "backup_path": backup_path,
+        "status": "published",
+        "runtime_mode": "live",
+    }
 
 
 def _apply_flow_v2_draft_updates(flow: dict, updates: FlowDraftUpdate) -> dict:
@@ -950,11 +1094,13 @@ def _build_generated_script_review_policy(
     )
 
     would_allow = not blockers
+    gate_enabled = feature_flags.is_enabled("scrape.review_gate_shadow")
+    gate_enforced = gate_enabled and feature_flags.is_enabled("flow.v2_live")
     return {
-        "enabled": feature_flags.is_enabled("scrape.review_gate_shadow"),
-        "mode": "shadow",
-        "enforced": False,
-        "can_save_flow_draft": True,
+        "enabled": gate_enabled,
+        "mode": "live_enforced" if gate_enforced else "shadow",
+        "enforced": gate_enforced,
+        "can_save_flow_draft": not (gate_enforced and not would_allow),
         "would_allow_if_enforced": would_allow,
         "would_block_if_enforced": not would_allow,
         "blockers": blockers,
@@ -973,6 +1119,7 @@ def _build_generated_script_review_policy(
         "runtime_live_changed": False,
         "rollback": {
             "disable_shadow": feature_flags.env_name("scrape.review_gate_shadow"),
+            "disable_live_publish": feature_flags.env_name("flow.v2_live"),
         },
     }
 
@@ -2112,12 +2259,13 @@ async def _build_campaign_e2e_qa_readiness(
             value={"runner": "agent_runner.run_campaign"},
         ),
         _campaign_qa_criterion(
-            "worker_v2_shadow_safe",
-            "Worker V2 remains metadata-only unless explicitly enabled",
-            worker_config.mode == "shadow",
+            "worker_v2_live_metadata_safe",
+            "Worker V2 is live for durable metadata while v1 remains the dispatch/audio runner",
+            worker_config.mode == "live_metadata",
             value={
                 "campaign_worker_v2_enabled": feature_flags.is_enabled("campaign.worker_v2"),
                 "default_mode": worker_config.mode,
+                "dispatch_runner": "v1_compatible",
                 "max_attempts": worker_config.max_attempts,
             },
         ),
@@ -4706,13 +4854,25 @@ async def update_agent_flow_v2_draft(agent_id: str, data: FlowDraftUpdate, reque
         draft = _apply_flow_v2_draft_updates(flow, data)
     except FlowSpecValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    artifact_path = _write_flow_v2_draft_artifact(agent, draft)
-    await db.create_agent_flow_version(
+    runtime_live_changed = False
+    publish_result = None
+    if feature_flags.is_enabled("flow.v2_live"):
+        publish_result = _publish_flow_v2_to_runtime(agent, draft, actor=_actor_email(request))
+        artifact_path = publish_result["artifact_path"]
+        version_status = "published"
+        runtime_mode = "live"
+        runtime_live_changed = True
+    else:
+        artifact_path = _write_flow_v2_draft_artifact(agent, draft)
+        version_status = "draft"
+        runtime_mode = "shadow"
+
+    flow_version = await db.create_agent_flow_version(
         agent_id,
         client_id=agent.get("client_id"),
         schema_version="2.0",
-        status="draft",
-        runtime_mode="shadow",
+        status=version_status,
+        runtime_mode=runtime_mode,
         artifact_path=artifact_path,
         validation=draft.get("validation", {}),
     )
@@ -4720,9 +4880,18 @@ async def update_agent_flow_v2_draft(agent_id: str, data: FlowDraftUpdate, reque
         "flow_v2_draft_updated agent=%s nodes=%d runtime_live_changed=%s",
         agent_id,
         len(draft.get("nodes") or []),
-        False,
+        runtime_live_changed,
     )
-    return await _load_agent_flow_preview(agent)
+    preview = await _load_agent_flow_preview(agent)
+    preview["publish"] = {
+        "flow_version_id": flow_version.get("id"),
+        "runtime_live_changed": runtime_live_changed,
+        "published_live": runtime_live_changed,
+        "runtime_schema_path": publish_result.get("runtime_schema_path") if publish_result else None,
+        "rollback_backup_path": publish_result.get("backup_path") if publish_result else None,
+        "disable_live_flag": feature_flags.env_name("flow.v2_live"),
+    }
+    return preview
 
 async def _append_scrape_job_event_if_enabled(
     job_id: str,
@@ -5323,20 +5492,37 @@ async def apply_script_draft_to_agent_flow(draft_id: str, request: Request):
         draft,
         review_acknowledged=review_acknowledged,
     )
+    if feature_flags.is_enabled("flow.v2_live") and review_policy["enabled"] and review_policy["would_block_if_enforced"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Generated draft review gate blocked live publish: {', '.join(review_policy['blockers'])}",
+        )
 
-    artifact_path = _write_flow_v2_draft_artifact(agent, draft)
+    runtime_live_changed = False
+    publish_result = None
+    if feature_flags.is_enabled("flow.v2_live"):
+        publish_result = _publish_flow_v2_to_runtime(agent, draft, actor=actor)
+        artifact_path = publish_result["artifact_path"]
+        flow_status = "published"
+        runtime_mode = "live"
+        runtime_live_changed = True
+    else:
+        artifact_path = _write_flow_v2_draft_artifact(agent, draft)
+        flow_status = "draft"
+        runtime_mode = "shadow"
+
     flow_version = await db.create_agent_flow_version(
         agent["id"],
         client_id=agent.get("client_id"),
         schema_version="2.0",
-        status="draft",
-        runtime_mode="shadow",
+        status=flow_status,
+        runtime_mode=runtime_mode,
         artifact_path=artifact_path,
         validation=draft.get("validation", {}),
     )
     reviewed_draft = await db.mark_generated_script_draft_reviewed(
         draft_id,
-        status="flow_draft_saved",
+        status="published_live" if runtime_live_changed else "flow_draft_saved",
         reviewed_by=actor,
         review_notes=review_notes,
         flow_version_id=flow_version.get("id"),
@@ -5347,12 +5533,12 @@ async def apply_script_draft_to_agent_flow(draft_id: str, request: Request):
         agent["id"],
         flow_version.get("id"),
         review_acknowledged,
-        False,
+        runtime_live_changed,
     )
     if script_draft.get("job_id"):
         await _append_scrape_job_event_if_enabled(
             script_draft["job_id"],
-            "flow_draft_saved",
+            "flow_published_live" if runtime_live_changed else "flow_draft_saved",
             status="draft_ready",
             actor=actor,
             metadata={
@@ -5365,7 +5551,9 @@ async def apply_script_draft_to_agent_flow(draft_id: str, request: Request):
                     "would_block_if_enforced": review_policy["would_block_if_enforced"],
                     "blockers": review_policy["blockers"],
                 },
-                "runtime_live_changed": False,
+                "runtime_live_changed": runtime_live_changed,
+                "runtime_schema_path": publish_result.get("runtime_schema_path") if publish_result else None,
+                "rollback_backup_path": publish_result.get("backup_path") if publish_result else None,
             },
         )
     preview = await _load_agent_flow_preview(agent)
@@ -5377,8 +5565,11 @@ async def apply_script_draft_to_agent_flow(draft_id: str, request: Request):
         "flow_version_id": reviewed_draft.get("flow_version_id"),
         "review_acknowledged": review_acknowledged,
         "review_policy": review_policy if review_policy["enabled"] else None,
-        "runtime_live_changed": False,
-        "published_live": False,
+        "runtime_live_changed": runtime_live_changed,
+        "published_live": runtime_live_changed,
+        "runtime_schema_path": publish_result.get("runtime_schema_path") if publish_result else None,
+        "rollback_backup_path": publish_result.get("backup_path") if publish_result else None,
+        "disable_live_flag": feature_flags.env_name("flow.v2_live"),
     }
     return preview
 
@@ -6250,7 +6441,7 @@ async def start_campaign(data: CampaignStart, background_tasks: BackgroundTasks,
     await db.set_campaign_status(data.campaignId, "Active")
     provider_slug     = data.telephonyProvider or "demo"
     agent_id          = data.agentId or "default"
-    worker_v2_shadow: dict[str, Any] | None = None
+    worker_v2_execution: dict[str, Any] | None = None
     if feature_flags.is_enabled("campaign.worker_v2"):
         try:
             control_plane = CampaignWorkerV2ControlPlane(db)
@@ -6259,15 +6450,16 @@ async def start_campaign(data: CampaignStart, background_tasks: BackgroundTasks,
                 agent_id=agent_id,
                 telephony_provider=provider_slug,
                 client_id=campaign.get("client_id"),
-                config=CampaignWorkerV2Config(mode="shadow", max_concurrency=1, max_attempts=1),
+                config=CampaignWorkerV2Config(mode="live_metadata", max_concurrency=1, max_attempts=1),
             )
-            worker_v2_shadow = {
-                "mode": execution.get("mode", "shadow"),
+            worker_v2_execution = {
+                "mode": execution.get("mode", "live_metadata"),
                 "executionId": execution.get("id"),
                 "status": execution.get("status"),
+                "liveDispatchRunner": "v1_compatible",
             }
         except Exception as exc:
-            logger.exception("Campaign worker v2 shadow preparation failed; continuing v1 runner: %s", exc)
+            logger.exception("Campaign worker v2 live metadata preparation failed; continuing v1 runner: %s", exc)
     if provider_slug == "demo":
         engine           = DemoCallEngine(ws_manager=ws_manager, db=db)
         agent_schema_path = _resolve_schema(agent_id)
@@ -6280,8 +6472,8 @@ async def start_campaign(data: CampaignStart, background_tasks: BackgroundTasks,
     else:
         background_tasks.add_task(run_campaign, data.campaignId, agent_id, provider_slug, campaign.get("client_id") or "global")
     response = {"status": "started", "provider": provider_slug}
-    if worker_v2_shadow:
-        response["campaignWorkerV2"] = worker_v2_shadow
+    if worker_v2_execution:
+        response["campaignWorkerV2"] = worker_v2_execution
     return response
 
 @app.get("/api/campaigns/{campaign_id}/results")
