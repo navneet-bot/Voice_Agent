@@ -7142,8 +7142,14 @@ async def websocket_voice_live(websocket: WebSocket):
                         try:
                             # Handle dynamic sample rate handshake
                             payload = json.loads(text)
-                            if payload.get("type") == "mic_ready":
+                            message_type = payload.get("type")
+                            if message_type == "mic_ready":
                                 source.set_sample_rate(payload.get("sampleRate", 16000))
+                            elif message_type == "ping":
+                                try:
+                                    await websocket.send_text(json.dumps({"type": "pong"}))
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                         continue
@@ -7156,6 +7162,7 @@ async def websocket_voice_live(websocket: WebSocket):
                             continue
                         source.queue_audio(data)
                 elif msg["type"] == "websocket.disconnect":
+                    logger.info("Live Voice: websocket disconnected code=%s", msg.get("code"))
                     break
         except WebSocketDisconnect:
             pass
@@ -7376,8 +7383,14 @@ async def websocket_voice_demo(websocket: WebSocket):
                             continue
                         try:
                             payload = json.loads(text)
-                            if payload.get("type") == "mic_ready" and source is not None:
+                            message_type = payload.get("type")
+                            if message_type == "mic_ready" and source is not None:
                                 source.set_sample_rate(payload.get("sampleRate", 16000))
+                            elif message_type == "ping":
+                                try:
+                                    await websocket.send_text(json.dumps({"type": "pong"}))
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
                         continue
@@ -7393,6 +7406,7 @@ async def websocket_voice_demo(websocket: WebSocket):
                         if source is not None:
                             source.queue_audio(data)
                 elif msg["type"] == "websocket.disconnect":
+                    logger.info("Voice Demo: websocket disconnected code=%s campaign=%s", msg.get("code"), campaign_id)
                     break
         except WebSocketDisconnect:
             print("Client disconnected normally")
@@ -7412,12 +7426,14 @@ async def websocket_voice_demo(websocket: WebSocket):
         print("Closing connection")
         # Tear down pipeline
         try:
-            if source._process_task:
+            if source is not None and source._process_task:
                 source._process_task.cancel()
-            await source.process_frame(EndFrame(), FrameDirection.DOWNSTREAM)
+            if source is not None:
+                await source.process_frame(EndFrame(), FrameDirection.DOWNSTREAM)
             await asyncio.sleep(0.3)
-            runner_task.cancel()
-            await runner_task
+            if runner_task is not None:
+                runner_task.cancel()
+                await runner_task
         except (asyncio.CancelledError, Exception):
             pass
 

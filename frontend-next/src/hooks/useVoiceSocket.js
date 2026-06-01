@@ -10,6 +10,8 @@ export function useVoiceSocket(agentId, activeClient) {
   const audioCtxRef = useRef(null);
   const activeGainNodeRef = useRef(null);
   const micStreamRef = useRef(null);
+  const micWorkletNodeRef = useRef(null);
+  const micSilentGainRef = useRef(null);
   const nextStartTimeRef = useRef(0);
   const pingIntervalRef = useRef(null);
   const reconnectTimeoutRef = useRef(null);
@@ -53,6 +55,40 @@ export function useVoiceSocket(agentId, activeClient) {
     performance.now() < micBlockedUntilRef.current
   ), []);
 
+  const cleanupMediaAndAudio = useCallback(() => {
+    if (micWorkletNodeRef.current) {
+      try {
+        micWorkletNodeRef.current.port.onmessage = null;
+        micWorkletNodeRef.current.disconnect();
+      } catch (_) {}
+      micWorkletNodeRef.current = null;
+    }
+    if (micSilentGainRef.current) {
+      try {
+        micSilentGainRef.current.disconnect();
+      } catch (_) {}
+      micSilentGainRef.current = null;
+    }
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach(t => t.stop());
+      micStreamRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+    if (pingIntervalRef.current) {
+      clearInterval(pingIntervalRef.current);
+      pingIntervalRef.current = null;
+    }
+    clearPlaybackReleaseTimer();
+    activeGainNodeRef.current = null;
+    activeGenIdRef.current = 0;
+    expectsGenHeaderRef.current = false;
+    micBlockedUntilRef.current = 0;
+    nextStartTimeRef.current = 0;
+  }, [clearPlaybackReleaseTimer]);
+
   const toPcm16Buffer = useCallback((audioChunk) => {
     if (audioChunk instanceof Int16Array) {
       return audioChunk.buffer.slice(audioChunk.byteOffset, audioChunk.byteOffset + audioChunk.byteLength);
@@ -95,28 +131,22 @@ export function useVoiceSocket(agentId, activeClient) {
       wsRef.current.close();
       wsRef.current = null;
     }
-    if (micStreamRef.current) {
-      micStreamRef.current.getTracks().forEach(t => t.stop());
-      micStreamRef.current = null;
+    cleanupMediaAndAudio();
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
-    if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-    if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
-    clearPlaybackReleaseTimer();
     
     setIsConnected(false);
     setStatusText('Session ended');
-    activeGenIdRef.current = 0;
-    expectsGenHeaderRef.current = false;
-    micBlockedUntilRef.current = 0;
-    nextStartTimeRef.current = 0;
-  }, [clearPlaybackReleaseTimer]);
+  }, [cleanupMediaAndAudio]);
 
   const connect = useCallback(async (isDemo = false, leadName = 'Demo User', isReconnect = false) => {
     if (!isReconnect) disconnect();
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     
     try {
       if (!isReconnect) setStatusText('Initialising audio...');
@@ -179,7 +209,13 @@ export function useVoiceSocket(agentId, activeClient) {
         
         if (workletLoaded) {
           const workletNode = new AudioWorkletNode(ctx, 'mic-capture-processor');
+          const silentGain = ctx.createGain();
+          silentGain.gain.value = 0;
           source.connect(workletNode);
+          workletNode.connect(silentGain);
+          silentGain.connect(ctx.destination);
+          micWorkletNodeRef.current = workletNode;
+          micSilentGainRef.current = silentGain;
           workletNode.port.onmessage = (e) => {
             if (wsRef.current?.readyState === WebSocket.OPEN) {
               logMicChunkStats(e.data);
@@ -206,7 +242,9 @@ export function useVoiceSocket(agentId, activeClient) {
         }
 
         pingIntervalRef.current = setInterval(() => {
-          if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(new TextEncoder().encode('ping'));
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({ type: 'ping' }));
+          }
         }, 5000);
       };
 
@@ -300,16 +338,13 @@ export function useVoiceSocket(agentId, activeClient) {
         scheduleMicResume(ctx);
       };
 
-      socket.onclose = () => {
-        console.log("WebSocket closed");
+      socket.onclose = (event) => {
+        console.log("WebSocket closed", event?.code, event?.reason);
+        shouldReconnectRef.current = false;
+        cleanupMediaAndAudio();
+        wsRef.current = null;
         setIsConnected(false);
-        if (!shouldReconnectRef.current) {
-          setStatusText('Session ended');
-          return;
-        }
-        setStatusText('Reconnecting...');
-        // eslint-disable-next-line react-hooks/immutability
-        reconnectTimeoutRef.current = setTimeout(() => connect(isDemo, leadName, true), 2000);
+        setStatusText('Disconnected. Tap Start again.');
       };
       
       socket.onerror = (err) => {
@@ -323,7 +358,7 @@ export function useVoiceSocket(agentId, activeClient) {
       setStatusText('Mic access denied or server unreachable.');
       disconnect();
     }
-  }, [agentId, activeClient, disconnect, holdMicInput, isMicInputBlocked, logMicChunkStats, scheduleMicResume, toPcm16Buffer]);
+  }, [agentId, activeClient, cleanupMediaAndAudio, disconnect, holdMicInput, isMicInputBlocked, logMicChunkStats, scheduleMicResume, toPcm16Buffer]);
 
   const clearTranscripts = () => setTranscripts([]);
 
