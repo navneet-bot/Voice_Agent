@@ -12,6 +12,7 @@ Backend/audio/
 Backend/output/
 Backend/voice_agent.log
 Backend/sample_voice.wav
+Backend/recordings
 
 # Database
 Backend/db/voice_platform.db
@@ -24,3 +25,4 @@ Backend/work_log.md
 .DS_Store
 .graphify-out/
 .agent/
+
