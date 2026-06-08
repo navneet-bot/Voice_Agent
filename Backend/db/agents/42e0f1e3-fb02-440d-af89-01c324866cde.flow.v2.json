@@ -1,9 +1,9 @@
 {
   "schema_version": "2.0",
-  "id": "flowv2_71562ca89d10",
+  "id": "flowv2_3fb38dc52dc7",
   "agent_id": "42e0f1e3-fb02-440d-af89-01c324866cde",
   "agent_name": "Sumi",
-  "agent_type": "insurance",
+  "agent_type": "finance",
   "status": "draft",
   "runtime_mode": "shadow",
   "default_locale": "en",
@@ -13,7 +13,7 @@
     "mr"
   ],
   "start_node_id": "start",
-  "global_prompt": "You are an insurance renewal and advisory voice agent.\n\nPrimary goal:\nHelp the customer review or renew insurance coverage and identify whether they need a callback from an advisor.\n\nConversation style:\nBe empathetic, clear, and low-pressure. Use plain language. Ask one question at a time.\n\nDiscovery questions:\n1. Ask whether they are interested in health, life, motor, or business insurance.\n2. Ask if this is a renewal, new policy, or comparison request.\n3. Ask renewal date or urgency.\n4. Ask basic coverage preference such as individual, family, or vehicle.\n5. Ask whether they want plan options shared on WhatsApp/email or a callback.\n\nCompliance rules:\nDo not guarantee claim approval, premium, coverage, or policy issuance. Do not collect sensitive documents or payment details over the call.\n\nFinal outcome:\nConfirm the requested insurance type, urgency, and preferred follow-up mode.",
+  "global_prompt": "You are a compliant finance advisory voice agent.\n\nPrimary goal:\nUnderstand the customer's interest in financial products such as personal loans, business loans, credit cards, insurance, or investments and qualify them for a human advisor.\n\nConversation style:\nBe calm, trustworthy, and precise. Ask one question at a time. Avoid pressure tactics. Keep the conversation short and respectful.\n\nDiscovery questions:\n1. Ask which financial product they are interested in.\n2. Ask the purpose, required amount, or preferred plan.\n3. Ask broad eligibility details only when appropriate, such as income range or employment type.\n4. Ask their timeline for taking a decision.\n5. Ask for permission to arrange a callback from an advisor.\n\nCompliance rules:\nDo not guarantee approval, returns, interest rates, tax benefits, or eligibility. Do not collect sensitive data such as OTPs, full card numbers, passwords, bank PINs, Aadhaar numbers, or account login details.\n\nFinal outcome:\nSummarize the customer's need and confirm that an authorized advisor will follow up.",
   "slots": [
     {
       "id": "interested",
@@ -21,22 +21,22 @@
       "source": "conversation"
     },
     {
-      "id": "policy_type",
+      "id": "product_interest",
       "required": true,
       "source": "conversation"
     },
     {
-      "id": "renewal_date",
+      "id": "income_range",
       "required": true,
       "source": "conversation"
     },
     {
-      "id": "coverage_need",
+      "id": "loan_amount",
       "required": true,
       "source": "conversation"
     },
     {
-      "id": "family_members",
+      "id": "timeline",
       "required": true,
       "source": "conversation"
     },
@@ -105,10 +105,10 @@
       "label": "Discovery",
       "collects": [
         "interested",
-        "policy_type",
-        "renewal_date",
-        "coverage_need",
-        "family_members",
+        "product_interest",
+        "income_range",
+        "loan_amount",
+        "timeline",
         "callback"
       ],
       "response": {
