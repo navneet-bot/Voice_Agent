@@ -121,13 +121,17 @@ def _similarity(primary_text: str, shadow_text: str) -> float:
     return SequenceMatcher(None, primary_text or "", shadow_text or "").ratio()
 
 
-def _run_provider(provider: str, audio_chunk: bytes) -> tuple[str, float]:
+def _run_provider(provider: str, audio_chunk: bytes, language: str | None = None) -> tuple[str, float]:
     started_at = time.perf_counter()
-    text = _load_provider(provider)(audio_chunk)
+    func = _load_provider(provider)
+    try:
+        text = func(audio_chunk, language=language)
+    except TypeError:
+        text = func(audio_chunk)
     return text, time.perf_counter() - started_at
 
 
-def _run_fallback(primary_provider: str, audio_chunk: bytes, reason: str) -> str | None:
+def _run_fallback(primary_provider: str, audio_chunk: bytes, reason: str, language: str | None = None) -> str | None:
     if not _env_bool("STT_FALLBACK_ENABLED", True):
         return None
 
@@ -145,7 +149,10 @@ def _run_fallback(primary_provider: str, audio_chunk: bytes, reason: str) -> str
         return None
 
     try:
-        fallback_text, fallback_latency = _run_provider(fallback_provider, audio_chunk)
+        try:
+            fallback_text, fallback_latency = _run_provider(fallback_provider, audio_chunk, language=language)
+        except TypeError:
+            fallback_text, fallback_latency = _run_provider(fallback_provider, audio_chunk)
     except Exception as fallback_exc:
         logger.exception("[STT PROVIDER] fallback=%s failed after primary=%s %s: %s", fallback_provider, primary_provider, reason, fallback_exc)
         return None
@@ -169,19 +176,22 @@ def _run_fallback(primary_provider: str, audio_chunk: bytes, reason: str) -> str
     return fallback_text
 
 
-def transcribe_audio(audio_chunk: bytes, agent_id: str = "default") -> str:
+def transcribe_audio(audio_chunk: bytes, agent_id: str = "default", language: str | None = None) -> str:
     """Transcribe PCM16 mono 16kHz bytes with the selected provider."""
     primary_provider = _configured_provider(agent_id)
 
     try:
-        primary_text, primary_latency = _run_provider(primary_provider, audio_chunk)
+        try:
+            primary_text, primary_latency = _run_provider(primary_provider, audio_chunk, language=language)
+        except TypeError:
+            primary_text, primary_latency = _run_provider(primary_provider, audio_chunk)
     except Exception as exc:
         logger.exception("[STT PROVIDER] primary=%s failed: %s", primary_provider, exc)
-        fallback_text = _run_fallback(primary_provider, audio_chunk, "failed")
+        fallback_text = _run_fallback(primary_provider, audio_chunk, "failed", language=language)
         return fallback_text or ""
 
     if not primary_text and _env_bool("STT_FALLBACK_ON_EMPTY", True):
-        fallback_text = _run_fallback(primary_provider, audio_chunk, "returned empty")
+        fallback_text = _run_fallback(primary_provider, audio_chunk, "returned empty", language=language)
         if fallback_text:
             return fallback_text
 
@@ -189,7 +199,10 @@ def transcribe_audio(audio_chunk: bytes, agent_id: str = "default") -> str:
         shadow = _shadow_provider(primary_provider)
         if shadow != primary_provider:
             try:
-                shadow_text, shadow_latency = _run_provider(shadow, audio_chunk)
+                try:
+                    shadow_text, shadow_latency = _run_provider(shadow, audio_chunk, language=language)
+                except TypeError:
+                    shadow_text, shadow_latency = _run_provider(shadow, audio_chunk)
                 logger.info(
                     "[STT SHADOW] primary_provider=%s shadow_provider=%s "
                     "primary_ms=%.1f shadow_ms=%.1f similarity=%.3f primary=%r shadow=%r",

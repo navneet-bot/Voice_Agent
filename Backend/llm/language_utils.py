@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 import re
+
+logger = logging.getLogger(__name__)
 
 
 SUPPORTED_LANGUAGES = {"en", "hi", "mr", "hinglish"}
@@ -215,56 +218,116 @@ class UserTextAnalysis:
     unsupported_letters: int
 
 
+def _detect_explicit_language_request(text: str) -> str | None:
+    t = (text or "").lower()
+    # Check English requests
+    if any(phrase in t for phrase in ["speak english", "talk in english", "continue in english", "english mein baat", "english me baat"]):
+        return "en"
+    # Check Hindi requests
+    if any(phrase in t for phrase in ["speak hindi", "talk in hindi", "continue in hindi", "hindi mein baat", "hindi me baat", "hindi bol", "hindi me baat karo", "hindi mein baat karo"]):
+        return "hi"
+    # Check Marathi requests
+    if any(phrase in t for phrase in ["speak marathi", "talk in marathi", "continue in marathi", "marathi mein baat", "marathi me baat", "marathi bol"]):
+        return "mr"
+    return None
+
+
 class LanguageTracker:
     """Keep language switching stable across noisy turns."""
 
     def __init__(self, initial_language: str = "en"):
         self.current_language = initial_language if initial_language in SUPPORTED_LANGUAGES else "en"
-        self._pending_language: str | None = None
-        self._pending_hits = 0
+        self._determined = False
+        self._history: list[str] = []
+        self._cooldown_turns_left: int = 0
 
     def observe(self, text: str) -> tuple[str, UserTextAnalysis]:
         analysis = analyze_user_text(text, fallback=self.current_language)
-        if not analysis.actionable:
-            self._pending_language = None
-            self._pending_hits = 0
-            return self.current_language, analysis
-
-        detected = analysis.detected_language
-        if detected == self.current_language:
-            self._pending_language = None
-            self._pending_hits = 0
-            return self.current_language, analysis
-
-        # Make it "sticky" to non-English languages
-        is_returning_to_english = detected == "en" and self.current_language in {"hi", "mr", "hinglish"}
         
-        # Require very high confidence to switch back to English immediately
-        if is_returning_to_english:
-            strong_switch = analysis.confidence >= 0.98
-        else:
-            strong_switch = analysis.confidence >= 0.9 or (
-                detected in {"hi", "mr"} and analysis.confidence >= 0.82
-            )
+        # Log the required information
+        logger.info(
+            "\nRAW TRANSCRIPT: \"%s\"\n"
+            "DETECTED LANGUAGE: %s\n"
+            "CONFIDENCE: %.2f\n"
+            "SESSION LANGUAGE: %s",
+            text,
+            analysis.detected_language,
+            analysis.confidence,
+            self.current_language
+        )
 
-        if strong_switch:
-            self.current_language = detected
-            self._pending_language = None
-            self._pending_hits = 0
+        if not analysis.actionable:
             return self.current_language, analysis
 
-        if detected == self._pending_language:
-            self._pending_hits += 1
-        else:
-            self._pending_language = detected
-            self._pending_hits = 1
+        # STEP 1: Classify current turn language
+        label = analysis.detected_language
+        if label not in {"en", "hi", "hinglish"}:
+            label = "en"
+            
+        cleaned_text = re.sub(r"[^\w\s]", "", text.lower()).strip()
+        words = cleaned_text.split()
+        word_count = len(words)
+        
+        noise_fillers = {"haan", "okay", "hmm", "yes", "ha", "theek", "uh", "achha", "right", "sure", "no", "yeah"}
+        is_noise = (word_count > 0 and all(w in noise_fillers for w in words))
+        is_uncertain = (analysis.confidence < 0.50 or word_count < 3)
 
-        # Require more hits to switch back to English if it wasn't a strong switch
-        required_hits = 3 if is_returning_to_english else 2
-        if self._pending_hits >= required_hits:
-            self.current_language = detected
-            self._pending_language = None
-            self._pending_hits = 0
+        if is_noise or is_uncertain:
+            logger.info("Label classified as Noise/Uncertain. Skipping state updates.")
+            return self.current_language, analysis
+            
+        if not self._determined:
+            self.current_language = label
+            self._determined = True
+            self._history.clear()
+            self._cooldown_turns_left = 0
+            logger.info("Session language determined from first meaningful utterance: %s", self.current_language)
+            return self.current_language, analysis
+
+        # STEP 2: Switch Gate
+        self._history.append(label)
+        if len(self._history) > 3:
+            self._history.pop(0)
+            
+        switch_candidate = None
+        
+        # C. Explicit language change request bypasses everything
+        explicit_req = _detect_explicit_language_request(text)
+        if explicit_req in {"en", "hi", "hinglish", "mr"}:
+            if explicit_req == "mr":
+                explicit_req = "hi"
+            switch_candidate = explicit_req
+            logger.info("Switch candidate via explicit request: %s", switch_candidate)
+        else:
+            # A. Full sentence
+            if word_count >= 5 and label != self.current_language:
+                switch_candidate = label
+                logger.info("Switch candidate via full sentence: %s", switch_candidate)
+            # B. Two consecutive
+            elif len(self._history) >= 2 and self._history[-1] == self._history[-2] and self._history[-1] != self.current_language:
+                switch_candidate = self._history[-1]
+                logger.info("Switch candidate via consecutive turns: %s", switch_candidate)
+
+        # STEP 3: Anti Ping-Pong Cooldown
+        if explicit_req:
+            pass # bypass cooldown
+        elif switch_candidate:
+            if self._cooldown_turns_left > 0:
+                self._cooldown_turns_left -= 1
+                logger.info("Cooldown active (%d left). Switch candidate %s blocked.", self._cooldown_turns_left, switch_candidate)
+                switch_candidate = None
+        
+        if not switch_candidate and not explicit_req:
+            if self._cooldown_turns_left > 0:
+                self._cooldown_turns_left -= 1
+                logger.info("Cooldown decremented to %d", self._cooldown_turns_left)
+
+        # STEP 4: Apply Switch
+        if switch_candidate:
+            self.current_language = switch_candidate
+            self._cooldown_turns_left = 3
+            self._history.clear()
+            logger.info("Language switched to %s, cooldown reset to 3", self.current_language)
 
         return self.current_language, analysis
 

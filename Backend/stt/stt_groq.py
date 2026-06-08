@@ -106,7 +106,7 @@ def _bytes_to_pcm16(audio_bytes: bytes) -> np.ndarray:
     return np.frombuffer(audio_bytes, dtype=np.int16)
 
 
-def transcribe_audio(audio_chunk: bytes) -> str:
+def transcribe_audio(audio_chunk: bytes, language: str | None = None) -> str:
     """Transcribe a short audio chunk to text using Groq Cloud STT.
 
     Accepts raw audio bytes (16 kHz, mono) and routes it to `whisper-large-v3-turbo`.
@@ -155,9 +155,15 @@ def transcribe_audio(audio_chunk: bytes) -> str:
                 "prompt": "Real estate properties in Pune, Wakad, Hinjewadi, Baner, Kharadi. Buy, rent, invest, budget, 1 BHK, 2 BHK, 3 BHK, 4 BHK, lakhs, crores. हाँ, मुझे प्रॉपर्टी चाहिए, मेरा बजट 50 लाख है, एक करोड़, हाँ जी, अच्छा, ठीक है, सांगा, सांगा ना, बोला, बोला ना, होय, नाही, पाहिजे, मला बघायचंय, investment ke liye, khud ke liye, rent pe, kiraye pe, 50 lakh ke around."
             }
             
-            # Lock language ONLY if strictly set in config, otherwise auto-detect for code-mixing
-            if config.LANGUAGE:
-                kwargs["language"] = config.LANGUAGE
+            # Lock language ONLY if strictly set in config or passed from turn_state,
+            # except when the language is Hinglish, where we allow auto-detection with code-mixing.
+            active_lang = language or config.LANGUAGE
+            if active_lang:
+                if active_lang == "hinglish":
+                    # Let auto-detect handle code-mixing with the Hinglish prompt
+                    pass
+                else:
+                    kwargs["language"] = active_lang
 
             transcription = _client.audio.transcriptions.create(**kwargs)
             

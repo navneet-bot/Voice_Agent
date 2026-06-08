@@ -132,7 +132,7 @@ def _extract_transcript(payload: dict) -> str:
         return ""
 
 
-def transcribe_audio(audio_chunk: bytes) -> str:
+def transcribe_audio(audio_chunk: bytes, language: str | None = None) -> str:
     """Transcribe a VAD-finalized PCM16 mono 16kHz chunk through Deepgram REST."""
     if not audio_chunk:
         return ""
@@ -145,10 +145,14 @@ def transcribe_audio(audio_chunk: bytes) -> str:
     if not wav_bytes:
         return ""
 
+    active_lang = language or os.getenv("DEEPGRAM_LANGUAGE", "hi")
+    if active_lang == "hinglish":
+        active_lang = "hi"
+
     params = {
         "model": os.getenv("DEEPGRAM_MODEL", "nova-2-general"),
-        "language": os.getenv("DEEPGRAM_LANGUAGE", "hi"),
-        "detect_language": "true",
+        "language": active_lang,
+        "detect_language": "true" if not language else "false",
         "smart_format": "true",
         "punctuate": "true",
     }

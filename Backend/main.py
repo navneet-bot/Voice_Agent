@@ -7120,7 +7120,7 @@ async def websocket_voice_live(websocket: WebSocket):
     turn_state = VoiceTurnState()
     source = VoiceLiveSource(recording_turn_state=turn_state)
     stt    = RealEstateSTTProcessor(turn_state=turn_state, agent_id=agent_id)
-    llm    = RealEstateLLMProcessor()
+    llm    = RealEstateLLMProcessor(turn_state=turn_state)
     llm.state_manager = StateManager(schema_path)
     llm.state_manager.conversation_data["name"] = lead_name
     llm.state_manager.conversation_data["lead_name"] = lead_name
@@ -7296,7 +7296,7 @@ async def websocket_voice_demo(websocket: WebSocket):
             turn_state = VoiceTurnState()
             source = VoiceLiveSource(recorder=recorder, recording_turn_state=turn_state)
             stt    = RealEstateSTTProcessor(turn_state=turn_state, agent_id=agent_id)
-            llm    = RealEstateLLMProcessor()
+            llm    = RealEstateLLMProcessor(turn_state=turn_state)
             llm.state_manager = StateManager(schema_path)
             llm.state_manager.conversation_data["name"] = lead_name
             llm.state_manager.conversation_data["lead_name"] = lead_name

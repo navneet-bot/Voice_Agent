@@ -125,20 +125,21 @@ async def handle_twilio_stream(
         call_id, campaign_id, lead_name
     )
 
-    from flows.runtime import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor
+    from flows.runtime import RealEstateSTTProcessor, RealEstateLLMProcessor, RealEstateTTSProcessor, VoiceTurnState
     from llm.state_manager import StateManager
 
     recorder = SessionRecorder(sample_rate=8000)
     source = TwilioSource(recorder=recorder)
     agent_id = os.path.splitext(os.path.basename(agent_schema_path or "default"))[0] or "default"
-    stt = RealEstateSTTProcessor(agent_id=agent_id)
-    llm = RealEstateLLMProcessor()
+    turn_state = VoiceTurnState()
+    stt = RealEstateSTTProcessor(turn_state=turn_state, agent_id=agent_id)
+    llm = RealEstateLLMProcessor(turn_state=turn_state)
 
     # Load agent schema FRESH from disk on every call (auto-reload)
     if os.path.exists(agent_schema_path):
         llm.state_manager = StateManager(agent_schema_path)
 
-    tts = RealEstateTTSProcessor(agent_id=agent_id)
+    tts = RealEstateTTSProcessor(turn_state=turn_state, agent_id=agent_id)
     sink = TwilioSink(websocket, call_id=call_id, ws_manager=ws_manager, recorder=recorder)
 
     pipeline = Pipeline([source, stt, llm, tts, sink])

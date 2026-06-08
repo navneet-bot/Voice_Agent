@@ -99,6 +99,7 @@ class VoiceTurnState:
     def __init__(self):
         self.tts_active = False
         self.tts_release_at = 0.0
+        self.session_language = "en"
 
     def is_stt_blocked(self) -> bool:
         return self.tts_active or time.monotonic() < self.tts_release_at
@@ -115,8 +116,9 @@ class VoiceTurnState:
 class RealEstateLLMProcessor(FrameProcessor):
     """Turn user transcripts into LLM responses and manage node states with GenID sync."""
 
-    def __init__(self):
+    def __init__(self, turn_state: VoiceTurnState | None = None):
         super().__init__()
+        self.turn_state = turn_state
         self.history: list[dict[str, str]] = []
         self.current_language = "en"
         self.language_tracker = LanguageTracker(initial_language=self.current_language)
@@ -233,6 +235,8 @@ class RealEstateLLMProcessor(FrameProcessor):
         self.last_user_at = time.monotonic()
         if user_analysis.actionable:
             self.current_language, _ = self.language_tracker.observe(user_text)
+            if self.turn_state:
+                self.turn_state.session_language = self.current_language
         
         # Sync User Text Frame with current GenID
         _ensure_frame_runtime_attrs(frame)
@@ -303,8 +307,8 @@ class RealEstateSTTProcessor(FrameProcessor):
         super().__init__()
         self.agent_id = agent_id or "default"
         self.audio_buffer = bytearray()
-        effective_max_ms = max(stt_cfg.MAX_CHUNK_MS, 2500)
-        effective_trailing_ms = max(stt_cfg.TRAILING_SILENCE_MS, int(os.getenv("STT_EFFECTIVE_TRAILING_MS", "380")))
+        effective_max_ms = max(stt_cfg.MAX_CHUNK_MS, 4500)
+        effective_trailing_ms = max(stt_cfg.TRAILING_SILENCE_MS, int(os.getenv("STT_EFFECTIVE_TRAILING_MS", "600")))
         self.min_chunk_bytes = _ms_to_bytes(stt_cfg.MIN_CHUNK_MS, stt_cfg.TARGET_SAMPLE_RATE)
         # Keep phrase-level chunks, but do not wait over a second after the user stops speaking.
         self.max_chunk_bytes = _ms_to_bytes(effective_max_ms, stt_cfg.TARGET_SAMPLE_RATE)
@@ -467,10 +471,15 @@ class RealEstateSTTProcessor(FrameProcessor):
         try:
             # 2. CIRCUIT BREAKER (STT Timeout)
             async with _ml_semaphore:
+                session_lang = "en"
+                if self.turn_state and hasattr(self.turn_state, "session_language"):
+                    session_lang = self.turn_state.session_language
+
+                # transcribe_audio(chunk, self.agent_id)
                 text = await asyncio.wait_for(
                     asyncio.get_running_loop().run_in_executor(
                         _executor,
-                        lambda: transcribe_audio(chunk, self.agent_id),
+                        lambda: transcribe_audio(chunk, self.agent_id, language=session_lang),
                     ),
                     timeout=3.5
                 )
