@@ -26,7 +26,7 @@ def main():
 
     cmd = [
         "gunicorn",
-        "server:app",
+        "main:app",
         "-k", "uvicorn.workers.UvicornWorker",
         "-w", str(workers),
         "--bind", f"{host}:{port}",
