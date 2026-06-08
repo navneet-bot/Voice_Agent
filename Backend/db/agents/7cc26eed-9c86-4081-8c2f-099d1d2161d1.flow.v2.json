@@ -1,0 +1,200 @@
+{
+  "schema_version": "2.0",
+  "id": "flowv2_bece795d0779",
+  "agent_id": "7cc26eed-9c86-4081-8c2f-099d1d2161d1",
+  "agent_name": "Rani",
+  "agent_type": "insurance",
+  "status": "draft",
+  "runtime_mode": "shadow",
+  "default_locale": "en",
+  "supported_locales": [
+    "en",
+    "hi",
+    "mr"
+  ],
+  "start_node_id": "start",
+  "global_prompt": "You are an insurance renewal and advisory voice agent.\n\nPrimary goal:\nHelp the customer review or renew insurance coverage and identify whether they need a callback from an advisor.\n\nConversation style:\nBe empathetic, clear, and low-pressure. Use plain language. Ask one question at a time.\n\nDiscovery questions:\n1. Ask whether they are interested in health, life, motor, or business insurance.\n2. Ask if this is a renewal, new policy, or comparison request.\n3. Ask renewal date or urgency.\n4. Ask basic coverage preference such as individual, family, or vehicle.\n5. Ask whether they want plan options shared on WhatsApp/email or a callback.\n\nCompliance rules:\nDo not guarantee claim approval, premium, coverage, or policy issuance. Do not collect sensitive documents or payment details over the call.\n\nFinal outcome:\nConfirm the requested insurance type, urgency, and preferred follow-up mode.",
+  "slots": [
+    {
+      "id": "interested",
+      "required": true,
+      "source": "conversation"
+    },
+    {
+      "id": "policy_type",
+      "required": true,
+      "source": "conversation"
+    },
+    {
+      "id": "renewal_date",
+      "required": true,
+      "source": "conversation"
+    },
+    {
+      "id": "coverage_need",
+      "required": true,
+      "source": "conversation"
+    },
+    {
+      "id": "family_members",
+      "required": true,
+      "source": "conversation"
+    },
+    {
+      "id": "callback",
+      "required": true,
+      "source": "conversation"
+    }
+  ],
+  "intents": [
+    {
+      "id": "confirm",
+      "examples": [
+        "yes",
+        "okay",
+        "sure"
+      ]
+    },
+    {
+      "id": "deny",
+      "examples": [
+        "no",
+        "not interested"
+      ]
+    },
+    {
+      "id": "unclear",
+      "examples": [
+        "hmm",
+        "repeat"
+      ]
+    },
+    {
+      "id": "provide_info",
+      "examples": [
+        "my budget is 50 lakh"
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "id": "start",
+      "type": "message",
+      "label": "Greeting",
+      "response": {
+        "en": "Hello, this is Rani. Am I speaking with {{name}}?"
+      },
+      "transitions": [
+        {
+          "intent": "confirm",
+          "target": "discovery"
+        },
+        {
+          "intent": "deny",
+          "target": "end"
+        },
+        {
+          "intent": "unclear",
+          "target": "fallback"
+        }
+      ]
+    },
+    {
+      "id": "discovery",
+      "type": "slot_collection",
+      "label": "Discovery",
+      "collects": [
+        "interested",
+        "policy_type",
+        "renewal_date",
+        "coverage_need",
+        "family_members",
+        "callback"
+      ],
+      "response": {
+        "en": "Could you share a little about what you are looking for?"
+      },
+      "transitions": [
+        {
+          "intent": "provide_info",
+          "target": "confirm_followup"
+        },
+        {
+          "intent": "confirm",
+          "target": "confirm_followup"
+        },
+        {
+          "intent": "unclear",
+          "target": "fallback"
+        }
+      ]
+    },
+    {
+      "id": "fallback",
+      "type": "fallback",
+      "label": "Clarify",
+      "response": {
+        "en": "Sorry, I did not catch that clearly. Could you repeat it once?"
+      },
+      "fallback": {
+        "max_attempts": 2,
+        "escalation_target": "end"
+      },
+      "transitions": [
+        {
+          "intent": "provide_info",
+          "target": "discovery"
+        },
+        {
+          "intent": "confirm",
+          "target": "discovery"
+        },
+        {
+          "intent": "deny",
+          "target": "end"
+        }
+      ]
+    },
+    {
+      "id": "confirm_followup",
+      "type": "message",
+      "label": "Confirm Follow-up",
+      "response": {
+        "en": "Thanks. I will have the team follow up with the right details."
+      },
+      "transitions": [
+        {
+          "intent": "confirm",
+          "target": "end"
+        },
+        {
+          "intent": "deny",
+          "target": "end"
+        },
+        {
+          "intent": "unclear",
+          "target": "fallback"
+        }
+      ]
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "label": "End",
+      "response": {
+        "en": "Thank you. Have a good day."
+      },
+      "transitions": []
+    }
+  ],
+  "metadata": {
+    "source": "agent_metadata",
+    "source_language": "English,Hinglish,Marathi",
+    "validation_required": true
+  },
+  "validation": {
+    "status": "valid",
+    "node_count": 5,
+    "terminal_count": 1
+  }
+}

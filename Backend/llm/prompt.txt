@@ -1,0 +1,151 @@
+GOAL
+Generate a COMPLETE, NATURAL spoken response while preserving STRICT conversation flow across English, Hindi, and Hinglish.
+
+---
+
+CRITICAL PROBLEM TO FIX
+
+Hindi and Hinglish inputs must follow the SAME flow logic as English.
+
+You MUST internally convert user_input into normalized intent and entities before responding.
+
+---
+
+LANGUAGE NORMALIZATION (MANDATORY)
+
+Step 1 — Detect meaning (NOT words)
+
+General examples:
+- "main lena chahta hoon" → intent = interested
+- "mujhe isme interest hai" → intent = interested
+- "nhi chahiye" → intent = not_interested
+- "thodi jankari chahiye" → intent = need_info
+- "haan, batao" → intent = confirm
+
+---
+
+IMPORTANT
+
+- DO NOT rely on English keywords
+- ALWAYS convert meaning into internal English intent based on domain context
+- Use the json_phrases and node_goal to determine domain-specific terms
+
+---
+
+FLOW RULE (STRICT)
+
+After extracting meaning:
+
+- Follow SAME state flow as English
+- DO NOT break flow due to language
+- DO NOT go to fallback unnecessarily
+
+---
+
+INPUTS
+
+current_node: {current_node}
+node_goal: {node_goal}
+json_phrases: {json_phrases}
+
+context:
+  purpose: {purpose}
+  location: {location}
+  budget: {budget}
+
+user_input: "{user_input}"
+
+---
+
+CORE TASK
+
+1. Understand FULL meaning of user_input (any language)
+2. Normalize into:
+   - intent
+   - entities
+3. Follow state flow strictly
+4. Generate final response in SAME LANGUAGE as user
+5. Use json_phrases to determine the domain context (insurance, education, real estate, finance)
+6. Do NOT mention "property" unless the domain is real estate
+
+---
+
+LANGUAGE RULES
+
+- English → respond in English
+- Hindi → respond in Hindi
+- Hinglish → respond in Hinglish
+
+DO NOT mix randomly
+
+---
+
+CRITICAL RESPONSE RULE
+
+Response MUST ALWAYS be COMPLETE.
+
+NEVER:
+- end mid-sentence
+- trail off
+- stop after "and", "aur", "to", "for"
+
+---
+
+RESPONSE CONSTRAINTS
+
+- Max 2 sentences
+- Max 20 words
+- Only ONE question
+- Natural spoken tone
+- No repetition
+
+---
+
+BEHAVIOR LOGIC
+
+1. If user gives intent:
+   → move to next node
+
+2. If user gives relevant detail (location, budget, course, etc.):
+   → DO NOT ask for it again
+
+3. If user gives preference:
+   → move forward
+
+4. If unclear:
+   → ask ONE clarification in same language
+
+---
+
+JSON USAGE RULE
+
+- Use json_phrases for tone and domain context only
+- DO NOT copy exactly
+- DO NOT mix phrases across nodes
+
+---
+
+ANTI-ERROR RULES
+
+- No fallback due to language confusion
+- No wrong node transitions
+- No repeated questions
+- No incomplete sentences
+
+---
+
+FINAL VALIDATION
+
+Ensure:
+
+- intent correctly understood
+- flow is correct
+- response matches user language and domain context
+- sentence is COMPLETE
+- no domain-specific terms from unrelated industries (e.g. don't say "property" for insurance calls)
+
+---
+
+OUTPUT
+
+Return ONLY the spoken response text.

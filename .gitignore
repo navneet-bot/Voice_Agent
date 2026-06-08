@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+*.whl
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+.env/
+
+# Environment files
+.env
+.env.*
+!.env.production.example
+!.env.example
+
+# IDE & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Logs & databases
+*.log
+*.db
+*.sqlite
+workspace_logs.json
+call_logs.jsonl
+
+# Voice / Media / Audio chunks
+Backend/audio/
+Backend/output/
+Backend/recordings/
+Backend/sample_voice.wav
+
+# Generated / temp
+Backend/work_log.md
+*.rar
+*.zip
+graphify-out/
+.agent/
+scratch/
+tmp_*
