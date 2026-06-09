@@ -67,9 +67,20 @@ _RESPONSE_SYSTEM_PROMPT: str = _load_response_prompt()
 # ─── Node classification ─────────────────────────────────────────────────────
 
 # Nodes where the LLM generates dynamic responses using JSON phrases as guidance.
-# DISABLED: All nodes now use their pre-written JSON templates directly.
-# This ensures strict adherence to the 7 flow states with the exact same question every time.
-_LLM_RESPONSE_NODES: set[str] = set()  # Empty = all nodes use templates
+# The State Manager strictly handles transitions, while these nodes use LLM for wording.
+_LLM_RESPONSE_NODES = {
+    "node-1735264921453",      # Ask Intent
+    "fallback_intent",
+    "node-1735267546732",      # Ask Location & Budget
+    "fallback_location",
+    "fallback_budget",
+    "node-1736323961832",      # Share Property
+    "node-1735265015507",      # Site Visit Time
+    "fallback_visit_datetime",
+    "node-1736492391269",      # Callback Scheduling
+    "fallback_callback_time",
+    "node-objection-not-looking"
+}
 
 # Nodes that always use fast template responses (no LLM call needed)
 _TEMPLATE_ONLY_NODES = {
@@ -204,9 +215,13 @@ def _resolve_template_response(
     """Fill {{placeholders}} in a node's template response. Fast path, no LLM."""
     from .language_utils import localize_template
 
-    collects = node.get("collects", [])
-    if isinstance(collects, str):
-        collects = [collects] if collects else []
+    collects = node.get("collects")
+    if not collects:
+        collects = []
+    elif isinstance(collects, str):
+        collects = [collects]
+    elif not isinstance(collects, list):
+        collects = list(collects)
     
     missing_slots = [s for s in collects if not context.get(s)]
     template = ""
@@ -424,7 +439,20 @@ async def _call_llm_for_response(
         logger.warning("[LLM RESPONSE] Empty LLM output")
         return ""
 
-    return raw.strip()
+    raw = raw.strip()
+    words = raw.split()
+    
+    # ── Response Validator ──
+    if len(words) < 5:
+        logger.warning(f"[RESPONSE VALIDATOR] Rejected: Too short ({len(words)} words): '{raw}'")
+        return ""
+    
+    # Check for cut-off sentence (no ending punctuation but long)
+    if raw[-1] not in ".!?\"'" and len(words) > 10:
+        logger.warning(f"[RESPONSE VALIDATOR] Rejected: Incomplete/Cut-off sentence: '{raw}'")
+        return ""
+
+    return raw
 
 
 # ─── Main entry point: generate response for a TurnResult ────────────────────
@@ -534,8 +562,16 @@ async def generate_response_for_turn(turn: TurnResult) -> str:
         return _location_suggestion_response(language)
 
     response = _resolve_template_response(node, context, language)
-    logger.info("[TEMPLATE] %s: \"%s\"", node_id, (response or "")[:60])
-    return _finalize_response(response) if response else ""
+    finalized = _finalize_response(response) if response else ""
+    
+    if finalized and last_response and _is_repetition(finalized, last_response):
+        logger.warning("[ANTI-REPEAT] Template repeated last response, generating nudge instead")
+        nudge = _get_anti_repeat_nudge(node, language)
+        if nudge:
+            return nudge
+
+    logger.info("[TEMPLATE] %s: \"%s\"", node_id, finalized[:60] if finalized else "")
+    return finalized
 
 
 def _is_location_suggestion_request(user_input: str) -> bool:

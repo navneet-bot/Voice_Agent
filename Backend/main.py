@@ -4729,6 +4729,13 @@ async def list_agents(client_id: Optional[str] = None, user_email: Optional[str]
         return await db.list_agents(client["id"])
     return await db.list_agents(client_id)
 
+@app.get("/api/agents/{agent_id}")
+async def get_agent(agent_id: str):
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
 @app.get("/api/clients/resolve")
 async def resolve_client_by_email(email: str):
     client = await db.get_client_by_email(email)

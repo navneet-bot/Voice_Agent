@@ -712,7 +712,7 @@
                 "intent_triggers": [
                     "unclear_intent"
                 ],
-                "response": "Ah, I missed that. Are you looking to buy for yourself, or is it more of an investment?",
+                "response": "Sorry, I missed that. Just to clarify, are you looking to buy, rent, or invest in a property?",
                 "collects": null,
                 "expected_input_type": "any",
                 "edges": [

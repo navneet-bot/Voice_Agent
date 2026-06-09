@@ -14,12 +14,12 @@ import json
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
+import urllib.request
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROVIDER = "groq"
 SUPPORTED_PROVIDERS = {"groq", "deepgram"}
-_AGENT_SCHEMA_DIR = Path(__file__).resolve().parents[1] / "db" / "agents"
 _AGENT_CONFIG_CACHE: dict[str, tuple[float, str | None]] = {}
 
 
@@ -60,28 +60,40 @@ def _configured_provider(agent_id: str = "default") -> str:
 def _provider_from_agent_schema(agent_id: str) -> str | None:
     if not agent_id or agent_id == "default":
         return None
-    path = _AGENT_SCHEMA_DIR / f"{agent_id}.json"
-    try:
-        stat = path.stat()
-    except OSError:
-        return None
 
+    # Check cache (expire after 30s)
     cached = _AGENT_CONFIG_CACHE.get(agent_id)
-    if cached and cached[0] == stat.st_mtime:
+    if cached and (time.time() - cached[0]) < 30.0:
         return cached[1]
 
     provider = None
     try:
-        schema = json.loads(path.read_text(encoding="utf-8"))
-        provider_config = schema.get("provider_config") or {}
-        provider = provider_config.get("stt_provider") or schema.get("stt_provider")
-        if provider:
-            provider = _normalize_provider(provider)
+        url = os.getenv("BACKEND_API_URL", "http://127.0.0.1:8000") + f"/api/agents/{agent_id}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            if response.status == 200:
+                schema = json.loads(response.read().decode())
+                provider_config = schema.get("provider_config") or {}
+                provider_raw = provider_config.get("stt_provider") or schema.get("stt_provider")
+                if provider_raw:
+                    provider = _normalize_provider(provider_raw)
+            else:
+                raise RuntimeError(f"Backend API returned status {response.status}")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            logger.info("Agent %s not found in API, falling back to default STT provider.", agent_id)
+            provider = None
+        else:
+            logger.error("API error for STT provider config agent_id=%s: %s", agent_id, exc)
+            raise RuntimeError(f"Backend API error ({exc.code}) while fetching STT configuration.") from exc
+    except urllib.error.URLError as exc:
+        logger.error("Could not read STT provider config for agent_id=%s from API: %s", agent_id, exc)
+        raise RuntimeError("Backend API must be running to fetch STT configuration.") from exc
     except Exception as exc:
-        logger.warning("Could not read STT provider config for agent_id=%s: %s", agent_id, exc)
-        provider = None
+        logger.error("Unexpected error fetching STT config: %s", exc)
+        raise RuntimeError("Unexpected error fetching STT configuration from API.") from exc
 
-    _AGENT_CONFIG_CACHE[agent_id] = (stat.st_mtime, provider)
+    _AGENT_CONFIG_CACHE[agent_id] = (time.time(), provider)
     return provider
 
 

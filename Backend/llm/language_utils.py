@@ -150,9 +150,10 @@ LOCALIZED_TEMPLATE_MAP = {
         "hi": "Bilkul theek hai. Take care.",
         "hinglish": "No problem at all. Take care.",
     },
-    "Ah, I missed that. Are you looking to buy for yourself, or is it more of an investment?": {
-        "hi": "Thoda clear bolenge? Aap khud ke liye dekh rahe ho ya investment ke liye?",
-        "hinglish": "Thoda clear bolenge? Aap khud ke liye dekh rahe ho ya investment ke liye?",
+    "Sorry, I missed that. Just to clarify, are you looking to buy, rent, or invest in a property?": {
+        "hi": "माफ़ कीजिये, मैं समझ नहीं पाई। क्या आप प्रॉपर्टी खरीदना, किराए पर लेना, या इन्वेस्ट करना चाहते हैं?",
+        "hinglish": "Sorry, main samjh nahi paayi. Kya aap property buy karna, rent karna, ya invest karna chahte hain?",
+        "mr": "माफ करा, मला समजलं नाही. तुम्ही प्रॉपर्टी खरेदी करायला, भाड्याने घ्यायला की इन्वेस्ट करायला बघताय?"
     },
     "Sorry, which area was that? Somewhere like Wakad or Baner, or maybe Hinjewadi?": {
         "hi": "Thoda clear bolenge? Agar open ho to Wakad, Baner, Hinjewadi ya Kharadi achhe options hain. Aap kis side dekh rahe ho?",
@@ -268,7 +269,10 @@ class LanguageTracker:
         words = cleaned_text.split()
         word_count = len(words)
         
-        noise_fillers = {"haan", "okay", "hmm", "yes", "ha", "theek", "uh", "achha", "right", "sure", "no", "yeah"}
+        noise_fillers = {
+            "haan", "okay", "hmm", "yes", "ha", "theek", "uh", "achha", "right", "sure", "no", "yeah",
+            "yep", "nope", "ok", "hm", "mhm", "cool", "fine", "alright", "acha", "han", "kya", "why"
+        }
         is_noise = (word_count > 0 and all(w in noise_fillers for w in words))
         is_uncertain = (analysis.confidence < 0.50 or word_count < 3)
 

@@ -1266,7 +1266,15 @@ class StateManager:
         node_id = current_node.get("id", "")
 
         # ── Global Interrupts / Shortcuts ───────────────────────────────────────────
-        # If user says they are free or provides intent during callback scheduling, jump to Ask Intent
+        # 1. Callback scheduling shortcut on busy
+        if intent in {"deny_time", "busy", "call_later", "not_now"}:
+            if node_id != "node-1736492391269":
+                target = self.nodes.get("node-1736492391269")  # Callback Scheduling
+                if target:
+                    _log("STATE", f"{node_id} -> {target['id']} (forced callback scheduling)")
+                    return target
+
+        # 2. Resuming flow from callback
         if node_id in {"node-1736492391269", "fallback_callback_time"}:
             if intent in {"confirm_availability", "provide_intent", "confirm"}:
                 target = self.nodes.get("node-1735264921453")  # Ask Intent
@@ -1284,10 +1292,10 @@ class StateManager:
         # Intent node OR its fallback, skip intermediate steps and jump directly
         # to the correct destination.
         if node_id in {"node-1735264921453", "fallback_intent"}:
-            if intent == "provide_intent":
+            if intent in {"provide_intent", "provide_property_type", "provide_location", "provide_budget"}:
                 target = self.nodes.get("node-1735267546732")  # Ask Location & Budget
                 if target:
-                    _log("STATE", f"{node_id} -> {target['id']} (provide_intent shortcut)")
+                    _log("STATE", f"{node_id} -> {target['id']} ({intent} shortcut)")
                     return target
             if intent == "seller_interest":
                 target = self.nodes.get("node-1736510533232")  # Seller Flow Start
@@ -1546,9 +1554,27 @@ class StateManager:
                 queue.append((next_id, next_path))
         return []
 
-    def _apply_forward_guard(self, next_node: dict[str, Any]) -> dict[str, Any]:
-        # Strict flow mode: always honor the edge-selected destination node.
-        return next_node
+    def _apply_forward_guard(self, target_node: dict[str, Any]) -> dict[str, Any]:
+        """
+        Prevents transitioning to a node that has already collected its data.
+        If target node is fulfilled, fast forwards to its first destination.
+        """
+        current = target_node
+        visited = set()
+        while self._should_skip_node(current):
+            if current["id"] in visited:
+                break
+            visited.add(current["id"])
+            forward_id = self._first_destination(current)
+            if not forward_id:
+                break
+            forward_node = self.nodes.get(forward_id)
+            if not forward_node:
+                break
+            _log("STATE FAST-FORWARD", f"Skipping {current['id']} -> {forward_node['id']} ({self._skip_reason(current)})")
+            current = forward_node
+        
+        return current
 
     def _edge_condition_matches_intent(self, condition: str, intents_to_match: list[str]) -> bool:
         """
@@ -1572,7 +1598,7 @@ class StateManager:
             # 2.2 Fallback Routing - retry is a synonym for unclear
             "unclear": {"unclear", "fallback", "retry", "hmm", "noise"},
             "unclear_intent": {"unclear_intent", "intent_fallback"},
-            "slots_collected": {"slots_collected", "qual_done", "completed"},
+            "slots_collected": {"slots_collected", "qual_done", "completed", "details provided"},
         }
         
         for intent in intents_to_match:
@@ -2055,12 +2081,7 @@ class StateManager:
             return True
         if lowered in LOCATION_NORMALIZATION:
             return True
-        # Reject multi-word strings that don't match any known location
-        words = lowered.split()
-        if len(words) > 2:
-            _log("LOCATION REJECTED", f"Multi-word non-location: \"{value}\"")
-            return False
-        # Accept single/double word values that pass basic checks
+        # Accept anything else that passed the LLM and basic checks
         return True
 
     def _is_valid_budget(self, value: str) -> bool:

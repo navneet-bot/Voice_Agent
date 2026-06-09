@@ -95,6 +95,7 @@ Rules:
 - CRITICAL: "What about tomorrow?", "Tomorrow works", "Kal call karna", "Next week okay" -> intent: "suggest_time" (NOT deny, NOT deny_time)
 - CRITICAL: If user is asking a question (e.g., "What is it?", "Oh, what it is?", "Kya hai?", "What are you talking about?") -> intent: "user_question" (NOT deny_time, NOT deny)
 - CRITICAL: If user corrects and says "I have time", "I said I have time", "I am free" -> intent: "confirm_availability"
+- CRITICAL: If user mentions ANY city, place, or area (e.g., "Mumbai", "Delhi", "Koregaon Park", "anywhere"), you MUST extract it in `entities.location` and set intent to "provide_location". Do NOT use "unclear_location" if a place is named.
 - Confirmation words (yes, yeah, yep, correct, right, ok, okay, sure, go ahead) -> intent: "confirm"
 - Generic denial (no, nahi, nope, nah, not now, sorry no, no sorry) -> intent: "deny"
 - "wrong number", "wrong person", "not Prashant", "this is not" -> intent: "deny_identity"
@@ -120,16 +121,22 @@ _BUDGET_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _BUY_HINTS = (
-    "khud ke liye", "apne liye", "rehne ke liye", "ghar ke liye", "for myself",
-    "for self", "self use", "personal use", "to live", "move in", "own use",
+    "buy", "buying", "looking to buy", "want to buy", "purchase", "purchasing",
+    "own house", "own home", "buy property", "looking for a property",
+    "looking to purchase", "planning to buy", "interested in buying",
+    "searching for property", "khud ke liye", "apne liye", "rehne ke liye",
+    "ghar ke liye", "for myself", "for self", "self use", "personal use",
+    "to live", "move in", "own use", "own flat",
 )
 _INVEST_HINTS = (
-    "investment ke liye", "nivesh ke liye", "return ke liye", "invest karna",
-    "for investment", "investment", "invest", "roi", "rental income",
+    "invest", "investment", "investing", "property investment",
+    "investment purpose", "investor", "investment ke liye", "nivesh ke liye",
+    "return ke liye", "invest karna", "for investment", "roi", "rental income",
 )
 _RENT_HINTS = (
-    "rent pe", "kiraye pe", "kiraya", "on rent", "rent ke liye", "looking to rent",
-    "for rent", "to rent",
+    "rent", "renting", "lease", "looking for rental", "looking to rent",
+    "need a rental property", "rent a flat", "rent pe", "kiraye pe", "kiraya",
+    "on rent", "rent ke liye", "for rent", "to rent",
 )
 _LOCATION_SUGGESTION_HINTS = (
     "suggest city", "suggest cities", "suggest me city", "suggest me cities",
@@ -216,15 +223,9 @@ def _classify_local_intent(user_text: str) -> dict[str, Any] | None:
     if any(phrase in clean_text for phrase in _BUSY_HINTS):
         return {"intent": "deny_time", "entities": entities}
 
-    if any(phrase in clean_text for phrase in _BUY_HINTS) or clean_text in {"buy", "purchase"}:
-        entities["intent_value"] = "buy"
-        return {"intent": "provide_intent", "entities": entities}
-    if any(phrase in clean_text for phrase in _INVEST_HINTS):
-        entities["intent_value"] = "invest"
-        return {"intent": "provide_intent", "entities": entities}
-    if any(phrase in clean_text for phrase in _RENT_HINTS) or clean_text == "rent":
-        entities["intent_value"] = "rent"
-        return {"intent": "provide_intent", "entities": entities}
+    # We no longer short-circuit buy/rent/invest here so that the LLM can extract
+    # other entities like location and property_type from the same utterance.
+    # Deterministic enforcement is handled in _enrich_intent_entities.
 
     if clean_text in _CONFIRMATION_TEXTS:
         entities["confirmation"] = "yes"
@@ -247,19 +248,27 @@ def _enrich_intent_entities(user_text: str, intent: str, entities: dict[str, Any
             if intent == "unclear":
                 intent = "provide_budget"
 
-    if not entities.get("intent_value"):
-        if any(phrase in clean_text for phrase in _BUY_HINTS):
-            entities["intent_value"] = "buy"
-            if intent == "unclear":
-                intent = "provide_intent"
-        elif any(phrase in clean_text for phrase in _INVEST_HINTS):
-            entities["intent_value"] = "invest"
-            if intent == "unclear":
-                intent = "provide_intent"
-        elif any(phrase in clean_text for phrase in _RENT_HINTS):
-            entities["intent_value"] = "rent"
-            if intent == "unclear":
-                intent = "provide_intent"
+    has_buy = any(phrase in clean_text for phrase in _BUY_HINTS) or "buy" in clean_text.split()
+    has_invest = any(phrase in clean_text for phrase in _INVEST_HINTS)
+    has_rent = any(phrase in clean_text for phrase in _RENT_HINTS) or "rent" in clean_text.split()
+
+    if has_buy:
+        entities["intent_value"] = "buy"
+        if intent not in {"confirm", "deny", "deny_interest", "deny_time", "deny_identity", "deny_visit_time"}:
+            intent = "provide_intent"
+    elif has_invest:
+        entities["intent_value"] = "invest"
+        if intent not in {"confirm", "deny", "deny_interest", "deny_time", "deny_identity", "deny_visit_time"}:
+            intent = "provide_intent"
+    elif has_rent:
+        entities["intent_value"] = "rent"
+        if intent not in {"confirm", "deny", "deny_interest", "deny_time", "deny_identity", "deny_visit_time"}:
+            intent = "provide_intent"
+
+    # Always enforce intent=provide_intent if intent_value was successfully assigned by LLM or overrides
+    # but the intent itself was marked as unclear.
+    if entities.get("intent_value") in {"buy", "rent", "invest"} and intent not in {"confirm", "deny", "deny_interest", "deny_time", "deny_identity", "deny_visit_time"}:
+        intent = "provide_intent"
 
     return intent, entities
 

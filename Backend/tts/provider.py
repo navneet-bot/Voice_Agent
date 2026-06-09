@@ -14,12 +14,12 @@ import json
 import threading
 import time
 from pathlib import Path
+import urllib.request
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROVIDER = "edge"
 SUPPORTED_PROVIDERS = {"edge", "cartesia"}
-_AGENT_SCHEMA_DIR = Path(__file__).resolve().parents[1] / "db" / "agents"
 _AGENT_CONFIG_CACHE: dict[str, tuple[float, dict]] = {}
 
 
@@ -61,31 +61,43 @@ def _configured_provider(agent_id: str = "default") -> str:
 def _provider_config_from_agent_schema(agent_id: str) -> dict:
     if not agent_id or agent_id == "default":
         return {}
-    path = _AGENT_SCHEMA_DIR / f"{agent_id}.json"
-    try:
-        stat = path.stat()
-    except OSError:
-        return {}
 
+    # Check cache (expire after 30s)
     cached = _AGENT_CONFIG_CACHE.get(agent_id)
-    if cached and cached[0] == stat.st_mtime:
+    if cached and (time.time() - cached[0]) < 30.0:
         return cached[1]
 
     config = {}
     try:
-        schema = json.loads(path.read_text(encoding="utf-8"))
-        provider_config = schema.get("provider_config") or {}
-        provider = provider_config.get("tts_provider") or schema.get("tts_provider")
-        if provider:
-            config["tts_provider"] = _normalize_provider(provider)
-        cartesia_voice_id = provider_config.get("cartesia_voice_id") or schema.get("cartesia_voice_id")
-        if cartesia_voice_id:
-            config["cartesia_voice_id"] = str(cartesia_voice_id).strip()
+        url = os.getenv("BACKEND_API_URL", "http://127.0.0.1:8000") + f"/api/agents/{agent_id}"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            if response.status == 200:
+                schema = json.loads(response.read().decode())
+                provider_config = schema.get("provider_config") or {}
+                provider = provider_config.get("tts_provider") or schema.get("tts_provider")
+                if provider:
+                    config["tts_provider"] = _normalize_provider(provider)
+                cartesia_voice_id = provider_config.get("cartesia_voice_id") or schema.get("cartesia_voice_id")
+                if cartesia_voice_id:
+                    config["cartesia_voice_id"] = str(cartesia_voice_id).strip()
+            else:
+                raise RuntimeError(f"Backend API returned status {response.status}")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            logger.info("Agent %s not found in API, falling back to default TTS provider.", agent_id)
+            config = {}
+        else:
+            logger.error("API error for TTS provider config agent_id=%s: %s", agent_id, exc)
+            raise RuntimeError(f"Backend API error ({exc.code}) while fetching TTS configuration.") from exc
+    except urllib.error.URLError as exc:
+        logger.error("Could not read TTS provider config for agent_id=%s from API: %s", agent_id, exc)
+        raise RuntimeError("Backend API must be running to fetch TTS configuration.") from exc
     except Exception as exc:
-        logger.warning("Could not read TTS provider config for agent_id=%s: %s", agent_id, exc)
-        config = {}
+        logger.error("Unexpected error fetching TTS config: %s", exc)
+        raise RuntimeError("Unexpected error fetching TTS configuration from API.") from exc
 
-    _AGENT_CONFIG_CACHE[agent_id] = (stat.st_mtime, config)
+    _AGENT_CONFIG_CACHE[agent_id] = (time.time(), config)
     return config
 
 
