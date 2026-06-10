@@ -7074,12 +7074,13 @@ class VoiceLiveSink(FrameProcessor):
             # )
             try:
                 # Send raw PCM16 audio bytes directly to the browser.
+                logger.info(f"[WS] SINK: Attempting to send_bytes of size {len(frame.audio)}...")
                 await self.ws.send_bytes(frame.audio)
                 if self.recorder:
                     self.recorder.add_agent_audio(frame.audio, sample_rate=frame.sample_rate)
                 logger.info("[WS] Audio Chunk Sent size=%d", len(frame.audio))
             except Exception as exc:
-                logger.error("[PIPELINE] SINK -> Failed sending audio: %s", exc)
+                logger.exception("[PIPELINE] SINK -> Failed sending audio frame over WebSocket: %s", exc)
 
         elif isinstance(frame, TextFrame):
             is_agent = isinstance(frame, AgentTextFrame)

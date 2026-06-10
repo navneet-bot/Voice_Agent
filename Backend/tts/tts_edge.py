@@ -110,6 +110,7 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
         return
 
     try:
+        logger.info(f"[TTS] Started synthesis for text length: {len(text)}, voice: {voice}")
         # Run asynchronously and collect stream blocks.
         communicate = edge_tts.Communicate(text, voice, rate=EDGE_SPEECH_RATE)
         
@@ -140,9 +141,9 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
             with io.BytesIO(mp3_bytes) as mp3_file:
                 # We explicitly specify the format to help soundfile
                 data, samplerate = sf.read(mp3_file)
-            logger.info("[TTS] Soundfile decoded: shape=%s samplerate=%d", data.shape, samplerate)
+            logger.info("[TTS] Completed: Soundfile decoded MP3 to PCM. shape=%s samplerate=%d duration=%.2fs", data.shape, samplerate, len(data)/samplerate)
         except Exception as sfe:
-            logger.exception("[TTS] Soundfile sf.read failed: %s", sfe)
+            logger.exception("[TTS] ERROR: Soundfile sf.read failed internally! This often means libsndfile lacks MP3 support in the deployed OS. Error: %s", sfe)
             yield b""
             return
 
@@ -165,6 +166,7 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
 
         # Yield in sensible chunks (e.g. 4096 bytes) for streaming
         chunk_size = 4096
+        logger.info(f"[TTS] Audio Bytes Generated: {len(pcm_bytes)} bytes. Beginning chunking.")
         for i in range(0, len(pcm_bytes), chunk_size):
             chunk = pcm_bytes[i:i + chunk_size]
             if first_yield_at is None:
@@ -173,6 +175,8 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
             bytes_out += len(chunk)
             # logger.info("[TTS] Yielding PCM chunk %d, size %d", chunk_count, len(chunk))
             yield chunk
+            
+        logger.info(f"[TTS] Completed yielding {chunk_count} chunks, total bytes: {bytes_out}.")
 
         total_s = time.perf_counter() - started_at
         ttfb_s = (first_yield_at - started_at) if first_yield_at is not None else total_s

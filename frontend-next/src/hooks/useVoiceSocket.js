@@ -193,6 +193,14 @@ export function useVoiceSocket(agentId, activeClient) {
         setIsConnected(true);
         setStatusText('🔴 Listening — speak now');
         
+        if (ctx && ctx.state === "suspended") {
+          ctx.resume().then(() => {
+            console.log("[FRONTEND] AudioContext resumed, state is now:", ctx.state);
+          }).catch(err => console.error("[FRONTEND] AudioContext resume failed:", err));
+        } else if (ctx) {
+          console.log("[FRONTEND] AudioContext state on connect:", ctx.state);
+        }
+        
         // Handshake: Tell server our hardware rate so STT works perfectly
         socket.send(JSON.stringify({ type: 'mic_ready', sampleRate: ctx.sampleRate }));
         if (!isReconnect) {
@@ -311,7 +319,7 @@ export function useVoiceSocket(agentId, activeClient) {
 
         const floatData = new Float32Array(pcmData.length);
         for (let i = 0; i < pcmData.length; i++) floatData[i] = pcmData[i] / 32768;
-        console.log(`[FRONTEND] Audio Decoded: Float32Array length=${floatData.length}`);
+        console.log(`[FRONTEND] Audio Decoded: Float32Array length=${floatData.length}. Buffer scheduling next.`);
         
         // 4. STATISTICAL ADAPTIVE JITTER BUFFER
         const nowReal = performance.now();

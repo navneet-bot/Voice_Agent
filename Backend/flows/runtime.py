@@ -633,6 +633,7 @@ class RealEstateTTSProcessor(FrameProcessor):
                     if chunk_bytes:
                         chunk_count += 1
                         total_bytes += len(chunk_bytes)
+                        logger.info(f"[PIPELINE] TTS -> Audio chunk received from generator: size {len(chunk_bytes)} bytes")
                         if chunk_count == 1 or (chunk_count % 10) == 0:
                             logger.info(
                                 "[PIPELINE] TTS -> Generated audio chunk=%d bytes=%d gen_id=%d",
@@ -654,11 +655,12 @@ class RealEstateTTSProcessor(FrameProcessor):
                 logger.warning("[PIPELINE] TTS -> No audio chunks produced gen_id=%d", gen_id)
                 logger.error("[TTS] Completed synthesis with 0 bytes gen_id=%d", gen_id)
             else:
+                logger.info(f"[PIPELINE] TTS -> Completed synthesis block: {total_bytes} bytes across {chunk_count} chunks.")
                 logger.info(
                     "[PIPELINE] TTS -> Completed synthesis gen_id=%d chunks=%d bytes=%d",
                     gen_id,
                     chunk_count,
-                    total_bytes,
+                    total_bytes
                 )
                 logger.info("[TTS] Completed synthesis gen_id=%d chunks=%d total_bytes=%d", gen_id, chunk_count, total_bytes)
                 logger.info("[TTS] Audio Size = %d bytes", total_bytes)
