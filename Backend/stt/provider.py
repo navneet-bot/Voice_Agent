@@ -18,7 +18,7 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_PROVIDER = "groq"
+DEFAULT_PROVIDER = "deepgram"
 SUPPORTED_PROVIDERS = {"groq", "deepgram"}
 _AGENT_CONFIG_CACHE: dict[str, tuple[float, str | None]] = {}
 
