@@ -6,6 +6,13 @@ import DashboardLayout from '@/components/DashboardLayout';
 import { useAuth, clientProfile } from '@/context/AuthContext';
 import { getProviderLabel } from '@/lib/providerDisplay';
 
+const AGENT_TYPE_LABELS = {
+  "real_estate_sales": "Real Estate",
+  "finance": "Finance",
+  "insurance": "Insurance",
+  "education": "Educational"
+};
+
 const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const CLIENT_WS_SCOPED_EVENTS_ENABLED = process.env.NEXT_PUBLIC_WS_SCOPED_EVENTS_ENABLED === 'true';
 
@@ -110,10 +117,17 @@ export default function ClientDashboard() {
   const profile = currentRole === 'client' && user?.clientId
     ? { name: user.clientName || user.name, agent: user.agentName || 'Assigned Agent', agentId: user.agentId }
     : clientProfile[activeClient];
-  const assignedAgent = clientAssignment?.assignment?.agent || clientAssignment?.agents?.[0] || null;
-  const agentId = assignedAgent?.id || user?.agentId || profile?.agentId || 'default';
-  const agentName = assignedAgent?.name || user?.agentName || profile?.agent || 'Assigned Agent';
-  const assignedProvider = assignedAgent?.provider || 'demo';
+  const availableAgents = clientAssignment?.agents || [];
+  const [selectedAgentId, setSelectedAgentId] = useState('');
+
+  const activeAgent = useMemo(() => {
+    if (selectedAgentId) return availableAgents.find(a => a.id === selectedAgentId) || null;
+    return clientAssignment?.assignment?.agent || availableAgents[0] || null;
+  }, [selectedAgentId, availableAgents, clientAssignment]);
+
+  const agentId = activeAgent?.id || user?.agentId || profile?.agentId || 'default';
+  const agentName = activeAgent?.name || user?.agentName || profile?.agent || 'Assigned Agent';
+  const assignedProvider = activeAgent?.provider || 'demo';
   const clientId = user?.clientId || activeClient;
 
   const [showLaunchModal, setShowLaunchModal] = useState(false);
@@ -387,7 +401,22 @@ export default function ClientDashboard() {
                 AI
               </div>
               <div>
-                <h5 className="fw-bold mb-1">{agentName}</h5>
+                <div className="d-flex align-items-center gap-3 mb-1">
+                  <h5 className="fw-bold mb-0">{agentName}</h5>
+                  {availableAgents.length > 1 && (
+                    <select 
+                      className="form-select form-select-sm shadow-none w-auto"
+                      value={agentId}
+                      onChange={(e) => setSelectedAgentId(e.target.value)}
+                    >
+                      {availableAgents.map(agent => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.name} ({AGENT_TYPE_LABELS?.[agent.agent_type] || agent.agent_type || 'Agent'})
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
                 <p className="text-muted small mb-2">{getProviderLabel('telephony', assignedProvider)} calling workflow</p>
                 <div className="d-flex gap-2 flex-wrap">
                   <span className="badge bg-light border text-dark">Data capture enabled</span>
