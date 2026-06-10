@@ -390,12 +390,6 @@ class RealEstateSTTProcessor(FrameProcessor):
                 # Decay instead of hard-reset to tolerate tiny dips between syllables.
                 self._voice_hits = max(0, self._voice_hits - 1)
                 self._voiced_ms = 0.0
-                logger.info(
-                    "[VAD DEBUG] RMS=%.4f threshold=%.4f floor=%.4f speaking=False",
-                    chunk_rms,
-                    dynamic_threshold,
-                    self.noise_floor,
-                )
                 return
             # Require two voice hits for normal speech starts.
             if self._voice_hits < 2:
