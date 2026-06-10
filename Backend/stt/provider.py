@@ -68,7 +68,8 @@ def _provider_from_agent_schema(agent_id: str) -> str | None:
 
     provider = None
     try:
-        url = os.getenv("BACKEND_API_URL", "http://127.0.0.1:8000") + f"/api/agents/{agent_id}"
+        port = os.getenv("PORT", "8000")
+        url = os.getenv("BACKEND_API_URL", f"http://127.0.0.1:{port}") + f"/api/agents/{agent_id}"
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=2.0) as response:
             if response.status == 200:
