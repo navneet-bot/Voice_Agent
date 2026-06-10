@@ -666,6 +666,26 @@ export default function AgentsPage() {
     }
   };
 
+  const handleDeleteAgent = async (agentId) => {
+    if (!window.confirm("Are you sure you want to delete this agent?")) {
+      return;
+    }
+    
+    try {
+      const res = await fetch(`${API}/api/agents/${agentId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        fetchAgents();
+      } else {
+        alert("Failed to delete agent");
+      }
+    } catch (e) {
+      console.error(e);
+      alert("Error connecting to backend");
+    }
+  };
+
   const handleAgentTypeChange = (agentType) => {
     const template = AGENT_TYPE_TEMPLATES[agentType] || AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE];
     setFormData({
@@ -744,9 +764,14 @@ export default function AgentsPage() {
                         </button>
                       )}
                       {user?.role === 'admin' && (
-                        <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => openEditModal(agent)}>
-                          Edit
-                        </button>
+                        <>
+                          <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => openEditModal(agent)}>
+                            Edit
+                          </button>
+                          <button type="button" className="btn btn-outline-danger btn-sm" onClick={() => handleDeleteAgent(agent.id || agent.agent_id)}>
+                            Delete
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
