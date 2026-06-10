@@ -7067,20 +7067,17 @@ class VoiceLiveSink(FrameProcessor):
                 return
 
         if isinstance(frame, AudioRawFrame):
-            print("SINK RECEIVED AUDIO")
-            logger.info(
-                "[PIPELINE] SINK <- AudioRawFrame bytes=%d",
-                len(frame.audio),
-            )
+            # print("SINK RECEIVED AUDIO")
+            # logger.info(
+            #     "[PIPELINE] SINK <- AudioRawFrame bytes=%d",
+            #     len(frame.audio),
+            # )
             try:
                 # Send raw PCM16 audio bytes directly to the browser.
                 await self.ws.send_bytes(frame.audio)
                 if self.recorder:
                     self.recorder.add_agent_audio(frame.audio, sample_rate=frame.sample_rate)
-                logger.info(
-                    "[PIPELINE] SINK -> Sent audio bytes=%d",
-                    len(frame.audio),
-                )
+                logger.info("[WS] Audio Chunk Sent size=%d", len(frame.audio))
             except Exception as exc:
                 logger.error("[PIPELINE] SINK -> Failed sending audio: %s", exc)
 

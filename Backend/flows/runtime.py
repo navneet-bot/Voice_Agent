@@ -289,6 +289,8 @@ class RealEstateLLMProcessor(FrameProcessor):
         self.history.append({"role": "assistant", "content": reply})
         if len(self.history) > 8:
             self.history = self.history[-8:]
+            
+        logger.info("[LLM] Response Generated len=%d text=%s...", len(reply), reply[:50])
         
         frame_out = AgentTextFrame(reply, language=self.current_language)
         _ensure_frame_runtime_attrs(frame_out)
@@ -607,6 +609,7 @@ class RealEstateTTSProcessor(FrameProcessor):
         try:
             self.last_reply = text
             self.last_reply_at = time.monotonic()
+            logger.info("[TTS] Started synthesis gen_id=%d chars=%d language=%s", gen_id, len(text), preferred_lang or "auto")
             logger.info(
                 "[PIPELINE] TTS -> Starting synthesis gen_id=%d chars=%d language=%s",
                 gen_id,
@@ -649,6 +652,7 @@ class RealEstateTTSProcessor(FrameProcessor):
         finally:
             if chunk_count == 0:
                 logger.warning("[PIPELINE] TTS -> No audio chunks produced gen_id=%d", gen_id)
+                logger.error("[TTS] Completed synthesis with 0 bytes gen_id=%d", gen_id)
             else:
                 logger.info(
                     "[PIPELINE] TTS -> Completed synthesis gen_id=%d chunks=%d bytes=%d",
@@ -656,6 +660,8 @@ class RealEstateTTSProcessor(FrameProcessor):
                     chunk_count,
                     total_bytes,
                 )
+                logger.info("[TTS] Completed synthesis gen_id=%d chunks=%d total_bytes=%d", gen_id, chunk_count, total_bytes)
+                logger.info("[TTS] Audio Size = %d bytes", total_bytes)
             if self.turn_state:
                 self.turn_state.mark_tts_finished()
 

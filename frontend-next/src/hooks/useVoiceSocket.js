@@ -189,7 +189,7 @@ export function useVoiceSocket(agentId, activeClient) {
       shouldReconnectRef.current = true;
 
       socket.onopen = async () => {
-        console.log("WebSocket connected");
+        console.log("[WS] Connected to", wsUrl);
         setIsConnected(true);
         setStatusText('🔴 Listening — speak now');
         
@@ -295,20 +295,23 @@ export function useVoiceSocket(agentId, activeClient) {
         // Binary PCM from server (supports both with/without 4-byte GenID header).
         if (e.data.byteLength < 2) return;
         let payloadOffset = 0;
+        let incomingGenId = null;
         if (expectsGenHeaderRef.current && e.data.byteLength > 4) {
           const view = new DataView(e.data);
-          const incomingGenId = view.getInt32(0, true);
+          incomingGenId = view.getInt32(0, true);
           if (incomingGenId < activeGenIdRef.current) return;
           payloadOffset = 4;
         }
 
         const payloadBytes = e.data.byteLength - payloadOffset;
         if (payloadBytes < 2) return;
+        console.log(`[FRONTEND] Audio Chunk Received: ${e.data.byteLength} bytes (payload: ${payloadBytes} bytes) genId=${incomingGenId}`);
         const pcmData = new Int16Array(e.data, payloadOffset, Math.floor(payloadBytes / 2));
         if (pcmData.length === 0) return; // Guard against empty audio chunks
 
         const floatData = new Float32Array(pcmData.length);
         for (let i = 0; i < pcmData.length; i++) floatData[i] = pcmData[i] / 32768;
+        console.log(`[FRONTEND] Audio Decoded: Float32Array length=${floatData.length}`);
         
         // 4. STATISTICAL ADAPTIVE JITTER BUFFER
         const nowReal = performance.now();
@@ -333,7 +336,10 @@ export function useVoiceSocket(agentId, activeClient) {
           nextStartTimeRef.current = ctxNow + adaptiveLead;
         }
         
+        console.log(`[FRONTEND] AudioContext State=${ctx.state} ctxNow=${ctxNow.toFixed(3)} nextStartTime=${nextStartTimeRef.current.toFixed(3)} adaptiveLead=${adaptiveLead.toFixed(3)}`);
+        
         src.start(nextStartTimeRef.current);
+        console.log(`[FRONTEND] Audio Played chunk at ${nextStartTimeRef.current.toFixed(3)}`);
         nextStartTimeRef.current += buf.duration;
         scheduleMicResume(ctx);
       };

@@ -114,24 +114,37 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
         communicate = edge_tts.Communicate(text, voice, rate=EDGE_SPEECH_RATE)
         
         async def _collect_mp3():
-            audio_buffer = bytearray()
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    audio_buffer.extend(chunk["data"])
-            return bytes(audio_buffer)
+            try:
+                audio_buffer = bytearray()
+                async for chunk in communicate.stream():
+                    if chunk["type"] == "audio":
+                        audio_buffer.extend(chunk["data"])
+                logger.info("[TTS] Edge TTS received mp3 stream of %d bytes", len(audio_buffer))
+                return bytes(audio_buffer)
+            except Exception as e:
+                logger.exception("[TTS] Edge TTS _collect_mp3 failed internally: %s", e)
+                return b""
 
         # Execute — always use asyncio.run() since this function is called
         # from a ThreadPoolExecutor where no event loop is running.
         mp3_bytes = asyncio.run(_collect_mp3())
 
         if not mp3_bytes:
+            logger.error("[TTS] Edge TTS mp3_bytes is empty.")
             yield b""
             return
 
         # Decode MP3 to PCM using soundfile (which supports MP3 since v1.1.0)
-        with io.BytesIO(mp3_bytes) as mp3_file:
-            # We explicitly specify the format to help soundfile
-            data, samplerate = sf.read(mp3_file)
+        logger.info("[TTS] Decoding MP3 with soundfile...")
+        try:
+            with io.BytesIO(mp3_bytes) as mp3_file:
+                # We explicitly specify the format to help soundfile
+                data, samplerate = sf.read(mp3_file)
+            logger.info("[TTS] Soundfile decoded: shape=%s samplerate=%d", data.shape, samplerate)
+        except Exception as sfe:
+            logger.exception("[TTS] Soundfile sf.read failed: %s", sfe)
+            yield b""
+            return
 
         # Apply a 50ms fade-in and fade-out to prevent audio pops/clicks at start and end
         fade_samples = int(samplerate * 0.05)
@@ -158,6 +171,7 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
                 first_yield_at = time.perf_counter()
             chunk_count += 1
             bytes_out += len(chunk)
+            # logger.info("[TTS] Yielding PCM chunk %d, size %d", chunk_count, len(chunk))
             yield chunk
 
         total_s = time.perf_counter() - started_at
@@ -172,5 +186,5 @@ def generate_speech_stream(text: str, preferred_language: str | None = None):
         )
 
     except Exception as e:
-        logger.error("Edge TTS Cloud Generation failed: %s", e)
+        logger.exception("Edge TTS Cloud Generation failed: %s", e)
         yield b""
