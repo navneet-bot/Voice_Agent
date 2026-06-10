@@ -152,7 +152,7 @@ def transcribe_audio(audio_chunk: bytes, language: str | None = None) -> str:
     params = {
         "model": os.getenv("DEEPGRAM_MODEL", "nova-2-general"),
         "language": active_lang,
-        "detect_language": "true",  # Always allow auto-detection for mixed Hindi/English
+        "detect_language": "true" if not language else "false",
         "smart_format": "true",
         "punctuate": "true",
     }
