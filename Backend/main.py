@@ -7345,7 +7345,6 @@ async def websocket_voice_demo(websocket: WebSocket):
     except Exception:
         pass
     logger.info("Voice Demo: Connected event sent — pipeline_ok=%s", pipeline_ok)
-    print("Loop running")
 
     # ── HEARTBEAT TASK ─────────────────────────────────────────────────────────
     # Railway's reverse proxy drops idle WebSocket connections after ~30 s.
@@ -7364,7 +7363,6 @@ async def websocket_voice_demo(websocket: WebSocket):
                 break
             try:
                 await websocket.send_text(json.dumps({"type": "ping"}))
-                print("Heartbeat sent")
             except Exception:
                 break  # WS already closed
 
@@ -7373,10 +7371,8 @@ async def websocket_voice_demo(websocket: WebSocket):
     async def reader():
         try:
             while True:
-                print("Loop running")
                 msg = await websocket.receive()
                 if msg["type"] == "websocket.receive":
-                    print("Message received")
                     text = msg.get("text")
                     if text:
                         # Handle ping/pong from frontend
