@@ -117,7 +117,7 @@ _EMPTY_INTENT = {"intent": "unclear", "entities": {}}
 
 _BUDGET_PATTERN = re.compile(
     r"\b(?:budget|price|range|around|approx|approximately|mera budget|budget hai|budget is)?\s*"
-    r"(\d+(?:\.\d+)?)\s*(crore|crores|cr|lakh|lakhs|lac|lacs|thousand|k)\b",
+    r"(\d+(?:\.\d+)?)\s*(crore|crores|cr|lakh|lakhs|lac|lacs|thousand|k|करोड़|करोड|लाख|लख|हज़ार|हजार)\b",
     re.IGNORECASE,
 )
 _BUY_HINTS = (
@@ -127,16 +127,20 @@ _BUY_HINTS = (
     "searching for property", "khud ke liye", "apne liye", "rehne ke liye",
     "ghar ke liye", "for myself", "for self", "self use", "personal use",
     "to live", "move in", "own use", "own flat",
+    "buy karna hai", "property buy karni hai", "ghar lena hai", "खरीदना",
+    "खरीदनी है", "घर लेना है", "फ्लैट लेना है"
 )
 _INVEST_HINTS = (
     "invest", "investment", "investing", "property investment",
     "investment purpose", "investor", "investment ke liye", "nivesh ke liye",
     "return ke liye", "invest karna", "for investment", "roi", "rental income",
+    "invest karna hai", "निवेश", "इन्वेस्टमेंट"
 )
 _RENT_HINTS = (
     "rent", "renting", "lease", "looking for rental", "looking to rent",
     "need a rental property", "rent a flat", "rent pe", "kiraye pe", "kiraya",
-    "on rent", "rent ke liye", "for rent", "to rent",
+    "on rent", "rent ke liye", "for rent", "to rent", "किराए पर", "किराए के लिए",
+    "rent par"
 )
 _LOCATION_SUGGESTION_HINTS = (
     "suggest city", "suggest cities", "suggest me city", "suggest me cities",
@@ -168,11 +172,11 @@ _WRONG_PERSON_HINTS = ("wrong number", "wrong person", "not prashant", "this is 
 
 def _normalize_budget_unit(unit: str) -> str:
     unit = unit.lower()
-    if unit in {"crores", "cr"}:
+    if unit in {"crores", "cr", "करोड़", "करोड"}:
         return "crore"
-    if unit in {"lakhs", "lac", "lacs"}:
+    if unit in {"lakhs", "lac", "lacs", "लाख", "लख"}:
         return "lakh"
-    if unit == "k":
+    if unit in {"k", "हज़ार", "हजार"}:
         return "thousand"
     return unit
 
@@ -211,10 +215,8 @@ def _classify_local_intent(user_text: str) -> dict[str, Any] | None:
     if has_location_suggestion:
         return {"intent": "ask_location_suggestion", "entities": entities}
 
-    budget = _extract_budget_entity(user_text)
-    if budget:
-        entities["budget"] = budget
-        return {"intent": "provide_budget", "entities": entities}
+    # We no longer short-circuit budget here so that the LLM can extract
+    # other entities like location and property_type from the same utterance.
 
     if any(phrase in clean_text for phrase in _WRONG_PERSON_HINTS):
         return {"intent": "deny_identity", "entities": entities}
@@ -247,6 +249,52 @@ def _enrich_intent_entities(user_text: str, intent: str, entities: dict[str, Any
             entities["budget"] = budget
             if intent == "unclear":
                 intent = "provide_budget"
+
+    # Deterministic location fallback
+    if not entities.get("location"):
+        _COMMON_LOCATIONS_MAP = {
+            "Mumbai": ["mumbai", "मुंबई", "bombay", "mumbai mein"],
+            "Pune": ["pune", "पुणे"],
+            "Bangalore": ["bangalore", "bengaluru", "बैंगलोर", "बेंगलुरु"],
+            "Chennai": ["chennai", "चेन्नई"],
+            "Delhi": ["delhi", "new delhi", "दिल्ली"],
+            "Noida": ["noida", "नोएडा"],
+            "Gurgaon": ["gurgaon", "gurugram", "गुड़गांव", "गुरुग्राम"],
+            "Hyderabad": ["hyderabad", "हैदराबाद"],
+            "Kolkata": ["kolkata", "calcutta", "कोलकाता"],
+            "Ahmedabad": ["ahmedabad", "अहमदाबाद"],
+            "Andheri": ["andheri", "अंधेरी"],
+            "Bandra": ["bandra", "बांद्रा"],
+            "Wakad": ["wakad", "वाकड", "वाकड़"],
+            "Baner": ["baner", "बानेर"],
+            "Hinjewadi": ["hinjewadi", "हिंजेवाड़ी", "हिंजवडी"],
+            "Whitefield": ["whitefield", "व्हाइटफील्ड"],
+            "Koregaon Park": ["koregaon park", "कोरेगांव पार्क"],
+            "Kharadi": ["kharadi", "खराड़ी"],
+            "Viman Nagar": ["viman nagar", "विमान नगर"],
+            "Kalyani Nagar": ["kalyani nagar", "कल्याणी नगर"],
+            "Magarpatta": ["magarpatta", "मगरपट्टा"],
+            "Hadapsar": ["hadapsar", "हड़पसर"],
+            "Bavdhan": ["bavdhan", "बावधान"],
+            "Pimple Saudagar": ["pimple saudagar", "पिम्पल सौदागर"],
+            "Powai": ["powai", "पवई"],
+            "Malad": ["malad", "मलाड"],
+            "Goregaon": ["goregaon", "गोरेगांव"],
+            "Thane": ["thane", "ठाणे"],
+            "Navi Mumbai": ["navi mumbai", "नवी मुंबई"],
+            "Panvel": ["panvel", "पनवेल"]
+        }
+        # Match locations in text
+        for canonical_loc, variants in _COMMON_LOCATIONS_MAP.items():
+            for variant in variants:
+                # Use simple 'in' to handle both english and devanagari without boundary issues
+                if variant in clean_text:
+                    entities["location"] = canonical_loc
+                    if intent == "unclear" or intent == "provide_budget":
+                        intent = "provide_location" if not entities.get("budget") else "provide_location"
+                    break
+            if entities.get("location"):
+                break
 
     has_buy = any(phrase in clean_text for phrase in _BUY_HINTS) or "buy" in clean_text.split()
     has_invest = any(phrase in clean_text for phrase in _INVEST_HINTS)
@@ -339,13 +387,13 @@ async def extract_intent(user_text: str) -> dict[str, Any]:
         response_format={"type": "json_object"},
     )
     if not raw_content:
-        return dict(_EMPTY_INTENT)
-
-    try:
-        data = json.loads(raw_content)
-    except json.JSONDecodeError:
-        logger.error("[LLM] JSON parse failed")
-        return dict(_EMPTY_INTENT)
+        data = dict(_EMPTY_INTENT)
+    else:
+        try:
+            data = json.loads(raw_content)
+        except json.JSONDecodeError:
+            logger.error("[LLM] JSON parse failed")
+            data = dict(_EMPTY_INTENT)
 
     entities = data.get("entities")
     if not isinstance(entities, dict):

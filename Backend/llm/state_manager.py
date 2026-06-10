@@ -1110,15 +1110,61 @@ class StateManager:
         if intent in {"confirm", "deny"}:
             entities = {"confirmation": entities.get("confirmation")}
 
+        # User-requested Language telemetry log
+        if hasattr(self, "active_language") and self.active_language:
+            _log("LANGUAGE", f"{self.active_language.capitalize()}")
+        else:
+            _log("LANGUAGE", "English (Default)")
+
+        # Add debug log for INTENT DETECTED
+        extracted_intent_value = entities.get("intent_value")
+        if extracted_intent_value:
+            _log("INTENT DETECTED", f"{extracted_intent_value}")
+        else:
+            _log("INTENT DETECTED", f"{intent}")
+
         _log("INTENT", self._format_intent_log(intent, entities))
         self._merge_entities(entities, intent=intent)
 
-        # 5. SLOT COMPLETION DERIVATION (Fix #5)
+        # 5. SLOT COMPLETION DERIVATION & ANTI-REPETITION (Fix #5)
         collects = self._collect_slots(current_node)
-        if collects and intent not in {"unclear", "unclear_intent"}:
+        if collects:
+            # Emit individual state completion logs
+            for slot in collects:
+                if self.conversation_data.get(slot):
+                    _log("STATE", f"{slot} slot completed")
+            
+            # Emit aggregated SLOTS log
+            slots_log = ", ".join(f"{k}={self.conversation_data.get(k)}" for k in collects if self.conversation_data.get(k))
+            if slots_log:
+                _log("SLOTS", slots_log)
+
             if all(self.conversation_data.get(slot) for slot in collects):
-                _log("SLOT_DERIVED", f"All slots filled for {current_node['id']} -> intent=slots_collected")
-                intent = "slots_collected"
+                _log("STATE COMPLETE", f"{current_node.get('name', current_node['id'])}")
+                
+                # Exceptions for special edges that override the standard forward path
+                override_intents = {
+                    "seller_interest", "not_looking_now", "budget_high", 
+                    "deny", "deny_interest", "deny_time", "deny_identity", "deny_visit_time"
+                }
+                
+                if intent not in override_intents:
+                    forward_id = self._first_destination(current_node)
+                    if forward_id:
+                        next_node = self.nodes.get(forward_id)
+                        if next_node:
+                            _log("TRANSITION", f"{current_node.get('name', current_node['id'])} -> {next_node.get('name', next_node['id'])}")
+                            self.current_node_id = next_node["id"]
+                            if next_node.get("type") != "fallback":
+                                self.visited_nodes.add(next_node["id"])
+                            self._trigger_whatsapp_if_needed(intent, next_node)
+                            self._last_node_id = self.current_node_id
+                            self._record_asked(next_node["id"])
+                            _log("STATE", f"Transition complete -> {next_node['id']}")
+                            return self._build_turn_result(
+                                next_node, user_input=self._last_user_text, is_terminal=False,
+                                node_changed=True,
+                            )
             elif any(self.conversation_data.get(slot) for slot in collects) and intent == "unclear":
                  # If user provided SOMETHING valid even if intent extraction was shaky
                  intent = "partial_info"
@@ -1632,7 +1678,10 @@ class StateManager:
                 _log("ENTITY SKIPPED", f'{key}="{value}"')
                 continue
             self.conversation_data[key] = cleaned
-            _log("ENTITY", f"{key} = {cleaned}")
+            _log("ENTITY", f"{key}={cleaned}")
+            
+            # Explicit debug log as requested
+            _log("SLOT UPDATED", f"intent={cleaned}" if key == "intent_value" else f"{key}={cleaned}")
 
     def _should_skip_node(self, node: dict[str, Any]) -> bool:
         if node.get("name") in NON_SKIPPABLE_NAMES or node.get("type") == "end":

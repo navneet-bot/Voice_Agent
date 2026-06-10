@@ -474,8 +474,8 @@ class RealEstateSTTProcessor(FrameProcessor):
             # 2. CIRCUIT BREAKER (STT Timeout)
             async with _ml_semaphore:
                 session_lang = "en"
-                if self.turn_state and hasattr(self.turn_state, "session_language"):
-                    session_lang = self.turn_state.session_language
+                if self.turn_state and hasattr(self.turn_state, "active_language"):
+                    session_lang = self.turn_state.active_language
 
                 # transcribe_audio(chunk, self.agent_id)
                 text = await asyncio.wait_for(
