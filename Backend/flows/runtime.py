@@ -206,6 +206,12 @@ class RealEstateLLMProcessor(FrameProcessor):
         if not user_text:
             logger.info("[PIPELINE] LLM -> Empty text payload received from frame type=%s", frame_type)
             return
+
+        # ISSUE 2 FIX: Ignore all transcripts after reaching a terminal state
+        if self.state_manager and getattr(self.state_manager, "_session_ended", False):
+            logger.warning("[PIPELINE] LLM -> Transcript ignored. Conversation already completed.")
+            return
+
         logger.info("[PIPELINE] LLM <- User transcript (%s): %s", type(frame).__name__, user_text)
 
         # Always process transcript frames (no strict intent/node filtering at this layer).
@@ -249,9 +255,10 @@ class RealEstateLLMProcessor(FrameProcessor):
 
         logger.info("[PIPELINE] LLM -> Generating response for transcript: %s", user_text)
         llm_failed = False
+        is_terminal = False
         try:
             # 2. CIRCUIT BREAKER (Timeout)
-            reply = await asyncio.wait_for(generate_response(
+            reply, is_terminal = await asyncio.wait_for(generate_response(
                 user_text,
                 self.history,
                 self.current_language,
@@ -281,14 +288,16 @@ class RealEstateLLMProcessor(FrameProcessor):
             else:
                 logger.warning("[PIPELINE] LLM -> Empty reply from state manager. Skipping fallback override.")
                 self.history.append({"role": "user", "content": user_text})
-                if len(self.history) > 8:
-                    self.history = self.history[-8:]
+                # M4 FIX: Increase history cap from 8 to 12 messages to preserve early context
+                if len(self.history) > 12:
+                    self.history = self.history[-12:]
                 return
 
         self.history.append({"role": "user", "content": user_text})
         self.history.append({"role": "assistant", "content": reply})
-        if len(self.history) > 8:
-            self.history = self.history[-8:]
+        # M4 FIX: Increase history cap from 8 to 12 messages to preserve early context
+        if len(self.history) > 12:
+            self.history = self.history[-12:]
             
         logger.info("[LLM] Response Generated len=%d text=%s...", len(reply), reply[:50])
         
@@ -298,6 +307,14 @@ class RealEstateLLMProcessor(FrameProcessor):
         try:
             await self.push_frame(frame_out, direction)
             logger.info("[PIPELINE] LLM -> Forwarded agent reply frame gen_id=%d", self._current_gen_id)
+
+            # ISSUE 1 FIX: Push EndFrame to gracefully tear down pipecat pipeline when terminal state reached
+            if is_terminal:
+                logger.info("[PIPELINE] LLM -> Terminal state reached. Sending EndFrame.")
+                from pipecat.frames.frames import EndFrame
+                await asyncio.sleep(0.5)  # Ensure TTS has time to generate the goodbye audio before tear-down
+                await self.push_frame(EndFrame(), direction)
+
         except BaseException as exc:
             logger.error("[PIPELINE] LLM -> Failed forwarding agent reply frame: %s", exc)
 

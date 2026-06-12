@@ -2,19 +2,42 @@
 import { useAuth, clientProfile } from '@/context/AuthContext';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useVoiceSocket } from '@/hooks/useVoiceSocket';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useMemo } from 'react';
 
-export default function DemoCampaign() {
+const DOMAIN_METADATA = {
+  'real_estate_sales': { agent: 'Neha', name: 'Real Estate', icon: '🏠' },
+  'recruitment': { agent: 'Sarah', name: 'Recruitment', icon: '💼' },
+  'healthcare': { agent: 'Maya', name: 'Healthcare', icon: '🩺' },
+  'finance': { agent: 'Arjun', name: 'Finance', icon: '📈' },
+  'insurance': { agent: 'Ananya', name: 'Insurance', icon: '🛡️' },
+  'education': { agent: 'Priya', name: 'Education', icon: '🎓' },
+};
+
+function DemoCampaignContent() {
   const { activeClient, currentRole, user } = useAuth();
-  const profile = currentRole === 'client' && user?.agentId
-    ? { name: user.clientName || user.name, agent: user.agentName || 'Assigned Agent', agentId: user.agentId }
-    : clientProfile[activeClient];
-  const agentId = profile?.agentId || user?.agentId || 'default';
-  
-  const { connect, disconnect, isConnected, statusText, transcripts, events, clearTranscripts } = useVoiceSocket(agentId, activeClient);
+  const searchParams = useSearchParams();
+  const queryAgentId = searchParams ? searchParams.get('agentId') : null;
+
+  const profile = useMemo(() => {
+    return currentRole === 'client' && user?.agentId
+      ? { name: user.clientName || user.name, agent: user.agentName || 'Assigned Agent', agentId: user.agentId }
+      : clientProfile[activeClient] || { name: user?.name || 'Demo User', agent: 'Neha', agentId: 'real_estate_sales' };
+  }, [currentRole, user, activeClient]);
+
+  const resolvedAgentId = queryAgentId || profile?.agentId || user?.agentId || 'default';
+
+  // Find dynamic metadata if available
+  const domainMeta = DOMAIN_METADATA[resolvedAgentId] || DOMAIN_METADATA[queryAgentId];
+  const agentName = domainMeta ? domainMeta.agent : (profile?.agent || user?.agentName || 'Assigned Agent');
+  const agentIcon = domainMeta ? domainMeta.icon : '🎙️';
+  const domainName = domainMeta ? domainMeta.name : 'Voice Agent';
+
+  const { connect, disconnect, isConnected, statusText, transcripts, events, clearTranscripts } = useVoiceSocket(resolvedAgentId, activeClient);
 
   const toggleCall = () => {
     if (isConnected) disconnect();
-    else connect(true, profile?.name || 'Demo User');
+    else connect(true, profile?.name || user?.name || 'Demo User');
   };
 
   const getLatestCallEvent = () => {
@@ -26,10 +49,26 @@ export default function DemoCampaign() {
   const renderResultCard = (result) => {
     if (!result) return null;
     
+    // Determine keys to skip in dynamic rows (already displayed or meta-fields)
+    const skipKeys = ['transcription', 'duration', 'interested', 'campaign_id', 'lead_id', 'lead_name', 'id', 'created_at', 'client_id', 'provider'];
+    
+    // Get all other keys that are not null/undefined/empty
+    const dynamicFields = Object.keys(result).filter(
+      (key) => !skipKeys.includes(key) && result[key] !== null && result[key] !== undefined && result[key] !== ''
+    );
+
+    const formatKeyLabel = (key) => {
+      return key
+        .replace(/_/g, ' ')
+        .split(' ')
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+    };
+
     return (
       <div className="card border-0 shadow-sm mt-3 animate-slide-up">
         <div className="card-header bg-dark text-white border-0 py-3">
-          <h6 className="mb-0">📋 Lead Summary</h6>
+          <h6 className="mb-0">📋 Lead Summary ({domainName})</h6>
           <small className="text-secondary">Extracted from conversation</small>
         </div>
         <div className="card-body">
@@ -44,29 +83,21 @@ export default function DemoCampaign() {
               <tr>
                 <td className="fw-medium text-secondary">Interested</td>
                 <td className="fw-bold">
-                  {result.interested === 'Yes' ? (
+                  {result.interested === 'Yes' || result.interested === true || String(result.interested).toLowerCase() === 'yes' ? (
                     <span className="badge bg-success-subtle text-success border border-success-subtle rounded-pill px-3">Yes</span>
                   ) : (
-                    <span className="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3">{result.interested || 'No'}</span>
+                    <span className="badge bg-danger-subtle text-danger border border-danger-subtle rounded-pill px-3">{String(result.interested || 'No')}</span>
                   )}
                 </td>
               </tr>
-              <tr>
-                <td className="fw-medium text-secondary">Budget</td>
-                <td className="fw-bold text-dark">{result.budget || '—'}</td>
-              </tr>
-              <tr>
-                <td className="fw-medium text-secondary">Preferred Location</td>
-                <td className="fw-bold text-dark">{result.location || '—'}</td>
-              </tr>
-              <tr>
-                <td className="fw-medium text-secondary">Property Type</td>
-                <td className="fw-bold text-dark">{result.property_type || '—'}</td>
-              </tr>
-              <tr>
-                <td className="fw-medium text-secondary">Timeline</td>
-                <td className="fw-bold text-dark">{result.timeline || '—'}</td>
-              </tr>
+              
+              {dynamicFields.map((key) => (
+                <tr key={key}>
+                  <td className="fw-medium text-secondary">{formatKeyLabel(key)}</td>
+                  <td className="fw-bold text-dark">{String(result[key])}</td>
+                </tr>
+              ))}
+              
               <tr className="table-light">
                 <td className="fw-medium text-secondary">Conversation stats</td>
                 <td className="fw-semibold text-secondary">{(result.transcription || []).length} turns · {result.duration || '—'}</td>
@@ -86,8 +117,8 @@ export default function DemoCampaign() {
     <DashboardLayout>
       <div className="d-flex justify-content-between align-items-start mb-4">
         <div>
-          <h2 className="h4 fw-bold mb-1">🎬 Demo Campaign</h2>
-          <p className="text-muted small mb-0">Speak to <strong>{profile?.agent}</strong> — your voice drives the conversation, dashboard updates live.</p>
+          <h2 className="h4 fw-bold mb-1">🎬 Demo Campaign ({domainName})</h2>
+          <p className="text-muted small mb-0">Speak to <strong>{agentName}</strong> — your voice drives the conversation, dashboard updates live.</p>
         </div>
         <div 
           className="rounded-circle mt-2" 
@@ -109,9 +140,9 @@ export default function DemoCampaign() {
                   transition: 'box-shadow 0.4s ease'
                 }}
               >
-                🎙️
+                {agentIcon}
               </div>
-              <h5 className="fw-bold mb-1 text-light">{profile?.agent}</h5>
+              <h5 className="fw-bold mb-1 text-light">{agentName}</h5>
               <p className="text-secondary small mb-4">{statusText}</p>
               <button 
                 className={`btn btn-lg w-100 fw-bold border-0 shadow ${isConnected ? 'btn-danger' : 'btn-primary'}`}
@@ -122,7 +153,6 @@ export default function DemoCampaign() {
               </button>
               <div className="small text-muted mt-3">Allow mic access when prompted</div>
             </div>
-
           </div>
         </div>
 
@@ -138,7 +168,7 @@ export default function DemoCampaign() {
               {latestEvent && (
                 <div className={`p-3 border rounded-3 ${latestEvent.type === 'call_completed' ? 'bg-success-subtle border-success-subtle' : 'bg-white'}`}>
                   <div className="d-flex justify-content-between align-items-center mb-2">
-                    <span className="fw-bold small">👤 {latestEvent.leadName || profile?.name}</span>
+                    <span className="fw-bold small">👤 {latestEvent.leadName || profile?.name || user?.name || 'Demo User'}</span>
                     <span className={`badge ${latestEvent.type === 'call_completed' ? 'bg-success' : 'bg-primary border'}`}>
                       {latestEvent.type.replace('call_', '')}
                     </span>
@@ -168,7 +198,7 @@ export default function DemoCampaign() {
                 return (
                   <div key={i} className={`p-3 rounded-3 mb-2 shadow-sm ${isAgent ? 'bg-white text-dark border-start border-primary border-4' : 'bg-success-subtle text-dark border-start border-success border-4'}`}>
                     <div className="small text-uppercase fw-bold text-muted mb-1" style={{ letterSpacing: '0.5px', fontSize: '10px' }}>
-                      {isAgent ? '🤖 Agent' : '👤 You'}
+                      {isAgent ? `🤖 ${agentName}` : '👤 You'}
                     </div>
                     <div className="small">{msg.text}</div>
                   </div>
@@ -178,9 +208,22 @@ export default function DemoCampaign() {
           </div>
 
           {latestEvent?.type === 'call_completed' && renderResultCard(latestEvent.result)}
-
         </div>
       </div>
     </DashboardLayout>
+  );
+}
+
+export default function DemoCampaign() {
+  return (
+    <Suspense fallback={
+      <DashboardLayout>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '50vh' }}>
+          <div style={{ width: '32px', height: '32px', border: '3px solid #e5e7eb', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+        </div>
+      </DashboardLayout>
+    }>
+      <DemoCampaignContent />
+    </Suspense>
   );
 }

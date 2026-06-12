@@ -151,11 +151,15 @@ def transcribe_audio(audio_chunk: bytes, language: str | None = None) -> str:
 
     params = {
         "model": os.getenv("DEEPGRAM_MODEL", "nova-2-general"),
-        "language": active_lang,
-        "detect_language": "true" if not language else "false",
         "smart_format": "true",
         "punctuate": "true",
     }
+    
+    # H5 FIX: Ensure detect_language and language are mutually exclusive.
+    if not language:
+        params["detect_language"] = "true"
+    else:
+        params["language"] = active_lang
     timeout_s = float(os.getenv("DEEPGRAM_TIMEOUT_SECONDS", "3.0"))
 
     started_at = time.perf_counter()

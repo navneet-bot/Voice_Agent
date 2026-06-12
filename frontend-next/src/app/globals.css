@@ -30,3 +30,41 @@ body {
 .badge-admin { background: #EEEDFE; color: #534AB7; }
 .badge-client { background: #E1F5EE; color: #0F6E56; }
 .badge-agent { background: #E6F1FB; color: #185FA5; }
+
+/* Custom Carousel Styles */
+.carousel-track {
+  display: flex;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox */
+}
+.carousel-track::-webkit-scrollbar {
+  display: none; /* Safari and Chrome */
+}
+.carousel-item-custom {
+  flex: 0 0 100%;
+  width: 100%;
+}
+@media (min-width: 768px) {
+  .carousel-item-custom {
+    flex: 0 0 calc(50% - 12px);
+    width: calc(50% - 12px);
+  }
+}
+@media (min-width: 1200px) {
+  .carousel-item-custom {
+    flex: 0 0 calc(50% - 12px); /* Maintain 2 cards per view on standard dashboards */
+    width: calc(50% - 12px);
+  }
+}
+
+/* Smooth hover zoom and shadow for carousel cards */
+.carousel-card-hover {
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.carousel-card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05) !important;
+}
+

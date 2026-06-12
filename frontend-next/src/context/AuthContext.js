@@ -41,7 +41,7 @@ const AuthContext = createContext(null);
 export const AuthProvider = ({ children }) => {
   const [currentRole, setCurrentRole] = useState(null);   // 'admin' | 'client' | null
   const [firebaseUser, setFirebaseUser] = useState(null);
-  const [activeClient, setActiveClient] = useState('realty-demo');
+  const [activeClient, setActiveClient] = useState('');
   const [clientAssignment, setClientAssignment] = useState(null);
   const [loading, setLoading] = useState(true);            // prevents flash of login page
   const API = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';

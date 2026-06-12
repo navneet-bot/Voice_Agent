@@ -70,7 +70,8 @@ Schema:
     "budget":        "<number + unit e.g. 25 lakh, or null>",
     "property_type": "<e.g. 2 BHK / villa / apartment, or null>",
     "intent_value":  "<buy / rent / invest, or null>",
-    "timeline":      "<duration or date, or null>",
+    "callback_date": "<date or day e.g. tomorrow, next sunday, or null>",
+    "callback_time": "<time of day e.g. morning, 5 PM, evening, or null>",
     "confirmation":  "<yes / no, or null>"
   }
 }
@@ -85,6 +86,7 @@ unclear_callback_time, unclear, user_question, suggest_time, confirm_availabilit
 Rules:
 - Choose the single most specific intent
 - The user may speak in English, Hindi, Hinglish, or Marathi. Understand romanized scripts too.
+- Extract `callback_date` and `callback_time` separately. If user says "tomorrow evening", extract BOTH.
 - Map natural Hindi/Hinglish/Marathi phrases to the same schema:
   - "investment ke liye", "nivesh ke liye", "investment sathi" -> provide_intent with intent_value "invest"
   - "khud ke liye", "apne liye", "rehne ke liye", "swatasathi", "swata sathi" -> provide_intent with intent_value "buy"
@@ -239,7 +241,14 @@ def _classify_local_intent(user_text: str) -> dict[str, Any] | None:
     return None
 
 
-def _enrich_intent_entities(user_text: str, intent: str, entities: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def _enrich_intent_entities(user_text: str, intent: str, entities: dict[str, Any], state_manager: Optional[StateManager] = None) -> tuple[str, dict[str, Any]]:
+    agent_type = "real_estate_sales"
+    if state_manager:
+        agent_type = state_manager.schema.get("agent_type", "real_estate_sales")
+    
+    if agent_type != "real_estate_sales":
+        return intent, entities
+
     clean_text = (user_text or "").strip().lower()
     entities = dict(entities)
 
@@ -363,7 +372,7 @@ async def _async_call_groq_api(
     return ""
 
 
-async def extract_intent(user_text: str) -> dict[str, Any]:
+async def extract_intent(user_text: str, state_manager: Optional[StateManager] = None) -> dict[str, Any]:
     """
     Call Groq API for intent + entity extraction.
     Returns: {"intent": str, "entities": dict}
@@ -376,8 +385,64 @@ async def extract_intent(user_text: str) -> dict[str, Any]:
     if local_intent:
         return local_intent
 
+    system_prompt = INTENT_EXTRACTION_SYSTEM_PROMPT
+    if state_manager:
+        agent_name = state_manager.schema.get("agent_name", "Agent")
+        global_prompt = state_manager.global_prompt or state_manager.schema.get("global_prompt") or "You are a helpful AI assistant."
+        current_node = state_manager.get_current_node()
+        current_node_name = current_node.get("name", "Greeting") if current_node else "Greeting"
+        
+        current_node_instruction = ""
+        if current_node:
+            instr = current_node.get("instruction", {})
+            if isinstance(instr, dict):
+                current_node_instruction = instr.get("text", "")
+            elif isinstance(instr, str):
+                current_node_instruction = instr
+
+        fields = list(state_manager.extraction_fields)
+        fields_desc = "\n".join(f"    \"{f}\": \"<value or null>\"" for f in fields)
+        
+        system_prompt = f"""You are an intent classifier and entity extractor for a voice agent named {agent_name}.
+The agent's script and role:
+{global_prompt}
+
+Current state of the conversation:
+- Node name: {current_node_name}
+- Goal/Instruction: {current_node_instruction}
+
+Your task is to classify the user's message and extract entities.
+You must NOT generate conversational replies.
+Respond ONLY with a valid JSON object. No markdown. No explanation. No prose.
+
+JSON Schema:
+{{
+  "intent": "<the single most specific intent from the list of KNOWN_INTENTS>",
+  "entities": {{
+{fields_desc}
+  }}
+}}
+
+KNOWN_INTENTS:
+- confirm: agreement, yes, haan, correct, sure
+- deny: disagreement, no, nahi, nako, incorrect
+- deny_identity: wrong number, wrong person, "not [Name]"
+- deny_interest: not interested, no requirement, no need
+- deny_time: busy, call later, not now, in a meeting
+- suggest_time: user suggests a specific date/time for callback or visit (e.g., "call tomorrow", "what about evening?")
+- confirm_availability: user corrects or says they are free / have time
+- user_question: user asks a question about the agent's identity, purpose, or is confused (e.g. "who is this?", "kya hai?", "why are you calling?")
+- unclear: noise, hesitation, or unrecognizable input (e.g. "hmm", "uh", "let me think")
+- provide_info: user provides details corresponding to the extraction fields (e.g. stating their location, budget, experience, symptoms, etc.)
+
+Rules:
+1. Choose the single most specific intent. If the user provides information matching any of the fields, classify as "provide_info" unless they are denying or requesting a callback.
+2. The user may speak in English, Hindi, Hinglish, or Marathi. Understand romanized scripts and transliterations.
+3. Extract the exact value for any fields mentioned. Default to null if not present in the user's utterance.
+"""
+
     messages = [
-        {"role": "system", "content": INTENT_EXTRACTION_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_text.strip()},
     ]
     raw_content = await _async_call_groq_api(
@@ -399,20 +464,20 @@ async def extract_intent(user_text: str) -> dict[str, Any]:
     if not isinstance(entities, dict):
         entities = {}
 
-    normalized_entities = {
-        "location": entities.get("location"),
-        "budget": entities.get("budget"),
-        "property_type": entities.get("property_type"),
-        "intent_value": entities.get("intent_value"),
-        "timeline": entities.get("timeline"),
-        "confirmation": entities.get("confirmation"),
-    }
+    normalized_entities = {}
+    if state_manager:
+        for f in state_manager.extraction_fields:
+            normalized_entities[f] = entities.get(f)
+            
+    for k in ["location", "budget", "property_type", "intent_value", "timeline", "confirmation"]:
+        if k not in normalized_entities:
+            normalized_entities[k] = entities.get(k)
 
     intent = str(data.get("intent") or "unclear").strip()
     if intent not in KNOWN_INTENTS:
         intent = "unclear"
 
-    intent, normalized_entities = _enrich_intent_entities(user_text, intent, normalized_entities)
+    intent, normalized_entities = _enrich_intent_entities(user_text, intent, normalized_entities, state_manager=state_manager)
     return {"intent": intent, "entities": normalized_entities}
 
 
@@ -544,7 +609,7 @@ async def generate_response(
     state_manager: Optional[Any] = None,
     allow_transition: bool = True,
     runtime_context: Optional[dict[str, Any]] = None,
-) -> str:
+) -> tuple[str, bool]:
     """Pipeline entry point: STT → Intent → StateManager (transition) → LLMResponseGenerator (response).
 
     Clean architecture:
@@ -570,19 +635,19 @@ async def generate_response(
     elif getattr(state_manager, "is_actionable", None) and not state_manager.is_actionable(user_text):
         turn = await asyncio.to_thread(state_manager.execute_noise_transition, user_text)
     else:
-        intent_data = await extract_intent(user_text)
+        intent_data = await extract_intent(user_text, state_manager=state_manager)
         turn = await asyncio.to_thread(state_manager.execute_transition, user_text, intent_data)
 
     if not turn.node:
-        return ""
+        return "", turn.is_terminal
 
     # ── Step 2: LLMResponseGenerator — response only ─────────────────────
-    response = await generate_response_for_turn(turn)
+    response = await generate_response_for_turn(turn, state_manager=state_manager)
     finalized = _finalize_response_text(response).strip()
 
     # ── Step 3: Record response for anti-repetition tracking ─────────────
     if hasattr(state_manager, "record_response"):
         state_manager.record_response(finalized)
 
-    return finalized
+    return finalized, turn.is_terminal
 

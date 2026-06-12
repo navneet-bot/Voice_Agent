@@ -316,6 +316,19 @@ def _require_global_monitor_admin(context, surface: str) -> None:
 
 
 # ── Pydantic Models ───────────────────────────────────────────────────────────
+class DemoRequestCreate(BaseModel):
+    name: str
+    company: Optional[str] = None
+    email: str
+    phone: Optional[str] = None
+    industry: Optional[str] = None
+    use_case: Optional[str] = None
+    monthly_volume: Optional[str] = None
+    additional_notes: Optional[str] = None
+
+class DemoRequestUpdateStatus(BaseModel):
+    status: str
+
 class AgentCreate(BaseModel):
     name: str
     voice: str
@@ -4754,6 +4767,50 @@ async def resolve_client_by_email(email: str):
         "agents": agents,
     }
 
+@app.get("/api/registry/domains")
+async def list_registry_domains():
+    registry_path = os.path.join(DB_DIR, "domain_registry.json")
+    if not os.path.exists(registry_path):
+        raise HTTPException(status_code=404, detail="Domain registry not found")
+    try:
+        with open(registry_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error("Failed to load domain registry: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to load domain registry")
+
+@app.post("/api/demo-requests")
+async def create_demo_request(req: DemoRequestCreate):
+    try:
+        created = await db.create_demo_request(req.dict())
+        return created
+    except Exception as e:
+        logger.error("Failed to create demo request: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to save demo request")
+
+@app.get("/api/demo-requests", dependencies=[Depends(require_auth)])
+async def list_demo_requests(status: Optional[str] = None):
+    try:
+        requests = await db.list_demo_requests(status)
+        return requests
+    except Exception as e:
+        logger.error("Failed to list demo requests: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to retrieve demo requests")
+
+@app.put("/api/demo-requests/{request_id}", dependencies=[Depends(require_auth)])
+async def update_demo_request_status(request_id: str, req: DemoRequestUpdateStatus):
+    try:
+        success = await db.update_demo_request_status(request_id, req.status)
+        if not success:
+            raise HTTPException(status_code=404, detail="Demo request not found")
+        return {"status": "success", "message": f"Demo request status updated to {req.status}"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Failed to update demo request: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to update demo request status")
+
+
 @app.post("/api/agents", dependencies=[Depends(require_auth)])
 async def create_agent(agent: AgentCreate):
     agent_id = str(uuid.uuid4())
@@ -6402,7 +6459,7 @@ async def get_campaign_lifecycle(campaign_id: str, request: Request):
 
 
 @app.post("/api/campaigns/{campaign_id}/archive", dependencies=[Depends(require_auth)])
-async def archive_campaign(campaign_id: str, request: Request, data: CampaignLifecycleRequest | None = None):
+async def archive_campaign(campaign_id: str, request: Request, data: Optional[CampaignLifecycleRequest] = None):
     campaign = await _campaign_for_lifecycle_or_404(campaign_id, request)
     _assert_campaign_inactive_for_lifecycle(campaign)
     updated = await db.set_campaign_archived(
@@ -6414,7 +6471,7 @@ async def archive_campaign(campaign_id: str, request: Request, data: CampaignLif
 
 
 @app.post("/api/campaigns/{campaign_id}/restore", dependencies=[Depends(require_auth)])
-async def restore_campaign(campaign_id: str, request: Request, data: CampaignLifecycleRequest | None = None):
+async def restore_campaign(campaign_id: str, request: Request, data: Optional[CampaignLifecycleRequest] = None):
     await _campaign_for_lifecycle_or_404(campaign_id, request)
     updated = await db.restore_campaign_lifecycle(
         campaign_id,
@@ -7059,6 +7116,17 @@ class VoiceLiveSink(FrameProcessor):
             await self.push_frame(frame, direction)
             return
 
+        # ISSUE 1 & 2 FIX: Catch EndFrame pushed by LLM processor on terminal state
+        # Forcefully close the WebSocket to completely shut down the session and ignore post-end transcripts.
+        if isinstance(frame, EndFrame):
+            logger.info("[PIPELINE] SINK <- EndFrame. Closing WebSocket.")
+            try:
+                await self.ws.close(code=1000, reason="Conversation completed")
+            except Exception as exc:
+                logger.error("[PIPELINE] SINK -> Failed closing WebSocket on EndFrame: %s", exc)
+            await self.push_frame(frame, direction)
+            return
+
         try:
             await super().process_frame(frame, direction)
         except BaseException as exc:
@@ -7519,6 +7587,8 @@ def _resolve_schema(agent_id: str) -> str:
     Resolve the agent schema path from agent_id.
     Always reads from disk — never cached — so fine-tuning changes apply immediately.
     """
+    if agent_id in ("real-estate-demo", "default"):
+        agent_id = "real_estate_sales"
     path = os.path.join(AGENTS_DIR, f"{agent_id}.json")
     if os.path.exists(path):
         return path

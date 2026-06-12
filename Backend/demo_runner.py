@@ -282,6 +282,65 @@ class DemoCallEngine:
                 "Yes, what's this about?",
             ])
 
+        # Recruitment specific
+        if any(x in t for x in ["experience", "years", "work"]):
+            return random.choice([
+                "I have about 3 years of experience in sales.",
+                "Mujhe 4 saal ka experience hai coding mein.",
+                "Around 2 years.",
+            ])
+        if any(x in t for x in ["notice period", "notice"]):
+            return random.choice([
+                "I can join immediately.",
+                "My notice period is 30 days.",
+                "1 month notice period.",
+            ])
+        if any(x in t for x in ["expected salary", "salary expectation", "package"]):
+            return random.choice([
+                "I am expecting around 8 LPA.",
+                "Around 10 lakhs per annum.",
+                "Negotiable, around my current package.",
+            ])
+
+        # Healthcare specific
+        if any(x in t for x in ["symptom", "pain", "fever", "feeling"]):
+            return random.choice([
+                "I have a mild fever and cough since yesterday.",
+                "Back pain has been bothering me.",
+                "Just regular checkup.",
+            ])
+        if any(x in t for x in ["doctor", "specialist"]):
+            return random.choice([
+                "Dr. Sharma would be good.",
+                "Any general physician.",
+                "Pediatrician for my kid.",
+            ])
+
+        # Insurance specific
+        if any(x in t for x in ["policy", "insurance", "renew"]):
+            return random.choice([
+                "I have a health insurance policy.",
+                "Motor insurance renewal.",
+                "Life insurance plans.",
+            ])
+
+        # Finance specific
+        if any(x in t for x in ["loan", "finance", "credit"]):
+            return random.choice([
+                "I need a personal loan.",
+                "Looking for a home loan.",
+                "Credit card options.",
+            ])
+
+        # Education specific
+        if any(x in t for x in ["course", "study", "degree"]):
+            return random.choice([
+                "I am looking for MBA courses.",
+                "Data Science certification.",
+                "Engineering counselling.",
+            ])
+
+        # Real Estate specific & fallbacks
         if any(x in t for x in ["buy, rent", "looking for", "purpose", "intent"]):
             return random.choice([
                 "I'm looking to buy a flat.",
@@ -313,7 +372,7 @@ class DemoCallEngine:
                 "Apartment, 2 or 3 BHK.",
             ])
 
-        if any(x in t for x in ["site visit", "visit", "show", "schedule"]):
+        if any(x in t for x in ["site visit", "visit", "show", "schedule", "appointment"]):
             return random.choice([
                 "Yes, I can visit this weekend.",
                 "Saturday morning works for me.",

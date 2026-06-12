@@ -96,28 +96,55 @@ _TEMPLATE_ONLY_NODES = {
 }
 
 
-def _classify_node_goal(node: dict[str, Any], *, location: str | None, budget: str | None) -> str:
+def is_llm_node(node: dict[str, Any]) -> bool:
+    node_id = node.get("id")
+    if node_id in _LLM_RESPONSE_NODES:
+        return True
+    if node.get("collects"):
+        return True
+    if node.get("type") == "fallback":
+        return True
+    return False
+
+
+def _classify_node_goal(node: dict[str, Any], state_manager: Optional[Any] = None) -> str:
     """Classify the current node's goal for the LLM prompt using structured mapping."""
-    from .state_manager import NODE_GOALS
     node_id = str(node.get("id") or "")
     
-    # Use structured mapping if available
-    goal = NODE_GOALS.get(node_id)
-    if goal:
-        # Contextual refinement for combined nodes
-        if node_id == "node-1735267546732":
-            if location and not budget:
-                return "ask_budget"
-            return "ask_location"
-        return goal
+    if state_manager and state_manager.schema.get("agent_type", "real_estate_sales") == "real_estate_sales":
+        from .state_manager import NODE_GOALS
+        goal = NODE_GOALS.get(node_id)
+        if goal:
+            # Contextual refinement for combined nodes
+            if node_id == "node-1735267546732":
+                loc = state_manager.conversation_data.get("location")
+                bud = state_manager.conversation_data.get("budget")
+                if loc and not bud:
+                    return "ask_budget"
+                return "ask_location"
+            return goal
 
-    # Fallback to type-based classification
-    if node.get("type") == "end":
-        return "end_conversation"
-    if node.get("type") == "fallback":
-        return "clarify_input"
+    # Dynamic goal classification
+    instruction = node.get("instruction", {})
+    instruction_text = ""
+    if isinstance(instruction, dict):
+        instruction_text = instruction.get("text", "")
+    elif isinstance(instruction, str):
+        instruction_text = instruction
         
-    return "generic"
+    if instruction_text:
+        return instruction_text
+
+    collects = node.get("collects") or []
+    if collects:
+        return f"Collect the following fields from the user: {', '.join(collects)}."
+
+    if node.get("type") == "end":
+        return "Thank the user and end the call."
+    if node.get("type") == "fallback":
+        return "Clarify the previously requested information."
+
+    return "Conversational turn."
 
 
 # ─── Phrase extraction from nodes ─────────────────────────────────────────────
@@ -152,10 +179,7 @@ def _build_llm_user_message(
     node_id: str,
     node_goal: str,
     json_phrases: list[str],
-    purpose: str | None,
-    location: str | None,
-    budget: str | None,
-    memory: Any,
+    context_data: dict[str, Any],
     user_input: str,
     language: str,
     asked_flags: dict[str, bool] | None = None,
@@ -163,17 +187,22 @@ def _build_llm_user_message(
 ) -> str:
     """Build the user message matching the clean prompt format."""
     phrases_block = "\n".join(f"- {p}" for p in json_phrases) if json_phrases else "(none)"
-
     already_asked_str = ", ".join([k for k, v in asked_flags.items() if v]) if asked_flags else "None"
+    
+    # Dynamically build the context fields block
+    context_lines = []
+    for k, v in context_data.items():
+        if k in {"memory", "asked_flags", "last_response", "active_language"}:
+            continue
+        context_lines.append(f"  {k}: {v or 'None'}")
+    context_block = "\n".join(context_lines)
     
     return (
         f"current_node: {node_id}\n"
         f"node_goal: {node_goal}\n"
         f"json_phrases:\n{phrases_block}\n\n"
         f"context:\n"
-        f"  purpose: {purpose or 'None'}\n"
-        f"  location: {location or 'None'}\n"
-        f"  budget: {budget or 'None'}\n"
+        f"{context_block}\n"
         f"  language: {language}\n"
         f"  already_asked: {already_asked_str}\n"
         f"  last_response: {last_response or 'None'}\n\n"
@@ -183,25 +212,50 @@ def _build_llm_user_message(
 
 # ─── User question handling (structured, no LLM needed) ──────────────────────
 
-def _answer_user_question(question_type: str, language: str) -> str:
+def _answer_user_question(question_type: str, language: str, state_manager: Optional[Any] = None) -> str:
     """Return a brief answer to a user's meta-question (identity, purpose, confusion)."""
+    agent_name = "Agent"
+    agent_type = "real_estate_sales"
+    global_prompt = ""
+    if state_manager:
+        agent_name = state_manager.schema.get("agent_name", "Agent")
+        agent_type = state_manager.schema.get("agent_type", "real_estate_sales")
+        global_prompt = state_manager.schema.get("global_prompt", "")
+
+    type_label = {
+        "real_estate_sales": "Real Estate team",
+        "finance": "Finance advisory team",
+        "insurance": "Insurance advisory team",
+        "education": "Education counselling team",
+        "recruitment": "Recruitment team",
+        "healthcare": "Healthcare team",
+    }.get(agent_type, "Customer support team")
+
+    purpose_desc = "following up on your request"
+    if "patient" in global_prompt.lower() or "clinic" in global_prompt.lower():
+        purpose_desc = "scheduling your doctor's appointment"
+    elif "recruit" in global_prompt.lower() or "job" in global_prompt.lower() or "candidate" in global_prompt.lower():
+        purpose_desc = "your job application"
+    elif "property" in global_prompt.lower() or "real estate" in global_prompt.lower():
+        purpose_desc = "your property interest"
+
     if language in ("hi", "hinglish"):
         if question_type == "identity":
-            return "Neha bol rahi hoon, Real Estate team se."
+            return f"{agent_name} bol rahi hoon, {type_label} se."
         if question_type == "purpose":
-            return "Aapki earlier property interest ke baare mein call kiya hai."
+            return f"Aapke {purpose_desc} ke baare mein call kiya hai."
         return "Thoda clear bolenge?"
     if language == "mr":
         if question_type == "identity":
-            return "Neha बोलतेय, Real Estate team मधून."
+            return f"{agent_name} बोलतेय, {type_label} मधून."
         if question_type == "purpose":
-            return "तुमच्या earlier property interest बद्दल call केला आहे."
+            return f"तुमच्या {purpose_desc} बद्दल call केला आहे."
         return "थोडं clear सांगाल का?"
     # English
     if question_type == "identity":
-        return "Neha here from the Real Estate team."
+        return f"This is {agent_name} calling from the {type_label}."
     if question_type == "purpose":
-        return "It's about your earlier property interest."
+        return f"I am calling regarding {purpose_desc}."
     return "Could you say that differently?"
 
 
@@ -234,25 +288,16 @@ def _resolve_template_response(
         
         # Add a natural acknowledgment for the slot that WAS provided
         if template:
-            ack = ""
-            if target_slot == "budget" and context.get("location"):
-                loc = context.get("location")
+            filled_slots = [s for s in collects if context.get(s)]
+            if filled_slots:
+                last_filled = filled_slots[-1]
+                val = context.get(last_filled)
                 if language in ("hi", "hinglish"):
-                    ack = f"Theek hai, {loc}."
+                    ack = f"Theek hai, {val}."
                 elif language == "mr":
-                    ack = f"ठीक आहे, {loc}."
+                    ack = f"ठीक आहे, {val}."
                 else:
-                    ack = f"Got it — {loc}."
-            elif target_slot == "location" and context.get("budget"):
-                bud = context.get("budget")
-                if language in ("hi", "hinglish"):
-                    ack = f"Theek hai, {bud}."
-                elif language == "mr":
-                    ack = f"ठीक आहे, {bud}."
-                else:
-                    ack = f"Got it — {bud}."
-            
-            if ack:
+                    ack = f"Got it — {val}."
                 template = f"{ack} {template}"
 
     if not template:
@@ -373,19 +418,58 @@ def _finalize_response(text: str) -> str:
     return cleaned
 
 
+def build_response_system_prompt(state_manager: Optional[Any], language: str) -> str:
+    """Build response generation system prompt dynamically based on the active agent config."""
+    if not state_manager:
+        return _RESPONSE_SYSTEM_PROMPT
+
+    agent_name = state_manager.schema.get("agent_name", "Agent")
+    agent_type = state_manager.schema.get("agent_type", "real_estate_sales")
+    global_prompt = state_manager.global_prompt or state_manager.schema.get("global_prompt") or "You are a helpful AI assistant."
+    
+    prompt_builder = []
+    prompt_builder.append("## IDENTITY & AUTHORITATIVE SCRIPT")
+    prompt_builder.append(f"Agent Name: {agent_name}")
+    prompt_builder.append(f"Agent Type/Industry: {agent_type}")
+    prompt_builder.append(f"Primary Agent Script/Behavior definition:\n{global_prompt}\n")
+    
+    prompt_builder.append("## DATA EXTRACTION SCHEMAS & CURRENT SLOT STATUS")
+    prompt_builder.append("You are currently tracking these extraction fields. If a field has a value, do NOT ask for it again.")
+    for field in state_manager.extraction_fields:
+        val = state_manager.conversation_data.get(field)
+        status = f"COLLECTED (value: {val})" if val else "MISSING (needs collection)"
+        prompt_builder.append(f"- {field}: {status}")
+    prompt_builder.append("")
+
+    from .language_utils import get_language_instruction
+    lang_inst = get_language_instruction(language)
+    prompt_builder.append("## LANGUAGE RULES")
+    prompt_builder.append(f"Active Language: {language}")
+    prompt_builder.append(f"{lang_inst}\n")
+
+    prompt_builder.append("## RESPONSE GOVERNANCE & CONSTRAINTS")
+    prompt_builder.append("- You must answer the user's questions or acknowledge their input first, then guide them to the next step.")
+    prompt_builder.append("- Max 2 sentences.")
+    prompt_builder.append("- Max 20-30 words.")
+    prompt_builder.append("- Ask exactly ONE question matching the current node's missing slots.")
+    prompt_builder.append("- Avoid repetition. Never repeat the previous question if you have already got the answer.")
+    prompt_builder.append("- NEVER invent or hallucinate any details (like specific budgets, cities, dates, times, or property details) that have not been explicitly confirmed by the user or present in your script.")
+    prompt_builder.append("- Plain text only. No JSON, no markdown, no conversational role labels.")
+    
+    return "\n".join(prompt_builder)
+
+
 # ─── LLM call ────────────────────────────────────────────────────────────────
 
 async def _call_llm_for_response(
     node: dict[str, Any],
     *,
-    purpose: str | None,
-    location: str | None,
-    budget: str | None,
-    memory: Any,
+    context_data: dict[str, Any],
     user_input: str,
     language: str,
     asked_flags: dict[str, bool] | None = None,
     last_response: str = "",
+    state_manager: Optional[Any] = None,
 ) -> str:
     """Call the LLM to generate a response using JSON phrases as guidance.
 
@@ -394,21 +478,16 @@ async def _call_llm_for_response(
     from . import config as cfg
     from .llm import _async_call_groq_api
 
-    if not _RESPONSE_SYSTEM_PROMPT:
-        logger.warning("[LLM RESPONSE] No system prompt loaded")
-        return ""
+    system_prompt = build_response_system_prompt(state_manager, language)
 
     json_phrases = _extract_node_phrases(node)
-    node_goal = _classify_node_goal(node, location=location, budget=budget)
+    node_goal = _classify_node_goal(node, state_manager=state_manager)
 
     user_message = _build_llm_user_message(
         node_id=str(node.get("id", "")),
         node_goal=node_goal,
         json_phrases=json_phrases,
-        purpose=purpose,
-        location=location,
-        budget=budget,
-        memory=memory,
+        context_data=context_data,
         user_input=user_input,
         language=language,
         asked_flags=asked_flags,
@@ -416,7 +495,7 @@ async def _call_llm_for_response(
     )
 
     messages = [
-        {"role": "system", "content": _RESPONSE_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_message},
     ]
 
@@ -443,7 +522,7 @@ async def _call_llm_for_response(
     words = raw.split()
     
     # ── Response Validator ──
-    if len(words) < 5:
+    if len(words) < 3:
         logger.warning(f"[RESPONSE VALIDATOR] Rejected: Too short ({len(words)} words): '{raw}'")
         return ""
     
@@ -457,7 +536,7 @@ async def _call_llm_for_response(
 
 # ─── Main entry point: generate response for a TurnResult ────────────────────
 
-async def generate_response_for_turn(turn: TurnResult) -> str:
+async def generate_response_for_turn(turn: TurnResult, state_manager: Optional[Any] = None) -> str:
     """Generate the final spoken response for a completed state transition.
 
     This is the SOLE response generation path. Called by the pipeline orchestrator.
@@ -476,27 +555,20 @@ async def generate_response_for_turn(turn: TurnResult) -> str:
     asked_flags = turn.asked_flags
     last_response = turn.last_response
 
-    purpose = context.get("intent_value") or context.get("purpose")
-    location = context.get("location")
-    budget = context.get("budget")
-    memory = context.get("memory")
-
     # ── Path 1: User is asking a meta-question ────────────────────────────
     if turn.user_question:
-        answer = _answer_user_question(turn.user_question, language)
+        answer = _answer_user_question(turn.user_question, language, state_manager=state_manager)
 
         # If the node goal needs a follow-up question, generate it via LLM
-        if node_id in _LLM_RESPONSE_NODES:
+        if is_llm_node(node):
             follow_up = await _call_llm_for_response(
                 node,
-                purpose=purpose,
-                location=location,
-                budget=budget,
-                memory=memory,
+                context_data=context,
                 user_input=f"[User asked: {turn.user_question}] {user_input}",
                 language=language,
                 asked_flags=asked_flags,
                 last_response=last_response,
+                state_manager=state_manager,
             )
             if follow_up:
                 combined = f"{answer} {_finalize_response(follow_up)}"
@@ -525,17 +597,15 @@ async def generate_response_for_turn(turn: TurnResult) -> str:
     # ── Path 4: LLM-powered response for qualification/fallback nodes ─────
     # ONLY use LLM when staying on the same node (needs clarification/rephrasing).
     # If the node changed (user answered correctly), skip LLM and use template directly.
-    if node_id in _LLM_RESPONSE_NODES and not turn.node_changed:
+    if is_llm_node(node) and not turn.node_changed:
         llm_response = await _call_llm_for_response(
             node,
-            purpose=purpose,
-            location=location,
-            budget=budget,
-            memory=memory,
+            context_data=context,
             user_input=user_input,
             language=language,
             asked_flags=asked_flags,
             last_response=last_response,
+            state_manager=state_manager,
         )
         if llm_response:
             finalized = _finalize_response(llm_response)
@@ -544,7 +614,7 @@ async def generate_response_for_turn(turn: TurnResult) -> str:
                 if last_response and _is_repetition(finalized, last_response):
                     logger.warning("[ANTI-REPEAT] LLM repeated last response, generating nudge instead")
                     # Generate a short contextual nudge instead of falling back to broken template
-                    nudge = _get_anti_repeat_nudge(node, language)
+                    nudge = _get_anti_repeat_nudge(node, language, context=context)
                     if nudge:
                         logger.info("[ANTI-REPEAT NUDGE] \"%s\"", nudge)
                         return nudge
@@ -554,10 +624,18 @@ async def generate_response_for_turn(turn: TurnResult) -> str:
                     return finalized
         # LLM failed → fall through to template
         logger.warning("[LLM RESPONSE] Falling back to template for %s", node_id)
-    elif node_id in _LLM_RESPONSE_NODES and turn.node_changed:
+    elif is_llm_node(node) and turn.node_changed:
         logger.info("[SKIP LLM] Node changed, using template directly for %s", node_id)
 
     # ── Path 5: Template response (fast path) ────────────────────────────
+    # ISSUE 5 FIX: Suppress all anti-repeat guards and nudges for terminal states.
+    # Ensure the conversation gracefully ends with the designated goodbye template.
+    if turn.is_terminal:
+        response = _resolve_template_response(node, context, language)
+        finalized = _finalize_response(response) if response else ""
+        logger.info("[TERMINAL RESPONSE] %s: \"%s\"", node_id, finalized)
+        return finalized
+
     if node_id == "fallback_location" and _is_location_suggestion_request(user_input):
         return _location_suggestion_response(language)
 
@@ -566,9 +644,19 @@ async def generate_response_for_turn(turn: TurnResult) -> str:
     
     if finalized and last_response and _is_repetition(finalized, last_response):
         logger.warning("[ANTI-REPEAT] Template repeated last response, generating nudge instead")
-        nudge = _get_anti_repeat_nudge(node, language)
+        nudge = _get_anti_repeat_nudge(node, language, context=context)
         if nudge:
             return nudge
+
+    # H7 FIX: Guaranteed fallback if response generation completely fails or anti-repeat yields nothing
+    if not finalized:
+        logger.warning("[FALLBACK] Generating guaranteed minimal fallback response")
+        if language in ("hi", "hinglish"):
+            finalized = "Maaf karna, aawaz thodi cut rahi thi. Kya aap dubara batayenge?"
+        elif language == "mr":
+            finalized = "Aawaz thodi tutat hoti, krupaya parat sangal ka?"
+        else:
+            finalized = "I didn't quite catch that. Could you repeat?"
 
     logger.info("[TEMPLATE] %s: \"%s\"", node_id, finalized[:60] if finalized else "")
     return finalized
@@ -593,16 +681,18 @@ def _location_suggestion_response(language: str) -> str:
     return "You can consider Wakad, Baner, Hinjewadi, or Kharadi. Which area sounds closest?"
 
 
-def _get_anti_repeat_nudge(node: dict[str, Any], language: str) -> str:
+def _get_anti_repeat_nudge(node: dict[str, Any], language: str, context: Optional[dict] = None) -> str:
     """Generate a short contextual nudge when the LLM repeats itself.
 
     Instead of falling back to a template with potentially missing placeholders,
     produce a clean, short follow-up based on the node's goal.
     """
     node_id = str(node.get("id", ""))
-    node_name = str(node.get("name", "")).lower()
+    
+    # Classify the node goal
+    goal = _classify_node_goal(node)
 
-    # Goal-specific nudges (English defaults, extend for other languages as needed)
+    # Goal-specific nudges (English defaults)
     nudges = {
         "share_property": "Would you like to see it in person?",
         "ask_intent": "Are you looking to buy or rent?",
@@ -613,12 +703,21 @@ def _get_anti_repeat_nudge(node: dict[str, Any], language: str) -> str:
         "handle_objection": "Would you be open to hearing about other options?",
     }
 
-    # Classify the node goal
-    goal = _classify_node_goal(node, location=None, budget=None)
-
     nudge = nudges.get(goal, "")
     if not nudge:
-        # Generic fallback nudge
+        # Dynamic missing slot nudge
+        collects = node.get("collects") or []
+        if isinstance(collects, str):
+            collects = [collects]
+        missing = [s for s in collects if not context or not context.get(s)]
+        if missing:
+            slot = missing[0]
+            if language in ("hi", "hinglish"):
+                return f"Aapka {slot} kya hai?"
+            elif language == "mr":
+                return f"तुमचा {slot} काय आहे?"
+            else:
+                return f"Could you share your {slot}?"
         nudge = "Would you like to know more?"
 
     # Basic language adaptation
@@ -666,7 +765,7 @@ def _log_phrase_usage(response: str) -> None:
 
 # ─── Sync wrapper (for backward compatibility) ──────────────────────────────
 
-def generate_response_for_turn_sync(turn: TurnResult) -> str:
+def generate_response_for_turn_sync(turn: TurnResult, state_manager: Optional[Any] = None) -> str:
     """Synchronous wrapper for generate_response_for_turn.
 
     Handles the case where we're already inside an async event loop
@@ -680,7 +779,8 @@ def generate_response_for_turn_sync(turn: TurnResult) -> str:
     if loop and loop.is_running():
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, generate_response_for_turn(turn))
+            future = pool.submit(asyncio.run, generate_response_for_turn(turn, state_manager=state_manager))
             return future.result(timeout=10)
     else:
-        return asyncio.run(generate_response_for_turn(turn))
+        return asyncio.run(generate_response_for_turn(turn, state_manager=state_manager))
+

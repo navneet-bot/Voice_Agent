@@ -466,6 +466,20 @@ def _init_schema() -> None:
             created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             revoked_at      TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS demo_requests (
+            id                TEXT PRIMARY KEY,
+            name              TEXT NOT NULL,
+            company           TEXT,
+            email             TEXT NOT NULL,
+            phone             TEXT,
+            industry          TEXT,
+            use_case          TEXT,
+            monthly_volume    TEXT,
+            additional_notes  TEXT,
+            status            TEXT DEFAULT 'New',
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
         """)
         for table_name in ("leads", "call_results", "live_call_state"):
             try:
@@ -4703,6 +4717,65 @@ class DatabaseManager:
             finally:
                 conn.close()
         return await run_in_executor(_sync)
+
+    # ── Demo Requests ──────────────────────────────────────────────────────────
+
+    async def create_demo_request(self, data: dict) -> dict:
+        request_id = str(uuid.uuid4())
+        def _sync():
+            conn = _get_connection()
+            try:
+                conn.execute(
+                    """INSERT INTO demo_requests (id, name, company, email, phone, industry, use_case, monthly_volume, additional_notes, status, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        request_id,
+                        data.get("name"),
+                        data.get("company"),
+                        data.get("email"),
+                        data.get("phone"),
+                        data.get("industry"),
+                        data.get("use_case"),
+                        data.get("monthly_volume"),
+                        data.get("additional_notes"),
+                        data.get("status", "New"),
+                        datetime.now().isoformat()
+                    )
+                )
+                conn.commit()
+                return {**data, "id": request_id, "created_at": datetime.now().isoformat()}
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
+    async def list_demo_requests(self, status: Optional[str] = None) -> list[dict]:
+        def _sync():
+            conn = _get_connection()
+            try:
+                if status:
+                    rows = conn.execute(
+                        "SELECT * FROM demo_requests WHERE status=? ORDER BY created_at DESC", (status,)
+                    ).fetchall()
+                else:
+                    rows = conn.execute("SELECT * FROM demo_requests ORDER BY created_at DESC").fetchall()
+                return [dict(r) for r in rows]
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
+    async def update_demo_request_status(self, request_id: str, status: str) -> bool:
+        def _sync():
+            conn = _get_connection()
+            try:
+                cursor = conn.execute(
+                    "UPDATE demo_requests SET status=? WHERE id=?", (status, request_id)
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                conn.close()
+        return await run_in_executor(_sync)
+
 
 
 # Singleton instance

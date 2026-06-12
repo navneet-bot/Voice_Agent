@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from . import config as cfg
-from .conversation_response import should_answer_user_question
 from .llm_response_generator import TurnResult
 from .language_utils import localize_template
 
@@ -26,7 +25,7 @@ NON_SKIPPABLE_NAMES = {
     "End Conversation",
     "Immediate End Call",
 }
-ENTITY_KEYS = ("location", "budget", "property_type", "intent_value", "timeline")
+ENTITY_KEYS = ("location", "budget", "property_type", "intent_value", "timeline", "callback_date", "callback_time")
 DEFAULT_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "Updated_Real_Estate_Agent.json"
 INVALID_LOCATION_VALUES = {"location", "place", "area", "there", "nek", "city", "property", "this"}
 INVALID_BUDGET_VALUES = {"budget", "price", "amount"}
@@ -502,36 +501,70 @@ def _has_availability_confirmation(text: str) -> bool:
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     if not cleaned:
         return False
-    words = set(cleaned.split())
+        
+    # M6 FIX: Add negation awareness so "No, I am not free" or "No time" doesn't falsely match
+    negations = {"no", "nahi", "not", "busy", "later"}
+    words = cleaned.split()
+    if any(neg in words[:3] for neg in negations):
+        return False
+        
+    words_set = set(words)
     exact_confirmations = {
         "yes", "yeah", "yep", "yup", "ok", "okay", "sure", "fine",
         "haan", "han", "ji", "theek", "bilkul",
     }
-    if words & exact_confirmations:
+    if words_set & exact_confirmations:
         return True
     confirmation_phrases = (
-        "go ahead",
-        "tell me",
-        "go on",
-        "continue",
-        "i have time",
-        "have time",
-        "i am free",
-        "i'm free",
-        "free now",
-        "i am listening",
-        "i'm listening",
-        "have two minutes",
-        "two minutes",
+        "go ahead", "tell me", "go on", "continue", "i have time",
+        "have time", "i am free", "i'm free", "free now", "i am listening",
+        "i'm listening", "have two minutes", "two minutes",
     )
     return any(phrase in cleaned for phrase in confirmation_phrases)
 
 
+def should_answer_user_question(user_input: str) -> bool:
+    """Return True when the user needs a brief answer before flow continues."""
+    return _detect_user_question(user_input) is not None
+
 def _detect_user_question(user_text: str) -> str | None:
     """Return question type if user is asking a meta-question, else None."""
-    if should_answer_user_question(user_text):
-        from .conversation_response import _detect_user_question as _detect
-        return _detect(user_text)
+    text = re.sub(r"[^\w\s'?]", " ", (user_text or "").lower())
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return None
+
+    identity_markers = (
+        "who are you", "who is this", "who's this", "your name",
+        "kaun ho", "kaun bol", "aap kaun", "kon bol",
+    )
+    purpose_markers = (
+        "why are you calling", "why did you call", "what is this about",
+        "what is it about", "what's it about", "whats this about",
+        "what are you talking about", "what is this", "what is it",
+        "purpose of call", "reason for call", "kis baare", "kyu call",
+        "kyun call", "kya baat", "kya hai",
+    )
+    confusion_markers = (
+        "i don't understand", "i dont understand", "not clear",
+        "what do you mean", "what are you saying", "confused",
+        "samajh nahi", "samjha nahi", "clear nahi",
+    )
+    off_topic_markers = (
+        "weather", "prime minister", "pm", "stock market",
+        "cricket", "score", "joke", "song", "sing a song",
+        "mausam", "barish", "modi", "khana khaya", "lunch kiya",
+        "how are you", "kaise ho", "kasa ahes",
+    )
+
+    if any(marker in text for marker in identity_markers):
+        return "identity"
+    if any(marker in text for marker in purpose_markers):
+        return "purpose"
+    if any(marker in text for marker in confusion_markers):
+        return "confusion"
+    if any(marker in text for marker in off_topic_markers):
+        return "off_topic"
     return None
 
 
@@ -558,7 +591,7 @@ def _resolve_template(
     def fill(match: re.Match[str]) -> str:
         key = match.group(1)
         if key == "name":
-            val = data.get("name") or data.get("lead_name") or data.get("lead") or "Prashant"
+            val = data.get("name") or data.get("lead_name") or data.get("lead") or "there"
         else:
             val = data.get(key)
         return str(val) if val else ""
@@ -680,17 +713,10 @@ class StateManager:
         # Fallback escalation counters (Issue 6)
         self._fallback_counts: dict[str, int] = {}
         self.active_language: str = "en"
-        # Anti-repetition: track what questions have been asked
-        self._asked_flags: dict[str, bool] = {
-            "availability": False,
-            "intent": False,
-            "location": False,
-            "budget": False,
-            "visit_time": False,
-            "callback_time": False,
-            "property_type": False,
-        }
+        # Dynamic asked flags will be set in reset_state
+        self._asked_flags: dict[str, bool] = {}
         self._last_response: str = ""
+        self.extraction_fields: set[str] = set()
         self.load_schema()
 
     def load_schema(self) -> None:
@@ -711,6 +737,21 @@ class StateManager:
             tool_id = tool.get("tool_id")
             if tool_id:
                 self.tools[tool_id] = tool
+
+        # Dynamically determine extraction fields
+        self.extraction_fields = set()
+        for node in self.nodes.values():
+            collects = node.get("collects") or []
+            if isinstance(collects, str):
+                collects = [collects]
+            for f in collects:
+                if f:
+                    self.extraction_fields.add(f)
+        
+        for f in self.schema.get("data_fields") or []:
+            if f:
+                self.extraction_fields.add(f)
+
         self.reset_state()
         logger.info("Loaded %d nodes. Start node: %s", len(self.nodes), self.start_node_id)
 
@@ -794,7 +835,18 @@ class StateManager:
 
     def reset_state(self) -> None:
         self.current_node_id = self.start_node_id
+        
+        # Dynamic slot memory initialization
         self.conversation_data = {}
+        if hasattr(self, "extraction_fields"):
+            for f in self.extraction_fields:
+                self.conversation_data[f] = None
+        
+        # Ensure standard keys are present for backward compatibility
+        for k in ["location", "budget", "property_type", "timeline", "callback_date", "callback_time", "confirmation"]:
+            if k not in self.conversation_data:
+                self.conversation_data[k] = None
+
         self.visited_nodes = {self.start_node_id} if self.start_node_id else set()
         self._last_user_text = ""
         # Behavioral refinement state reset
@@ -806,11 +858,40 @@ class StateManager:
         self._fallback_counts = {}
         self._whatsapp_sent = False
         self.active_language = "en"
-        self._asked_flags = {k: False for k in self._asked_flags}
+        
+        # Dynamic asked flags
+        self._asked_flags = {}
+        if hasattr(self, "extraction_fields"):
+            for f in self.extraction_fields:
+                self._asked_flags[f] = False
+        for k in ["availability", "intent", "location", "budget", "visit_time", "callback_time", "property_type"]:
+            if k not in self._asked_flags:
+                self._asked_flags[k] = False
+
         self._last_response = ""
 
     def _record_asked(self, node_id: str) -> None:
-        """Mark the question type for a node as asked."""
+        """Mark the question type or slot as asked."""
+        node = self.nodes.get(node_id)
+        if not node:
+            return
+        
+        # Mark collects fields as asked
+        collects = node.get("collects") or []
+        if isinstance(collects, str):
+            collects = [collects]
+        for slot in collects:
+            if slot in self._asked_flags:
+                self._asked_flags[slot] = True
+                _log("ASKED FLAG", f"{slot} = True")
+        
+        # Check expected_input_type for fallbacks
+        expected = node.get("expected_input_type")
+        if expected and expected in self._asked_flags:
+            self._asked_flags[expected] = True
+            _log("ASKED FLAG", f"{expected} = True")
+
+        # Keep backward compatibility mapping
         _FLAG_MAP = {
             "node-1735264873079": "availability",
             "node-1735970090937": "availability",
@@ -827,7 +908,7 @@ class StateManager:
             "fallback_property_type": "property_type",
         }
         flag = _FLAG_MAP.get(node_id)
-        if flag:
+        if flag and flag in self._asked_flags:
             self._asked_flags[flag] = True
             _log("ASKED FLAG", f"{flag} = True")
 
@@ -874,8 +955,9 @@ class StateManager:
             return
             
         try:
-            import asyncio
             import sys
+            import threading
+            import asyncio
             from pathlib import Path
             
             # Ensure integrations can be imported
@@ -887,8 +969,17 @@ class StateManager:
             
             message = format_property_message(self.conversation_data, MOCK_PROPERTIES)
             
-            _log("WHATSAPP", f"Triggering async background task to send details to {phone}")
-            asyncio.create_task(send_whatsapp_message(phone, message))
+            _log("WHATSAPP", f"Triggering background task to send details to {phone}")
+            
+            # M1 FIX: Avoid asyncio.create_task() which fails if called from a sync thread
+            # without an active running event loop. Use a fire-and-forget thread instead.
+            def _send_in_bg():
+                try:
+                    asyncio.run(send_whatsapp_message(phone, message))
+                except Exception as ex:
+                    _log("WHATSAPP", f"Background send failed: {ex}")
+
+            threading.Thread(target=_send_in_bg, daemon=True).start()
             self._whatsapp_sent = True
         except Exception as e:
             _log("WHATSAPP", f"Error triggering WhatsApp integration: {e}")
@@ -929,21 +1020,12 @@ class StateManager:
     def is_actionable(self, text: str) -> bool:
         return _is_actionable(text)
 
-    def _reactivate_if_needed(self, user_text: str) -> None:
-        if not self._session_ended:
-            return
-        if not _is_actionable(user_text or ""):
-            return
-        _log("SESSION ENDED", "Reactivating session for new user input")
-        self._session_ended = False
-        current = self.get_current_node()
-        if current and current.get("type") == "end":
-            self.current_node_id = self.start_node_id
-            self._last_node_id = self.current_node_id
+    # C1 FIX: _reactivate_if_needed REMOVED.
+    # Once _session_ended=True, the session is permanently closed.
+    # A new WebSocket connection must be opened for a new call.
 
     def execute_noise_transition(self, user_text: str) -> TurnResult:
         """Handle noise/non-actionable input. Returns TurnResult (no response)."""
-        self._reactivate_if_needed(user_text)
         if self._session_ended:
             _log("SESSION ENDED", "Ignoring further input")
             return self._build_turn_result({}, is_terminal=True, user_input=user_text)
@@ -980,7 +1062,9 @@ class StateManager:
 
     def execute_greeting_transition(self, user_text: str = "") -> TurnResult:
         """Return TurnResult for the greeting/current node without transitioning."""
-        self._reactivate_if_needed(user_text)
+        if self._session_ended:
+            _log("SESSION ENDED", "Ignoring greeting transition — session closed")
+            return self._build_turn_result({}, is_terminal=True, user_input=user_text)
         node = self.get_current_node()
         if not node:
             return self._build_turn_result({}, is_terminal=True, user_input=user_text)
@@ -1002,7 +1086,6 @@ class StateManager:
 
         It does NOT generate any response text. That's LLMResponseGenerator's job.
         """
-        self._reactivate_if_needed(user_text)
         if self._session_ended:
             _log("SESSION ENDED", "Ignoring further input")
             return self._build_turn_result(
@@ -1124,7 +1207,21 @@ class StateManager:
             _log("INTENT DETECTED", f"{intent}")
 
         _log("INTENT", self._format_intent_log(intent, entities))
+        # C2 FIX: Merge entities BEFORE applying forward guards or checking slots
+        # This prevents skipping checks from running against stale slot data.
         self._merge_entities(entities, intent=intent)
+
+        # C3 FIX: Re-run forward guard on current node now that entities are merged
+        # to auto-skip if a required slot was just provided.
+        if self._should_skip_node(current_node):
+            _log("SKIP", f"Node {current_node.get('id')} skipping because slots are now fulfilled")
+            skip_dest = self._first_destination(current_node)
+            if skip_dest:
+                next_node = self.nodes.get(skip_dest) or current_node
+                current_node = next_node
+                node_id = current_node.get("id")
+                # Add logging so we can track this fast-forward jump
+                _log("FAST-FORWARD", f"Jumped to {node_id} directly")
 
         # 5. SLOT COMPLETION DERIVATION & ANTI-REPETITION (Fix #5)
         collects = self._collect_slots(current_node)
@@ -1217,17 +1314,25 @@ class StateManager:
                 self._same_node_count = 0
             else:
                 self._same_node_count = getattr(self, "_same_node_count", 0) + 1
-                if self._same_node_count >= 1:
-                    _log("LOOP PREVENTION", f"Forcing transition from {current_node['id']}")
-                    forward_id = self._first_destination(current_node)
-                    if forward_id:
-                        next_node = self.nodes.get(forward_id) or next_node
+                # C4 FIX: Allow up to 3 clarification attempts before forcing transition
+                # (was >= 1, causing premature jumps after a single unclear response)
+                if self._same_node_count >= 3:
+                    # C4 GUARD: Never force-forward from nodes that have unfilled required slots
+                    unfilled = self._missing_slots(current_node)
+                    if unfilled:
+                        _log("LOOP PREVENTION", f"NOT forcing — required slots still missing: {unfilled}")
+                        self._same_node_count = 0
                     else:
-                        end_node = self.nodes.get("node-1736492520068")
-                        if end_node:
-                            next_node = end_node
-                    node_changed = next_node.get("id") != current_node.get("id")
-                    self._same_node_count = 0
+                        _log("LOOP PREVENTION", f"Forcing transition from {current_node['id']}")
+                        forward_id = self._first_destination(current_node)
+                        if forward_id:
+                            next_node = self.nodes.get(forward_id) or next_node
+                        else:
+                            end_node = self.nodes.get("node-1736492520068")
+                            if end_node:
+                                next_node = end_node
+                        node_changed = next_node.get("id") != current_node.get("id")
+                        self._same_node_count = 0
         else:
             self._same_node_count = 0
 
@@ -1283,7 +1388,6 @@ class StateManager:
 
     def next_step(self, user_text: str = "", allow_transition: bool = True) -> str:
         """DEPRECATED: Use execute_greeting_transition() + LLMResponseGenerator instead."""
-        self._reactivate_if_needed(user_text)
         if self._session_ended:
             return ""
         if allow_transition:
@@ -1320,6 +1424,28 @@ class StateManager:
                     _log("STATE", f"{node_id} -> {target['id']} (forced callback scheduling)")
                     return target
 
+        # 2. Not interested shortcut globally
+        if intent in {"deny_interest", "not_looking_now"}:
+            if node_id != "node-objection-not-looking":
+                target = self.nodes.get("node-objection-not-looking")
+                if not target:
+                    # Fallback to any end node
+                    target = next((n for n in self.nodes.values() if n.get("type") == "end"), None)
+                if target and node_id != target.get("id"):
+                    _log("STATE", f"{node_id} -> {target['id']} (forced objection not looking)")
+                    return target
+
+        # 3. Wrong person / wrong number globally
+        if intent in {"deny_identity", "wrong_person", "wrong_number"}:
+            if node_id != "node-1736492520068":
+                target = self.nodes.get("node-1736492520068")  # Immediate End Call
+                if not target:
+                    # Fallback to any end node in dynamic flow
+                    target = next((n for n in self.nodes.values() if n.get("type") == "end"), None)
+                if target and node_id != target.get("id"):
+                    _log("STATE", f"{node_id} -> {target['id']} (forced immediate end call - wrong person)")
+                    return target
+
         # 2. Resuming flow from callback
         if node_id in {"node-1736492391269", "fallback_callback_time"}:
             if intent in {"confirm_availability", "provide_intent", "confirm"}:
@@ -1329,6 +1455,8 @@ class StateManager:
                     return target
             if intent in {"deny", "deny_interest", "deny_time"}:
                 target = self.nodes.get("node-1736492520068")  # Immediate End Call
+                if not target:
+                    target = next((n for n in self.nodes.values() if n.get("type") == "end"), None)
                 if target:
                     _log("STATE", f"{node_id} -> {target['id']} (user refused callback)")
                     return target
@@ -1347,11 +1475,6 @@ class StateManager:
                 target = self.nodes.get("node-1736510533232")  # Seller Flow Start
                 if target:
                     _log("STATE", f"{node_id} -> {target['id']} (seller shortcut)")
-                    return target
-            if intent in {"deny_interest", "not_looking_now"}:
-                target = self.nodes.get("node-objection-not-looking")
-                if target:
-                    _log("STATE", f"{node_id} -> {target['id']} (objection shortcut)")
                     return target
 
 
@@ -1444,6 +1567,12 @@ class StateManager:
         edge = self._select_confirmation_edge(current_node, intent)
 
         if not edge:
+            # Fallback for dynamic flows: if user denies identity/interest and no matching edge, route to end node
+            if intent in {"deny", "deny_identity", "deny_interest"}:
+                end_node = next((n for n in self.nodes.values() if n.get("type") == "end"), None)
+                if end_node:
+                    _log("CONFIRMATION FALLBACK", f"Routing to end_node {end_node['id']} on deny")
+                    return end_node, False
             return current_node, False
         destination_id = edge.get("destination_node_id")
         destination = self.nodes.get(destination_id)
@@ -1484,6 +1613,8 @@ class StateManager:
         # deny_identity → wrong person end
         if intent == "deny_identity":
             target = self.nodes.get(WRONG_PERSON_END_NODE_ID)
+            if not target:
+                target = next((n for n in self.nodes.values() if n.get("type") == "end"), None)
             if target:
                 _log("DENY ROUTE", f"deny_identity -> {target['id']} (wrong person)")
                 return target
@@ -1491,6 +1622,8 @@ class StateManager:
         # deny_time → callback scheduling
         if intent == "deny_time":
             target = self.nodes.get(CALLBACK_SCHEDULING_NODE_ID)
+            if not target:
+                target = next((n for n in self.nodes.values() if n.get("type") == "end"), None)
             if target:
                 _log("DENY ROUTE", f"deny_time -> {target['id']} (busy/not available)")
                 return target
@@ -1498,6 +1631,8 @@ class StateManager:
         # deny_interest → polite end
         if intent == "deny_interest":
             target = self.nodes.get(POLITE_END_NODE_ID)
+            if not target:
+                target = next((n for n in self.nodes.values() if n.get("type") == "end"), None)
             if target:
                 _log("DENY ROUTE", f"deny_interest -> {target['id']} (not interested)")
                 return target
@@ -1507,6 +1642,8 @@ class StateManager:
             target = self.nodes.get(RESCHEDULE_VISIT_NODE_ID)
             if not target:
                 target = self.nodes.get(CALLBACK_SCHEDULING_NODE_ID)
+            if not target:
+                target = next((n for n in self.nodes.values() if n.get("type") == "end"), None)
             if target:
                 _log("DENY ROUTE", f"deny_visit_time -> {target['id']} (offering alternate)")
                 return target
@@ -1517,6 +1654,20 @@ class StateManager:
         edges = node.get("edges", [])
         if not edges:
             return None
+
+        # Check semantic edge matching first
+        for edge in edges:
+            condition = " ".join(
+                filter(
+                    None,
+                    [
+                        edge.get("condition", ""),
+                        edge.get("transition_condition", {}).get("prompt", ""),
+                    ],
+                )
+            ).lower()
+            if self._edge_condition_matches_intent(condition, [intent]):
+                return edge
 
         positive_markers = (
             "correct person",
@@ -1560,6 +1711,10 @@ class StateManager:
             ).lower()
             if any(marker in condition for marker in markers):
                 return edge
+
+        # Dynamic fallback: if there is exactly 1 edge and intent is confirm, follow it
+        if len(edges) == 1 and intent == "confirm":
+            return edges[0]
 
         return None
 
@@ -1656,32 +1811,58 @@ class StateManager:
                 return True
         return False
 
+    @property
+    def entity_keys(self) -> set[str]:
+        standard_keys = {"intent_value", "callback_date", "callback_time", "confirmation", "timeline"}
+        keys = set(standard_keys)
+        if hasattr(self, "extraction_fields"):
+            for field in self.extraction_fields:
+                keys.add(field)
+                keys.add(field.lower())
+                keys.add(field.lower().replace(" ", "_"))
+        return keys
+
     def _merge_entities(self, entities: dict[str, Any], intent: str = "") -> None:
-        for key in ENTITY_KEYS:
-            value = entities.get(key)
+        for key in self.entity_keys:
+            # Match keys case-insensitively or with space/underscore normalization
+            value = None
+            for e_key, e_val in entities.items():
+                if e_key.lower().replace(" ", "_") == key.lower().replace(" ", "_"):
+                    value = e_val
+                    break
             if value in (None, ""):
                 continue
-            existing = self.conversation_data.get(key)
+
+            # Map normalized key to canonical field name from extraction_fields if applicable
+            canonical_key = key
+            if hasattr(self, "extraction_fields"):
+                for field in self.extraction_fields:
+                    if field.lower().replace(" ", "_") == key.lower().replace(" ", "_"):
+                        canonical_key = field
+                        break
+
+            existing = self.conversation_data.get(canonical_key)
             if existing:
                 # Allow overwrite when user explicitly provides via provide_* intent
                 is_explicit_provide = intent.startswith("provide_")
                 # Allow overwrite when existing value is a known-invalid timeline
                 is_stale_timeline = (
-                    key == "timeline"
+                    canonical_key == "timeline"
                     and any(inv in str(existing).lower() for inv in INVALID_TIMELINE_VALUES)
                 )
                 if not is_explicit_provide and not is_stale_timeline:
                     continue
-                _log("ENTITY OVERWRITE", f"{key}: \"{existing}\" -> \"{value}\"")
-            cleaned = self._clean_entity_value(key, value)
+                _log("ENTITY OVERWRITE", f"{canonical_key}: \"{existing}\" -> \"{value}\"")
+            cleaned = self._clean_entity_value(canonical_key, value)
             if cleaned is None:
-                _log("ENTITY SKIPPED", f'{key}="{value}"')
+                # H4 FIX: User-facing warning for rejected entities
+                _log("ENTITY SKIPPED/REJECTED", f'Key "{canonical_key}" dropped due to validation failure on value "{value}"')
                 continue
-            self.conversation_data[key] = cleaned
-            _log("ENTITY", f"{key}={cleaned}")
+            self.conversation_data[canonical_key] = cleaned
+            _log("ENTITY", f"{canonical_key}={cleaned}")
             
             # Explicit debug log as requested
-            _log("SLOT UPDATED", f"intent={cleaned}" if key == "intent_value" else f"{key}={cleaned}")
+            _log("SLOT UPDATED", f"intent={cleaned}" if canonical_key == "intent_value" else f"{canonical_key}={cleaned}")
 
     def _should_skip_node(self, node: dict[str, Any]) -> bool:
         if node.get("name") in NON_SKIPPABLE_NAMES or node.get("type") == "end":
@@ -1949,7 +2130,8 @@ class StateManager:
             target = self.nodes.get("node-universal-disconnect")
             if target:
                 _log("INTENT NORMALIZED", "Universal disconnect triggered by user")
-                return target
+                # H8 FIX: Return string intent, not node dict. Routing handled in _resolve_by_intent.
+                return "hangup"
         has_goodbye = any(
             phrase == clean_text or phrase in clean_text
             for phrase in GOODBYE_PHRASES
@@ -2094,30 +2276,59 @@ class StateManager:
         if not text:
             return None
 
-        if key == "location":
-            # ── Issue 2: Hindi script transliteration ──
-            if text in HINDI_LOCATION_TRANSLITERATION:
-                transliterated = HINDI_LOCATION_TRANSLITERATION[text]
-                _log("TRANSLITERATED LOCATION", f"{text} -> {transliterated}")
-                text = transliterated
-            # ── Issue 3: phonetic STT normalization ──
-            lowered = text.lower()
-            if lowered in LOCATION_NORMALIZATION:
-                normalized = LOCATION_NORMALIZATION[lowered]
-                _log("NORMALIZED LOCATION", f"{text} -> {normalized}")
-                text = normalized
-            return text if self._is_valid_location(text) else None
-        if key == "budget":
-            return text if self._is_valid_budget(text) else None
-        if key == "property_type":
-            normalized = self._normalize_property_type(text)
-            return normalized if normalized and self._is_valid_property_type(normalized) else None
-        if key == "timeline":
-            normalized = self._normalize_timeline(text)
-            if normalized != text:
-                _log("NORMALIZED TIMELINE", f"{text} -> {normalized}")
-            return normalized if self._is_valid_timeline(normalized) else None
+        agent_type = self.schema.get("agent_type", "real_estate_sales")
+        if agent_type == "real_estate_sales":
+            if key == "location":
+                # ── Issue 2: Hindi script transliteration ──
+                if text in HINDI_LOCATION_TRANSLITERATION:
+                    transliterated = HINDI_LOCATION_TRANSLITERATION[text]
+                    _log("TRANSLITERATED LOCATION", f"{text} -> {transliterated}")
+                    text = transliterated
+                # ── Issue 3: phonetic STT normalization ──
+                lowered = text.lower()
+                if lowered in LOCATION_NORMALIZATION:
+                    normalized = LOCATION_NORMALIZATION[lowered]
+                    _log("NORMALIZED LOCATION", f"{text} -> {normalized}")
+                    text = normalized
+                return text if self._is_valid_location(text) else None
+            if key == "budget":
+                return text if self._is_valid_budget(text) else None
+            if key == "property_type":
+                normalized = self._normalize_property_type(text)
+                return normalized if normalized and self._is_valid_property_type(normalized) else None
+            if key == "timeline":
+                normalized = self._normalize_timeline(text)
+                if normalized != text:
+                    _log("NORMALIZED TIMELINE", f"{text} -> {normalized}")
+                return normalized if self._is_valid_timeline(normalized) else None
+        else:
+            # Generic validation: skip Pune specific whitelists
+            if len(text) <= 1:
+                return None
+            return text
         return text
+
+    def get_allowed_languages(self) -> list[str]:
+        lang_str = str(self.schema.get("language") or "").lower()
+        if not lang_str:
+            lang_str = str(self.schema.get("languages") or "").lower()
+            
+        if not lang_str:
+            return ["en", "hi", "mr", "hinglish"]
+
+        allowed = []
+        if "english" in lang_str or "en" in lang_str.split():
+            allowed.append("en")
+        if "hinglish" in lang_str:
+            allowed.append("hinglish")
+        if "hindi" in lang_str or "hi" in lang_str.split("+") or "hi" in lang_str.split():
+            allowed.append("hi")
+        if "marathi" in lang_str or "mr" in lang_str.split():
+            allowed.append("mr")
+
+        if not allowed:
+            return ["en"]
+        return allowed
 
     def _is_valid_location(self, value: str) -> bool:
         lowered = value.strip().lower()
@@ -2135,7 +2346,22 @@ class StateManager:
 
     def _is_valid_budget(self, value: str) -> bool:
         lowered = value.strip().lower()
-        return lowered not in INVALID_BUDGET_VALUES and any(char.isdigit() for char in lowered)
+        if lowered in INVALID_BUDGET_VALUES:
+            return False
+            
+        # H6 FIX: Expand budget validation to accept word-form numbers
+        number_words = {
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", 
+            "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety", 
+            "hundred", "thousand", "lakh", "lakhs", "crore", "crores",
+            "ek", "do", "teen", "char", "paanch", "chhe", "saat", "aath", "nau", "das",
+            "bees", "tees", "chalis", "pachas", "saath", "sattar", "assi", "nabbe", "sau"
+        }
+        
+        has_digit = any(char.isdigit() for char in lowered)
+        has_number_word = any(word in lowered.split() for word in number_words)
+        
+        return has_digit or has_number_word
 
     def _normalize_property_type(self, value: str) -> str:
         normalized = re.sub(r"\b([123])\s*bhk\b", r"\1 BHK", value, flags=re.IGNORECASE)

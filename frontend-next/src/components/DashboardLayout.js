@@ -31,6 +31,7 @@ export default function DashboardLayout({ children }) {
     { label: 'Voice Agents', path: '/agents', icon: '🤖' },
     ...(SCRAPE_GENERATE_SCRIPT_ENABLED ? [{ label: 'Intelligence', path: '/intelligence', icon: 'AI' }] : []),
     { label: 'Clients', path: '/clients', icon: '🏢' },
+    { label: 'Demo Requests', path: '/demo-requests', icon: '📝' },
     ...(CRM_READINESS_UI_ENABLED ? [{ label: 'CRM Readiness', path: '/crm-readiness', icon: 'CRM' }] : []),
     { label: 'Telephony', path: '/numbers', icon: 'Tel' },
     { label: 'Call Logs & QA', path: '/logs', icon: '📞' }

@@ -242,7 +242,10 @@ class LanguageTracker:
         self._history: list[str] = []
         self._cooldown_turns_left: int = 0
 
-    def observe(self, text: str) -> tuple[str, UserTextAnalysis]:
+    def observe(self, text: str, allowed_languages: list[str] = None) -> tuple[str, UserTextAnalysis]:
+        if allowed_languages is None:
+            allowed_languages = ["en", "hi", "mr", "hinglish"]
+
         analysis = analyze_user_text(text, fallback=self.current_language)
         
         # Log the required information
@@ -262,7 +265,7 @@ class LanguageTracker:
 
         # STEP 1: Classify current turn language
         label = analysis.detected_language
-        if label not in {"en", "hi", "hinglish"}:
+        if label not in {"en", "hi", "hinglish", "mr"}:
             label = "en"
             
         cleaned_text = re.sub(r"[^\w\s]", "", text.lower()).strip()
@@ -281,11 +284,18 @@ class LanguageTracker:
             return self.current_language, analysis
             
         if not self._determined:
-            self.current_language = label
-            self._determined = True
-            self._history.clear()
-            self._cooldown_turns_left = 0
-            logger.info("Session language determined from first meaningful utterance: %s", self.current_language)
+            # C5 FIX: Require at least 3 words to determine session language initially
+            # so a single "haan" doesn't flip the whole session to Hinglish permanently.
+            if word_count < 3:
+                logger.info("Utterance too short (%d words) to set initial session language. Keeping default: %s", word_count, self.current_language)
+                return self.current_language, analysis
+                
+            if label in allowed_languages:
+                self.current_language = label
+                self._determined = True
+                self._history.clear()
+                self._cooldown_turns_left = 0
+                logger.info("Session language determined from first meaningful utterance: %s", self.current_language)
             return self.current_language, analysis
 
         # STEP 2: Switch Gate
@@ -298,8 +308,6 @@ class LanguageTracker:
         # C. Explicit language change request bypasses everything
         explicit_req = _detect_explicit_language_request(text)
         if explicit_req in {"en", "hi", "hinglish", "mr"}:
-            if explicit_req == "mr":
-                explicit_req = "hi"
             switch_candidate = explicit_req
             logger.info("Switch candidate via explicit request: %s", switch_candidate)
         else:
@@ -311,6 +319,11 @@ class LanguageTracker:
             elif len(self._history) >= 2 and self._history[-1] == self._history[-2] and self._history[-1] != self.current_language:
                 switch_candidate = self._history[-1]
                 logger.info("Switch candidate via consecutive turns: %s", switch_candidate)
+
+        # Ensure switch candidate is allowed!
+        if switch_candidate and switch_candidate not in allowed_languages:
+            logger.info("Switch candidate %s blocked because it is not in allowed_languages: %s", switch_candidate, allowed_languages)
+            switch_candidate = None
 
         # STEP 3: Anti Ping-Pong Cooldown
         if explicit_req:
@@ -422,8 +435,9 @@ def analyze_user_text(text: str, fallback: str = "en") -> UserTextAnalysis:
         return UserTextAnalysis(text, cleaned, "hinglish", 0.9, True, "clear_hinglish", latin_letters, devanagari_letters, unsupported_letters)
     if roman_hindi_hits == 1 and english_style_hits == 0:
         return UserTextAnalysis(text, cleaned, "hi", 0.72, True, "possible_roman_hindi", latin_letters, devanagari_letters, unsupported_letters)
-    if hinglish_hits == 1:
-        return UserTextAnalysis(text, cleaned, "hinglish", 0.76, True, "possible_hinglish", latin_letters, devanagari_letters, unsupported_letters)
+    
+    # C5 FIX: Removed the hinglish_hits == 1 check so single Hinglish filler words 
+    # fall through to English, preventing permanent language switching on "haan".
 
     confidence = 0.87 if len(english_words) >= 2 else 0.68
     return UserTextAnalysis(text, cleaned, "en", confidence, True, "latin_text", latin_letters, devanagari_letters, unsupported_letters)
@@ -481,4 +495,13 @@ def localize_template(template: str, language: str) -> str:
 
 
 def _count_markers(text: str, markers: tuple[str, ...]) -> int:
-    return sum(1 for marker in markers if re.search(rf"\b{re.escape(marker)}\b", text))
+    count = 0
+    for marker in markers:
+        # H2 FIX: \b only works on ASCII words. For Devanagari, use plain containment check.
+        if any('\u0900' <= ch <= '\u097f' for ch in marker):
+            if marker in text:
+                count += 1
+        else:
+            if re.search(rf"\b{re.escape(marker)}\b", text):
+                count += 1
+    return count
