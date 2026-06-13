@@ -1281,11 +1281,19 @@ class DatabaseManager:
             try:
                 if client_id:
                     rows = conn.execute(
-                        "SELECT * FROM agents WHERE client_id=? ORDER BY created_at DESC",
+                        """SELECT a.*, c.name as client_name 
+                           FROM agents a 
+                           LEFT JOIN clients c ON a.client_id = c.id 
+                           WHERE a.client_id=? ORDER BY a.created_at DESC""",
                         (client_id,)
                     ).fetchall()
                 else:
-                    rows = conn.execute("SELECT * FROM agents ORDER BY created_at DESC").fetchall()
+                    rows = conn.execute(
+                        """SELECT a.*, c.name as client_name 
+                           FROM agents a 
+                           LEFT JOIN clients c ON a.client_id = c.id 
+                           ORDER BY a.created_at DESC"""
+                    ).fetchall()
                 result = []
                 for r in rows:
                     d = dict(r)

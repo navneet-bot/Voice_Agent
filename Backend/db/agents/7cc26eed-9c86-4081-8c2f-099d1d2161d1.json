@@ -13,9 +13,9 @@
                 "type": "conversation",
                 "instruction": {
                     "type": "prompt",
-                    "text": "Greet the user warmly as Neha and confirm identity."
+                    "text": "Greet the user warmly as Rani and confirm identity using the lead name."
                 },
-                "response": "Hello, this is Neha from the Real Estate AI team. Am I speaking with you?",
+                "response": "Hello, this is Rani from the Real Estate team. Am I speaking with {{name}}?",
                 "intent_triggers": [
                     "call_connected"
                 ],
@@ -63,6 +63,12 @@
     },
     "provider_config": {
         "stt_provider": "deepgram",
-        "tts_provider": "cartesia"
+        "tts_provider": "cartesia",
+        "cartesia_voice_id": "95d51f79-c397-46f9-b49a-23763d3eaa2d"
+    },
+    "agent_metadata": {
+        "agent_type": "real_estate_sales",
+        "assigned_email": "maniarasan@jobjockey.in",
+        "client_id": "user-2405b75e35da"
     }
 }

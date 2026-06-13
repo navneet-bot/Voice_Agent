@@ -733,7 +733,7 @@ export default function AgentsPage() {
                   <p className="small text-muted mb-2"><strong>Voice:</strong> {agent.voice || 'Default'}</p>
                   <p className="small text-muted mb-3"><strong>Provider:</strong> {getProviderLabel('telephony', agent.provider || 'twilio')}</p>
                   <p className="small text-muted mb-2"><strong>Type:</strong> {AGENT_TYPE_TEMPLATES[agent.agent_type]?.label || agent.agent_type || 'Real Estate Sales'}</p>
-                  <p className="small text-muted mb-2"><strong>Assigned:</strong> {agent.assigned_email || 'Unassigned'}</p>
+                  <p className="small text-muted mb-2"><strong>Assigned:</strong> {agent.client_name ? `${agent.client_name} (${agent.assigned_email})` : agent.assigned_email || 'Unassigned'}</p>
                   <p className="small text-muted mb-2"><strong>STT:</strong> {getProviderLabel('stt', agent.stt_provider || 'groq')}</p>
                   <p className="small text-muted mb-3"><strong>TTS:</strong> {getProviderLabel('tts', agent.tts_provider || 'edge')}</p>
                   {agent.tts_provider === 'cartesia' && (
