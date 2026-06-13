@@ -172,13 +172,18 @@ class RealEstateLLMProcessor(FrameProcessor):
             logger.info("[PIPELINE] LLM -> Received StartFrame. Triggering initial greeting...")
             try:
                 # 2. CIRCUIT BREAKER (Timeout)
-                reply = await asyncio.wait_for(generate_response(
+                result = await asyncio.wait_for(generate_response(
                     user_text=CALL_CONNECTED_TRIGGER,
                     conversation_history=self.history,
                     language=self.current_language,
                     state_manager=self.state_manager,
                     allow_transition=False,
                 ), timeout=3.5)
+                # generate_response returns (reply_text, is_terminal) tuple
+                if isinstance(result, tuple):
+                    reply = result[0]
+                else:
+                    reply = result
             except BaseException as exc:
                 logger.warning("[PIPELINE] LLM -> Start greeting fallback due to error: %s", exc)
                 reply = "Hello, how can I help you today?"

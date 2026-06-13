@@ -422,3 +422,7 @@
 {"timestamp": 1781192423.595048, "event": "call_started", "start_node": "node-1767592854176"}
 {"timestamp": 1781192537.4158568, "event": "call_started", "start_node": "node-1767592854176"}
 {"timestamp": 1781192543.0513668, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1781365405.619092, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1781365418.913145, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1781366027.777018, "event": "call_started", "start_node": "node-1767592854176"}
+{"timestamp": 1781366053.409557, "event": "call_started", "start_node": "root_greeting"}
