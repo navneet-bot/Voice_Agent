@@ -61,6 +61,7 @@ from pydantic import BaseModel
 from ws_hub import ws_manager
 from db.db_manager import db
 from demo_runner import DemoCallEngine
+from qa_simulator import QASimulator
 from agent_runner import run_campaign
 from telephony.provider_registry import get_provider, list_providers
 from metrics.provider_metrics import snapshot_provider_metrics
@@ -4888,6 +4889,42 @@ async def update_agent(agent_id: str, agent: AgentUpdate):
     if new_client_id:
         await db.set_assignment(new_client_id, agent_id)
 
+    return updated
+
+@app.post("/api/agents/{agent_id}/qa-test", dependencies=[Depends(require_auth)])
+async def run_qa_test(agent_id: str):
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+        
+    simulator = QASimulator(db)
+    schema_path = agent.get("schema_path") or os.path.join(AGENTS_DIR, f"{agent_id}.json")
+    report = await simulator.run_full_qa_suite(agent_id, schema_path)
+    return report
+
+@app.post("/api/agents/{agent_id}/stress-test", dependencies=[Depends(require_auth)])
+async def run_stress_test(agent_id: str, background_tasks: BackgroundTasks):
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+        
+    simulator = QASimulator(db)
+    schema_path = agent.get("schema_path") or os.path.join(AGENTS_DIR, f"{agent_id}.json")
+    
+    background_tasks.add_task(simulator.run_stress_test, agent_id, schema_path, 100)
+    return {"status": "accepted", "message": "Stress test queued for execution in background."}
+
+@app.put("/api/agents/{agent_id}/certify", dependencies=[Depends(require_auth)])
+async def certify_agent(agent_id: str):
+    agent = await db.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+        
+    if agent.get("qa_score", 0) < 95:
+        raise HTTPException(status_code=400, detail="Agent must have a QA score >= 95 to be Certified.")
+        
+    agent["certification_status"] = "Certified"
+    updated = await db.update_agent(agent_id, agent)
     return updated
 
 @app.get("/api/agents/{agent_id}/flow-preview", dependencies=[Depends(require_auth)])

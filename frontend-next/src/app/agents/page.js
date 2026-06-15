@@ -2,6 +2,7 @@
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import FlowPreviewModal from '@/components/FlowPreviewModal';
+import QATestModal from '@/components/QATestModal';
 import { useAuth } from '@/context/AuthContext';
 import { getProviderLabel } from '@/lib/providerDisplay';
 
@@ -288,6 +289,7 @@ export default function AgentsPage() {
   const [flowPreviewLoading, setFlowPreviewLoading] = useState(false);
   const [flowPreviewError, setFlowPreviewError] = useState('');
   const [flowPreviewReadOnly, setFlowPreviewReadOnly] = useState(false);
+  const [qaAgent, setQaAgent] = useState(null);
   const [scrapeAgent, setScrapeAgent] = useState(null);
   const [scrapeUrl, setScrapeUrl] = useState('');
   const [scrapeJob, setScrapeJob] = useState(null);
@@ -728,7 +730,12 @@ export default function AgentsPage() {
                 <div className="card-body">
                   <div className="d-flex justify-content-between align-items-start mb-3">
                     <h5 className="fw-bold mb-0">🤖 {agent.name || 'Unnamed Agent'}</h5>
-                    <span className="badge bg-light text-dark border">{agent.language || 'English'}</span>
+                    <div>
+                      <span className={`badge ${agent.certification_status === 'Certified' ? 'bg-success' : agent.certification_status === 'Testing' ? 'bg-warning text-dark' : 'bg-light text-dark'} border me-2`}>
+                        {agent.certification_status || 'Draft'}
+                      </span>
+                      <span className="badge bg-light text-dark border">{agent.language || 'English'}</span>
+                    </div>
                   </div>
                   <p className="small text-muted mb-2"><strong>Voice:</strong> {agent.voice || 'Default'}</p>
                   <p className="small text-muted mb-3"><strong>Provider:</strong> {getProviderLabel('telephony', agent.provider || 'twilio')}</p>
@@ -765,6 +772,9 @@ export default function AgentsPage() {
                       )}
                       {user?.role === 'admin' && (
                         <>
+                          <button type="button" className="btn btn-outline-info btn-sm" onClick={() => setQaAgent(agent)}>
+                            QA Test
+                          </button>
                           <button type="button" className="btn btn-outline-primary btn-sm" onClick={() => openEditModal(agent)}>
                             Edit
                           </button>
@@ -790,6 +800,16 @@ export default function AgentsPage() {
           error={flowPreviewError}
           onClose={closeFlowPreview}
           onSave={!flowPreviewReadOnly && user?.role === 'admin' ? saveFlowDraft : null}
+        />
+      )}
+
+      {qaAgent && (
+        <QATestModal 
+          agent={qaAgent} 
+          onClose={() => setQaAgent(null)} 
+          API={API} 
+          headers={buildTenantHeaders(true)}
+          onCertifySuccess={fetchAgents}
         />
       )}
 

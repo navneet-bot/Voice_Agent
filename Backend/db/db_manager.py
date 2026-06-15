@@ -126,6 +126,9 @@ def _init_schema() -> None:
             data_fields     TEXT,          -- JSON array as text
             schema_path     TEXT,          -- path to the .json agent schema file
             client_id       TEXT REFERENCES clients(id),
+            certification_status TEXT DEFAULT 'Draft',
+            qa_score        INTEGER,
+            last_qa_report  TEXT,          -- JSON report
             created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -530,7 +533,19 @@ def _init_schema() -> None:
             pass
         try:
             conn.execute("ALTER TABLE agents ADD COLUMN agent_type TEXT DEFAULT 'real_estate_sales'")
-        except sqlite3.OperationalError:
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN certification_status TEXT DEFAULT 'Draft'")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN qa_score INTEGER")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE agents ADD COLUMN last_qa_report TEXT")
+        except Exception:
             pass
         for column_sql in (
             "ALTER TABLE campaigns ADD COLUMN archived_at TIMESTAMP",
@@ -1309,8 +1324,8 @@ class DatabaseManager:
             conn = _get_connection()
             try:
                 conn.execute(
-                    """INSERT INTO agents (id, name, voice, language, max_duration, provider, stt_provider, tts_provider, cartesia_voice_id, assigned_email, agent_type, script, data_fields, schema_path, client_id, created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    """INSERT INTO agents (id, name, voice, language, max_duration, provider, stt_provider, tts_provider, cartesia_voice_id, assigned_email, agent_type, script, data_fields, schema_path, client_id, certification_status, qa_score, last_qa_report, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (
                         agent_id, data.get("name"), data.get("voice"),
                         data.get("language", "en"), data.get("max_duration", 300),
@@ -1320,6 +1335,8 @@ class DatabaseManager:
                         data.get("agent_type", "real_estate_sales"), data.get("script"),
                         json.dumps(data.get("data_fields", [])),
                         data.get("schema_path"), data.get("client_id"),
+                        data.get("certification_status", "Draft"), data.get("qa_score"),
+                        json.dumps(data.get("last_qa_report")) if data.get("last_qa_report") else None,
                         datetime.now().isoformat(),
                     )
                 )
@@ -1356,7 +1373,8 @@ class DatabaseManager:
                        SET name=?, voice=?, language=?, max_duration=?, provider=?,
                            stt_provider=?, tts_provider=?, cartesia_voice_id=?,
                            assigned_email=?, agent_type=?, script=?, data_fields=?,
-                           schema_path=?, client_id=?
+                           schema_path=?, client_id=?, certification_status=?,
+                           qa_score=?, last_qa_report=?
                        WHERE id=?""",
                     (
                         data.get("name"),
@@ -1373,6 +1391,9 @@ class DatabaseManager:
                         json.dumps(data.get("data_fields", [])),
                         data.get("schema_path"),
                         data.get("client_id"),
+                        data.get("certification_status", "Draft"),
+                        data.get("qa_score"),
+                        json.dumps(data.get("last_qa_report")) if data.get("last_qa_report") else None,
                         agent_id,
                     ),
                 )
