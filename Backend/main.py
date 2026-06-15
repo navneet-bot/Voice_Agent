@@ -343,6 +343,7 @@ class AgentCreate(BaseModel):
     agent_type: str = "real_estate_sales"
     script: str
     data_fields: List[str]
+    custom_json: Optional[dict] = None
 
 class AgentUpdate(BaseModel):
     name: Optional[str] = None
@@ -357,6 +358,7 @@ class AgentUpdate(BaseModel):
     agent_type: Optional[str] = None
     script: Optional[str] = None
     data_fields: Optional[List[str]] = None
+    custom_json: Optional[dict] = None
 
 class LeadsUpload(BaseModel):
     campaignId: str
@@ -659,8 +661,11 @@ def _write_agent_runtime_schema(
     assigned_client: Optional[dict],
 ) -> None:
     try:
-        with open(schema_path, "r", encoding="utf-8") as existing_file:
-            schema = json.load(existing_file)
+        if agent_data.get("custom_json") and isinstance(agent_data["custom_json"], dict):
+            schema = agent_data["custom_json"]
+        else:
+            with open(schema_path, "r", encoding="utf-8") as existing_file:
+                schema = json.load(existing_file)
     except (OSError, json.JSONDecodeError):
         schema = StateManager.template_new_agent(
             name=agent_data["name"],

@@ -154,6 +154,7 @@ const makeInitialFormData = (overrides = {}) => ({
   agent_type: DEFAULT_AGENT_TYPE,
   script: AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].prompt,
   data_fields: AGENT_TYPE_TEMPLATES[DEFAULT_AGENT_TYPE].fields,
+  custom_json: null,
   ...overrides
 });
 
@@ -172,7 +173,8 @@ const formDataFromAgent = (agent) => {
     assigned_email: agent.assigned_email || '',
     agent_type: agentType,
     script: agent.script || template.prompt,
-    data_fields: Array.isArray(agent.data_fields) ? agent.data_fields.join(', ') : agent.data_fields || template.fields
+    data_fields: Array.isArray(agent.data_fields) ? agent.data_fields.join(', ') : agent.data_fields || template.fields,
+    custom_json: null
   });
 };
 
@@ -634,6 +636,22 @@ export default function AgentsPage() {
       setFlowPreviewLoading(false);
       setScrapePreflightLoading(false);
     }
+  };
+  const handleFileUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const json = JSON.parse(event.target.result);
+        setFormData({ ...formData, custom_json: json });
+        alert("Custom JSON loaded successfully.");
+      } catch (err) {
+        alert("Invalid JSON file. Please check the format.");
+      }
+    };
+    reader.readAsText(file);
   };
 
   const handleSubmit = async (e) => {
@@ -1144,6 +1162,17 @@ export default function AgentsPage() {
                       <div className="form-text">Recommended for native Indian-style English, Hindi, Hinglish, and Marathi tests. Each agent stores its own selected voice.</div>
                     </div>
                   )}
+
+                  <div className="mb-3">
+                    <label className="form-label small fw-bold">Import Custom JSON Schema (Optional)</label>
+                    <input type="file" className="form-control" accept=".json" onChange={handleFileUpload} />
+                    <div className="form-text text-muted">Upload a JSON file to override the default flow structure. The Agent Prompt below will still take precedence.</div>
+                    {formData.custom_json && (
+                      <div className="alert alert-success mt-2 py-2 mb-0 small">
+                        ✓ Custom JSON loaded and ready to save.
+                      </div>
+                    )}
+                  </div>
 
                   <div className="mb-3">
                     <label className="form-label small fw-bold">Data Extraction Fields (Comma separated)</label>
