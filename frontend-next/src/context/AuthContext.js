@@ -8,7 +8,7 @@ import {
 
 // ─── ADMIN EMAILS ─────────────────────────────────────────────────────────────
 // Add any email that should have admin access here.
-const ADMIN_EMAILS = ['navneet@jobjockey.in', 'vishnu@jobjockey.in', 'parth@jobjockey.in', 'maniarasan@jobjockey.in'];
+const ADMIN_EMAILS = ['navneet@jobjockey.in', 'parth@jobjockey.in','jariljohnson136@gmail.com' ];
 
 // ─── CLIENT PROFILES (unchanged) ──────────────────────────────────────────────
 export const clientProfile = {
